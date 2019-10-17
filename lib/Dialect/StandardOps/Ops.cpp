@@ -1812,6 +1812,45 @@ OpFoldResult MemRefCastOp::fold(ArrayRef<Attribute> operands) {
 }
 
 //===----------------------------------------------------------------------===//
+// MemRefShapeCastOp
+//===----------------------------------------------------------------------===//
+
+bool MemRefShapeCastOp::areCastCompatible(Type a, Type b) {
+  auto aT = a.dyn_cast<MemRefType>();
+  auto bT = b.dyn_cast<MemRefType>();
+
+  if (!aT || !bT)
+    return false;
+  // Only static shapes for now.
+  if (aT.getNumDynamicDims() > 0 || bT.getNumDynamicDims() > 0)
+    return false;
+  if (aT.getAffineMaps() != bT.getAffineMaps())
+    return false;
+  if (aT.getMemorySpace() != bT.getMemorySpace())
+    return false;
+
+  int64_t numEltA = aT.getNumElements();
+  if (auto shapedType = aT.getElementType().dyn_cast<ShapedType>())
+    numEltA *= shapedType.getNumElements();
+
+  int64_t numEltB = bT.getNumElements();
+  if (auto shapedType = bT.getElementType().dyn_cast<ShapedType>())
+    numEltB *= shapedType.getNumElements();
+
+  // Should have the same number of elements when counting elements in any
+  // elemental shaped type.
+  if (numEltA != numEltB)
+    return false;
+
+  return true;
+}
+
+OpFoldResult MemRefShapeCastOp::fold(ArrayRef<Attribute> operands) {
+  return impl::foldCastOp(*this);
+}
+
+
+//===----------------------------------------------------------------------===//
 // MulFOp
 //===----------------------------------------------------------------------===//
 
