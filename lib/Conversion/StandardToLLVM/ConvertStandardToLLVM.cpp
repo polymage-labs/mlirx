@@ -940,6 +940,117 @@ struct MemRefCastOpLowering : public LLVMLegalizationPattern<MemRefCastOp> {
   }
 };
 
+struct MemRefShapeCastOpLowering
+    : public LLVMLegalizationPattern<MemRefShapeCastOp> {
+  using LLVMLegalizationPattern<MemRefShapeCastOp>::LLVMLegalizationPattern;
+
+  PatternMatchResult match(Operation *op) const override {
+    auto memRefShapeCastOp = cast<MemRefShapeCastOp>(op);
+    MemRefType sourceType =
+        memRefShapeCastOp.getOperand()->getType().cast<MemRefType>();
+    MemRefType targetType = memRefShapeCastOp.getType();
+    return (isSupportedMemRefType(targetType) &&
+            isSupportedMemRefType(sourceType))
+               ? matchSuccess()
+               : matchFailure();
+  }
+
+  void rewrite(Operation *op, ArrayRef<Value *> operands,
+               ConversionPatternRewriter &rewriter) const override {
+    auto loc = op->getLoc();
+    auto memRefShapeCastOp = cast<MemRefShapeCastOp>(op);
+    OperandAdaptor<MemRefShapeCastOp> transformed(operands);
+    auto targetType = memRefShapeCastOp.getType();
+    auto sourceType =
+        memRefShapeCastOp.getOperand()->getType().cast<MemRefType>();
+    (void)sourceType;
+    assert(sourceType.hasStaticShape() && "static source type supported");
+    assert(targetType.hasStaticShape() && "static target type supported");
+
+    MemRefDescriptor srcMemRefDesc(transformed.source());
+
+    auto targetStructType = lowering.convertType(memRefShapeCastOp.getType());
+    auto targetElementPtrType = getMemRefElementPtrType(targetType, lowering);
+
+    Value *memRefDescriptor = rewriter.create<LLVM::UndefOp>(
+        op->getLoc(), targetStructType, ArrayRef<Value *>{});
+
+    Value *srcBuffer = srcMemRefDesc.allocatedPtr(rewriter, loc);
+    Value *targetBuffer = rewriter.create<LLVM::BitcastOp>(
+        op->getLoc(), targetElementPtrType, ArrayRef<Value *>(srcBuffer));
+
+    memRefDescriptor = rewriter.create<LLVM::InsertValueOp>(
+        op->getLoc(), targetStructType, memRefDescriptor, targetBuffer,
+        rewriter.getIndexArrayAttr(kAllocatedPtrPosInMemRefDescriptor));
+
+    Value *srcBufferAligned = srcMemRefDesc.alignedPtr(rewriter, loc);
+    Value *targetBufAligned =
+        rewriter.create<LLVM::BitcastOp>(op->getLoc(), targetElementPtrType,
+                                         ArrayRef<Value *>(srcBufferAligned));
+    memRefDescriptor = rewriter.create<LLVM::InsertValueOp>(
+        op->getLoc(), targetStructType, memRefDescriptor, targetBufAligned,
+        rewriter.getIndexArrayAttr(kAlignedPtrPosInMemRefDescriptor));
+
+    int64_t offset;
+    SmallVector<int64_t, 4> strides;
+    auto successStrides = getStridesAndOffset(targetType, strides, offset);
+    (void)successStrides;
+    assert(offset != MemRefType::getDynamicStrideOrOffset() &&
+           "unexpected dynamic offset");
+
+    memRefDescriptor = rewriter.create<LLVM::InsertValueOp>(
+        op->getLoc(), targetStructType, memRefDescriptor,
+        createIndexConstant(rewriter, op->getLoc(), offset),
+        rewriter.getIndexArrayAttr(kOffsetPosInMemRefDescriptor));
+
+    // Get actual sizes of the memref as values: all sizes are static here.
+    SmallVector<Value *, 4> sizes;
+    sizes.reserve(targetType.getRank());
+    for (int64_t s : targetType.getShape())
+      sizes.push_back(createIndexConstant(rewriter, op->getLoc(), s));
+    if (sizes.empty())
+      sizes.push_back(createIndexConstant(rewriter, op->getLoc(), 1));
+
+    // Compute the total number of memref elements.
+    Value *cumulativeSize = sizes.front();
+    for (unsigned i = 1, e = sizes.size(); i < e; ++i)
+      cumulativeSize = rewriter.create<LLVM::MulOp>(
+          op->getLoc(), getIndexType(),
+          ArrayRef<Value *>{cumulativeSize, sizes[i]});
+
+    Value *runningStride = nullptr;
+    // Iterate strides in reverse order, compute runningStride and strideValues.
+    auto nStrides = strides.size();
+    SmallVector<Value *, 4> strideValues(nStrides, nullptr);
+    for (auto indexedStride : llvm::enumerate(llvm::reverse(strides))) {
+      int64_t index = nStrides - 1 - indexedStride.index();
+      if (strides[index] == MemRefType::getDynamicStrideOrOffset())
+        // Identity layout map is enforced in the match function, so we compute:
+        //   `runningStride *= sizes[index]`
+        runningStride = runningStride
+                            ? rewriter.create<LLVM::MulOp>(
+                                  op->getLoc(), runningStride, sizes[index])
+                            : createIndexConstant(rewriter, op->getLoc(), 1);
+      else
+        runningStride =
+            createIndexConstant(rewriter, op->getLoc(), strides[index]);
+      strideValues[index] = runningStride;
+    }
+    // Fill size and stride descriptors in memref.
+    for (auto indexedSize : llvm::enumerate(sizes)) {
+      int64_t index = indexedSize.index();
+      memRefDescriptor = rewriter.create<LLVM::InsertValueOp>(
+          op->getLoc(), targetStructType, memRefDescriptor, indexedSize.value(),
+          rewriter.getI64ArrayAttr({kSizePosInMemRefDescriptor, index}));
+      memRefDescriptor = rewriter.create<LLVM::InsertValueOp>(
+          op->getLoc(), targetStructType, memRefDescriptor, strideValues[index],
+          rewriter.getI64ArrayAttr({kStridePosInMemRefDescriptor, index}));
+    }
+
+    return rewriter.replaceOp(op, memRefDescriptor);
+  }
+};
+
 // A `dim` is converted to a constant for static sizes and to an access to the
 // size stored in the memref descriptor for dynamic sizes.
 struct DimOpLowering : public LLVMLegalizationPattern<DimOp> {
@@ -956,10 +1067,8 @@ struct DimOpLowering : public LLVMLegalizationPattern<DimOp> {
     int64_t index = dimOp.getIndex();
     // Extract dynamic size from the memref descriptor.
     if (ShapedType::isDynamic(shape[index]))
-      rewriter.replaceOpWithNewOp<LLVM::ExtractValueOp>(
-          op, getIndexType(), transformed.memrefOrTensor(),
-          rewriter.getI64ArrayAttr(
-              {LLVMTypeConverter::kSizePosInMemRefDescriptor, index}));
+      rewriter.replaceOp(op, {MemRefDescriptor(transformed.memrefOrTensor())
+                                  .size(rewriter, op->getLoc(), index)});
     else
       // Use constant for static size.
       rewriter.replaceOp(
@@ -1443,6 +1552,7 @@ void mlir::populateStdToLLVMConversionPatterns(
       IndexCastOpLowering,
       LoadOpLowering,
       MemRefCastOpLowering,
+      MemRefShapeCastOpLowering,
       MulFOpLowering,
       MulIOpLowering,
       OrOpLowering,
