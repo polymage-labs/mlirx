@@ -856,6 +856,30 @@ def MemRefCastOp : CastOp<"memref_cast"> {
   }];
 }
 
+def MemRefShapeCastOp : CastOp<"memref_shape_cast"> {
+  let summary = "memref shape cast operation";
+  let description = [{
+    The "memref_shape_cast" operation converts a memref from one type to
+    another memref type with a shape containing the same number of elements,
+    when also counting elements of shaped elemental type.
+
+   %1 = memref_shape_cast %0 : memref<64x16xf32> to memref<64x2xvector<8xf32>>
+   %3 = memref_shape_cast %2 : memref<64x16xf32> to memref<32x32xf32>
+  }];
+
+  let arguments = (ins AnyStaticShapeMemRef:$source);
+  let results = (outs AnyStaticShapeMemRef);
+
+  let extraClassDeclaration = [{
+    /// Return true if `a` and `b` are valid operand and result pairs for
+    /// the operation.
+    static bool areCastCompatible(Type a, Type b);
+
+    /// The result of a memref_shape_cast is always a memref.
+    MemRefType getType() { return getResult()->getType().cast<MemRefType>(); }
+  }];
+}
+
 def MulFOp : FloatArithmeticOp<"mulf"> {
   let summary = "floating point multiplication operation";
   let hasFolder = 1;
