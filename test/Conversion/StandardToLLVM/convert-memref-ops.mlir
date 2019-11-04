@@ -334,6 +334,24 @@ func @memref_cast_mixed_to_mixed(%mixed : memref<42x?xf32>) {
   return
 }
 
+// CHECK-LABEL: func @memref_shape_cast(%arg0: !llvm<"{ float*, i64, [2 x i64], [2 x i64] }*">) -> !llvm<"{ <16 x float>*, i64, [1 x i64], [1 x i64] }">
+func @memref_shape_cast(%M : memref<42x16xf32>) -> memref<42xvector<16xf32>> {
+// CHECK-NEXT:   %0 = llvm.load %arg0 : !llvm<"{ float*, i64, [2 x i64], [2 x i64] }*">
+// CHECK-NEXT:   %1 = llvm.extractvalue %0[0 : index] : !llvm<"{ float*, i64, [2 x i64], [2 x i64] }">
+// CHECK-NEXT:   %2 = llvm.bitcast %1 : !llvm<"float*"> to !llvm<"<16 x float>*">
+// CHECK-NEXT:   %3 = llvm.mlir.undef : !llvm<"{ <16 x float>*, i64, [1 x i64], [1 x i64] }">
+// CHECK-NEXT:   %4 = llvm.insertvalue %2, %3[0 : index] : !llvm<"{ <16 x float>*, i64, [1 x i64], [1 x i64] }">
+// CHECK-NEXT:   %5 = llvm.mlir.constant(0 : index) : !llvm.i64
+// CHECK-NEXT:   %6 = llvm.insertvalue %5, %4[1 : index] : !llvm<"{ <16 x float>*, i64, [1 x i64], [1 x i64] }">
+// CHECK-NEXT:   %7 = llvm.mlir.constant(42 : index) : !llvm.i64
+// CHECK-NEXT:   %8 = llvm.mlir.constant(1 : index) : !llvm.i64
+// CHECK-NEXT:   %9 = llvm.insertvalue %7, %6[2, 0] : !llvm<"{ <16 x float>*, i64, [1 x i64], [1 x i64] }">
+// CHECK-NEXT:   %10 = llvm.insertvalue %8, %9[3, 0] : !llvm<"{ <16 x float>*, i64, [1 x i64], [1 x i64] }">
+// CHECK-NEXT:   llvm.return %10 : !llvm<"{ <16 x float>*, i64, [1 x i64], [1 x i64] }">
+  %MV = memref_shape_cast %M : memref<42x16xf32> to memref<42xvector<16xf32>>
+  return %MV : memref<42xvector<16xf32>>
+}
+
 // CHECK-LABEL: func @mixed_memref_dim(%arg0: !llvm<"{ float*, i64, [5 x i64], [5 x i64] }*">) {
 func @mixed_memref_dim(%mixed : memref<42x?x?x13x?xf32>) {
 //  CHECK-NEXT:  %[[ld:.*]] = llvm.load %{{.*}} : !llvm<"{ float*, i64, [5 x i64], [5 x i64] }*">
