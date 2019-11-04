@@ -14,27 +14,26 @@ developed libraries in a more modular, reusable, and automatable way.
 
 ## Background, Motivation, and Setup
 
-It is well known that some of the most crucial routines that drive the
+It is well-known that some of the most crucial routines that drive the
 state-of-the-art in domains such as dense linear algebra and deep learning are
 all based on carefully hand-optimized and tuned libraries but with a lot of
-engineering effort and insights over a period of time. The techniques and the
-level of attention that has to be paid optimizing for an architecture often
-makes it inaccessible to those without a deep knowledge of the low level
-interactions with architecture and code optimization at various. In many cases,
-the best performing code comes from the hardware vendors itself. Yet,
-fortunately, there are works such as those of [Goto](https://www.openblas.net/)
-and [\[Goto and Van de Geijn ACM TOMS 2015\]](
-https://dl.acm.org/citation.cfm?id=13560531) that have described in great detail
-how such close to peak performance could be obtained. Subsequent
-[works](https://dl.acm.org/citation.cfm?id=2764454) made the process more
-modular, reusable, and accessible to a wider audience, having translated to an
-open-source project [FLAME/BLIS](https://github.com/flame/blis).
+engineering effort and insights over time. The techniques necessary and the
+level of attention that has to be paid optimizing for an architecture makes it
+often inaccessible to those without a deep knowledge of low level interactions
+with architecture and code optimization. In many cases, the best performing code
+comes from the hardware vendors itself. Yet, fortunately, there are published
+works such as those of [Goto](https://www.openblas.net/) and [\[Goto and Van de
+Geijn ACM TOMS 2015\]]( https://dl.acm.org/citation.cfm?id=13560531) that have
+described in great detail how such close to peak performance could be obtained.
+Subsequent [works](https://dl.acm.org/citation.cfm?id=2764454) made the process
+more modular, reusable, and accessible to a wider audience, having translated to
+an open-source project [FLAME/BLIS](https://github.com/flame/blis).
 
 This tutorial alludes to the fact that this process could potentially be made
 even more modular, automatable and systematic --- by hosting it on top of a real
-compiler IR that has the necessary abstractions and infrastructure, thereby
-completely avoiding the need to write any code by hand whether it's C or inline
-assembly. The IR infrastructure that will be used here is of course,
+compiler IR that has the necessary abstractions and infrastructure. This
+completely avoids the need to write any code by hand --- be it C or inline
+assembly.  The IR infrastructure that will be used here is of course,
 [MLIR](https://github.com/tensorflow/mlir), and we will try to recreate the
 OpenBLAS/BLIS' approach to tiling in a compiler-oriented way using MLIR.
 
@@ -239,14 +238,13 @@ hop.matmul above is an operation that operates on three memrefs, %A, %B, and %C,
 which are the LHS, the RHS, and the output corresponding to a matrix-matrix
 multiplication. This op has zero results: since these are memrefs, the
 underlying memory can be updated, but the memref itself is an SSA value and thus
-can be defined only once. In this case, %C will be both read and written by
-this heavy op.
-*some_attr* is an attribute of the op, which like in LLVM is meant to be a
-constant of one of numerous types available including some polyhedral types
-like [affine
+can be defined only once. In this case, %C will be both read and written by this
+heavy op.  *some_attr* is an attribute of the op, which like in LLVM is meant to
+be a constant of one of the numerous types available including some polyhedral
+types like [affine
 maps](https://github.com/tensorflow/mlir/blob/master/g3doc/Dialects/Affine.md)
 and [integer
-set](https://github.com/tensorflow/mlir/blob/master/g3doc/Dialects/Affine.md#integer-sets).
+sets](https://github.com/tensorflow/mlir/blob/master/g3doc/Dialects/Affine.md#integer-sets).
 Such polyhedral attributes could be used to encode powerful information and
 we'll see an example of this later.
 
@@ -281,8 +279,8 @@ tools do.
 
 There are various ways of describing OpenBLAS's/BLIS' tiling scheme and they are
 explained in excellent detail with illustration in the papers by [Van Zee and
-van de Geijn al. on BLIS](https://dl.acm.org/citation.cfm?id=2764454) and also
-with excellent analysis and explanation by [Low et al.  ACM TOMS
+van de Geijn al. on BLIS](https://dl.acm.org/citation.cfm?id=2764454), and with
+excellent analysis and modeling by [Low et al.  ACM TOMS
 2016](https://dl.acm.org/citation.cfm?id=2764454).  But here, we will describe
 the tiling transformation very compactly via polyhedral schedules. For an
 introduction to polyhedral schedules, see
@@ -353,12 +351,12 @@ on the hop.matmul op.
 ```
 We've used K_C = 256, M_C = 64, M_R = 8, N_R = 4 as a starting point: these can
 be analyzed to be good values given the cache size constraints described
-earlier. We'll add one more parameter to the list,  K_U, which will will be the
+earlier. We'll add one more parameter to the list,  K_U, which will be the
 unroll factor for the K_C loop (intra-tile loop corresponding to $k$ reduction
 loop).
 
-Now, with the schedule that performs the specific tiling used by BLIS, we obtain
-this for the tiled loop nest:
+Now, with the schedule that performs the specific tiling used by BLIS, we get
+this tiled loop nest:
 
 ```
 affine.for %arg3 = 0 to 8 {
@@ -383,7 +381,9 @@ affine.for %arg3 = 0 to 8 {
 } {poly_codegen_name = "c0"}
 ```
 
-Note that the invariant load on %A has been hoisted. When this is executed, we obtain:
+Note that the invariant load on %A has been hoisted. When we execute this, we
+get:
+
 ```
 # With tiling
 $ mlir-opt -hopt -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
@@ -783,9 +783,9 @@ affine.for %arg3 = 0 to 8 {
 
 The memref<1 x f64> types (single element memrefs) that we see below a result of
 the scalar replace pass (-affine-scalrep) that runs after the unroll-and-jam.
-We see eight of these summing up to 32 elements of the output matrix, that are
-kept in registers when the innermost k loop is iterating. LLVM's passes later
-turn these into virtual registers.
+We see eight of these summing up to 32 elements of the output matrix, and these
+are held in registers when the innermost loop (k) is iterating. LLVM's passes
+later turn these into virtual registers.
 
 Both BLIS and OpenBLAS use inline assembly microkernels and other hand written
 components that are composed in a modular/reusable way. OTOH, we've been trying
@@ -1072,7 +1072,7 @@ worked on the LLVM backends and surrounding infrastructure.
 
 ![](blis-micro-kernel.png)
 
-*The BLIS micro-kernel.*.
+*Figure: The BLIS micro-kernel.*.
 
 The BLIS micro-kernel being used here is [bli_dgemm_haswell_asm_6x8](https://github.com/flame/blis/blob/b426f9e04e5499c6f9c752e49c33800bfaadda4c/kernels/haswell/3/bli_gemm_haswell_asm_d6x8.c#L926); this
 corresponds to M_R = 6 and N_R = 8. We'll thus run a pure MLIR code generated
@@ -1167,7 +1167,7 @@ The hopt_dgemm_blis_kernel function is added to
 [mlir_runtime_utils](https://github.com/tensorflow/mlir/blob/master/test/mlir-cpu-runner/mlir_runner_utils.cpp),
 and just wraps around bli_dgemm_haswell_asm_6x8.
 
-The alloc's above have alignments since the BLIS kernel uses 256-bit aligned
+The allocs above have alignments since the BLIS kernel uses 256-bit aligned
 loads on these buffers. So, this experimentation was done with additional
 support in the MLIR's std to llvm dialect conversion to use posix_memaligned
 allocations. We have these alignments set even for the pure MLIR generated code
@@ -1268,16 +1268,15 @@ need not perfectly divide problem sizes - this already works in MLIR in
 conjunction with packing and other transformations presented here. For eg. the
 best M_C size we used (180) does not divide 2048.
 
-2. The transformations we've looked at use the affine dialect since the former
-and the generated code at each stage always stays affine here. The [Linalg
+2. We've primarily used the polyhedral passes in MLIR here since the generated
+code at each stage always stays fine.  The [Linalg
 dialect](https://github.com/tensorflow/mlir/blob/master/test/Transforms/memref-normalize.mlir)
 does not have the utilities to automatically analyze and generate packing code
 for example.  Nearly all passes and utilities used here such as unroll-and-jam,
-  scalar replacement, and memref normalization also work on the affine dialect
-  ops.
+  scalar replacement, and memref normalization also work on affine dialect ops.
 
 Part II of this tutorial will demonstrate other code generation infrastructure,
-use cases, and also show how the remaining gap here could be bridged.
+use cases, and show how the remaining gap here could be bridged.
 
 ## Reproducing these Results
 
