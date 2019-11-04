@@ -23,12 +23,12 @@ makes it inaccessible to those without a deep knowledge of the low level
 interactions with architecture and code optimization at various. In many cases,
 the best performing code comes from the hardware vendors itself. Yet,
 fortunately, there are works such as those of [Goto](https://www.openblas.net/)
-and [Goto and Van de Geijn ACM TOMS 2015](
+and [\[Goto and Van de Geijn ACM TOMS 2015\]](
 https://dl.acm.org/citation.cfm?id=13560531) that have described in great detail
 how such close to peak performance could be obtained. Subsequent
-[efforts](https://dl.acm.org/citation.cfm?id=2764454) made the process more
-modular, reusable, and thus accessible to a wider audience, having translated to
-an open-source project [FLAME/BLIS](https://github.com/flame/blis).
+[works](https://dl.acm.org/citation.cfm?id=2764454) made the process more
+modular, reusable, and accessible to a wider audience, having translated to an
+open-source project [FLAME/BLIS](https://github.com/flame/blis).
 
 This tutorial alludes to the fact that this process could potentially be made
 even more modular, automatable and systematic --- by hosting it on top of a real
@@ -423,14 +423,12 @@ number of other options.
 With the tiling approach we are using here, packing is performed for the LHS
 matrix %A right under the second loop (*i floordiv K_C* dimension in the
 schedule). For %B (RHS matrix), the copying is performed right under j floordiv
-N_R (the third dimension). 
+N_R (the third dimension).
 
 ![](packing.png)
 
-*The one in green is the LHS to be packed into a buffer that will reside in L2,
-and the RHS in blue will reside in L1. Figure courtesy: [Field Van
-Zee](http://www.cs.utexas.edu/users/field/) and [Robert van de
-Geijn](https://www.cs.utexas.edu/~rvdg/)*.
+*Figure: The one in green is the LHS to be packed into a buffer that will reside
+in L2, and the RHS in blue will reside in L1.*.
 
 To accomplish automatically with MLIR, instead of calling the
 -affine-data-copy-generate pass, we will just use the underlying utility
@@ -830,6 +828,8 @@ Now, let's look at the memref corresponding to the buffer for the LHS matrix
 
 ![](lhs-layout.png)
 
+*Figure: LHS buffer layout*
+
 This block is being multiplied with the RHS panel of type
 memref<256x2xvector<2xf64>>. The figure above shows how the elements of the A
 block get traversed, along columns of height M_R all the way up to K_C columns,
@@ -1052,21 +1052,27 @@ MLIR itself, i.e., the outer loops, tiling, explicit copying
 etc. are all automated with MLIR the way we described above, but the carefully
 crafted inline assembly kernel of BLIS is called for the inner part. This is
 also an approach of high interest to several research groups working on HPC
-compilers today. Over here, it's also very interesting because it tells us
-whether the remaining difference in performance is coming from the carefully
-tailored instruction selection and schedule in BLIS' micro-kernel, which the
-compiler (which has the task of dealing with the entire world of programs) is
-unable to nail down optimally. Seeing a big difference when we swap out our
-inner loops with the BLIS kernel could be disappointing because it would mean
-we'll have to now get into LLVM to see how we could improve things as one
-option. OTOH, the lack of any significant improvement would be great news for us
-as well because we can now focus on the macro kernels, code and loops that we
-have all possible control over, to go closer to the peak.
+compilers today because many believe that (1) the performance of the
+hand-written inner kernel can't be attained through compiler generated code, (2)
+one shouldn't be subject to the vagaries of a compiler when generating such code
+where even the last ounce of performance should be extracted. Both points are
+debatable.
+
+Over here, our experiment is also interesting because it tells us whether the
+remaining difference in performance is coming from the carefully tailored
+instruction selection and schedule used in BLIS' micro-kernel, which the
+compiler (being tasked to deal with the entire world of programs) is unable to
+nail down optimally. Seeing a big difference when we swap out our inner loops
+with the BLIS kernel could be disappointing because it would mean we'll have to
+now get into LLVM to see how we could improve things as one option. OTOH, the
+lack of any significant improvement would be great news for us because we can
+now focus on the macro kernels, code and loops that we have all possible control
+over, to go closer to the peak. It would also be a tribute to all those who have
+worked on the LLVM backends and surrounding infrastructure.
 
 ![](blis-micro-kernel.png)
 
-*The BLIS micro-kernel. Figure courtesy: [Field Van Zee](http://www.cs.utexas.edu/users/field/) and
-[Robert van de Geijn](https://www.cs.utexas.edu/~rvdg/)*.
+*The BLIS micro-kernel.*.
 
 The BLIS micro-kernel being used here is [bli_dgemm_haswell_asm_6x8](https://github.com/flame/blis/blob/b426f9e04e5499c6f9c752e49c33800bfaadda4c/kernels/haswell/3/bli_gemm_haswell_asm_d6x8.c#L926); this
 corresponds to M_R = 6 and N_R = 8. We'll thus run a pure MLIR code generated
