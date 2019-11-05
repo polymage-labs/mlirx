@@ -2,8 +2,9 @@
 
 - Author: [Uday Bondhugula](http://www.csa.iisc.ac.in/~udayb)
 
-This document is primarily a tutorial on using MLIR for high-performance code
-generation. It in particular covers
+This document is primarily a tutorial on using
+[MLIR](https://www.tensorflow.org/mlir) for high-performance code generation. It
+in particular covers
 [memrefs](https://github.com/tensorflow/mlir/blob/master/g3doc/LangRef.md#memref-type),
 the [affine
 dialect](https://github.com/tensorflow/mlir/blob/master/g3doc/Dialects/Affine.md),
@@ -22,12 +23,12 @@ level of attention that has to be paid optimizing for an architecture makes it
 often inaccessible to those without a deep knowledge of low level interactions
 with architecture and code optimization. In many cases, the best performing code
 comes from the hardware vendors itself. Yet, fortunately, there are published
-works such as those of [Goto](https://www.openblas.net/) and [\[Goto and Van de
-Geijn ACM TOMS 2015\]]( https://dl.acm.org/citation.cfm?id=13560531) that have
-described in great detail how such close to peak performance could be obtained.
-Subsequent [works](https://dl.acm.org/citation.cfm?id=2764454) made the process
-more modular, reusable, and accessible to a wider audience, having translated to
-an open-source project [FLAME/BLIS](https://github.com/flame/blis).
+works such as those of [\[Goto and Van de Geijn 2008\]](
+https://dl.acm.org/citation.cfm?id=1356053) that have described in great detail
+how such close to peak performance could be obtained.  Subsequent
+[works](https://dl.acm.org/citation.cfm?id=2764454) made the process more
+modular, reusable, and accessible to a wider audience, having translated to an
+open-source project [FLAME/BLIS](https://github.com/flame/blis).
 
 This tutorial alludes to the fact that this process could potentially be made
 even more modular, automatable and systematic --- by hosting it on top of a real
@@ -87,9 +88,10 @@ $ clang -O3  -DTIME matmul.c -o matmul.clang -lm
 $ gcc --version
 gcc (GCC) 9.2.1 20190827 (Red Hat 9.2.1-1)
 
-$ gcc -O3  -DTIME matmul.c -o matmul.clang -lm
+$ gcc -O3  -DTIME matmul.c -o matmul.gcc -lm
 $ ./matmul.gcc
-1.53 GFLOPS
+11.142771s
+1.54 GFLOPS
 ```
 
 Disappointingly, clang and GCC are at 0.6% and 2% of the machine peak
@@ -136,7 +138,7 @@ picture for now.]
 
 ## Using MLIR
 
-There is currently no C/C++ or a Frontend that emits MLIR. The way to get
+There is currently no C/C++ or a frontend that emits MLIR. The way to get
 something in MLIR run on CPUs is through *mlir-cpu-runner* which can take MLIR
 as input and JIT compile and execute it.  As part of this process, optimized
 MLIR is converted to LLVM IR, which then goes through its optimization pipeline
@@ -189,10 +191,12 @@ func @print_memref_2d_f64(memref<2048x2048xf64>)
 [affine.for](https://github.com/tensorflow/mlir/blob/master/g3doc/Dialects/Affine.md#affinefor-operation)
 and
 [affine.load/store](https://github.com/tensorflow/mlir/blob/master/include/mlir/Dialect/AffineOps/AffineOps.h#L398)
-are ops from the Affine dialect used above. The IR above also uses a helper op from
+are ops from the Affine dialect used above. The IR above also uses a helper op
+from the
 [LinAlg](https://github.com/tensorflow/mlir/tree/master/include/mlir/Dialect/Linalg)
-dialect to initialize the matrix. The rest like (addf, mulf, alloc) are all ops from MLIR's
-standard dialect.
+dialect to initialize matrices. The rest like (addf, mulf, alloc) are all ops
+from MLIR's [standard
+dialect](https://github.com/tensorflow/mlir/tree/master/g3doc/Dialects/Standard.md).
 
 ### Memref
 
@@ -279,10 +283,10 @@ tools do.
 
 There are various ways of describing OpenBLAS's/BLIS' tiling scheme and they are
 explained in excellent detail with illustration in the papers by [Van Zee and
-van de Geijn al. on BLIS](https://dl.acm.org/citation.cfm?id=2764454), and with
-excellent analysis and modeling by [Low et al.  ACM TOMS
+van de Geijn on BLIS](https://dl.acm.org/citation.cfm?id=2764454), and later
+with analysis and modeling by [Low et al.
 2016](https://dl.acm.org/citation.cfm?id=2764454).  But here, we will describe
-the tiling transformation very compactly via polyhedral schedules. For an
+the tiling transformation compactly via polyhedral schedules. For an
 introduction to polyhedral schedules, see
 [here](https://www.csa.iisc.ac.in/~udayb/slides/uday-polyhedral-opt.pdf) or the
 material on [polyhedral.info](https://polyhedral.info). In particular, the
@@ -304,15 +308,15 @@ its optimization strategy.
 
 <center> <img src="blis-gemm.png" alt="BLIS tiling" width="500"/> <br/>
 
-*Figure courtesy: [Field Van Zee](http://www.cs.utexas.edu/users/field/) and
+*Figure: Tiling strategy of OpenBLAS/BLIS. Figure courtesy: [Field Van Zee](http://www.cs.utexas.edu/users/field/) and
 [Robert van de Geijn](https://www.cs.utexas.edu/~rvdg/).* </center>
 
 The parameters (M_C, K_C) are chosen such that a tile of the LHS matrix (%A) of
 size M_C x K_C is reused in the L2 cache, an RHS matrix tile of size K_C x N_R
 is reused in the L1 cache, while a register tile of the output matrix %C of size
-M_R x N_R is just reused in the registers. There are several other
+M_R x N_R is reused in just the registers. There are several other
 considerations in choosing these parameters if one is interested in analytical
-modeling; those are described in the work of [Low et al. ACM TOMS
+modeling; those are described in the work of [Low et al.
 2016](http://dl.acm.org/citation.cfm?id=2925987). The last three dimensions of
 the schedule are multiplying a panel of %A of size M_R x K_C with a panel of %B
 of size K_C x N_R. Note that %C is being both read and written, and intuitively,
@@ -352,8 +356,8 @@ on the hop.matmul op.
 We've used K_C = 256, M_C = 64, M_R = 8, N_R = 4 as a starting point: these can
 be analyzed to be good values given the cache size constraints described
 earlier. We'll add one more parameter to the list,  K_U, which will be the
-unroll factor for the K_C loop (intra-tile loop corresponding to $k$ reduction
-loop).
+unroll factor for the K_C loop (intra-tile loop corresponding to k reduction
+dimension).
 
 Now, with the schedule that performs the specific tiling used by BLIS, we get
 this tiled loop nest:
@@ -392,7 +396,7 @@ Compilation time: 0.0443082s
 ```
 
 This is roughly a 4x improvement in performance, but still no where close to the
-machine peak or the performance of MKL, OpenBLAS or BLIS.
+machine peak or the performance of MKL, OpenBLAS or BLIS!
 
 ### Explicit Copying or Packing
 
@@ -401,15 +405,15 @@ copying or packing is a commonly used technique in HPC, which first copies
 or packs accessed data into contiguous buffers and indexes those buffers for
 computation. Such copying reduces or nearly eliminates conflict misses, TLB
 misses, and improves hardware prefetching performance (since the access will
-leads fewer prefetch streams). More importantly, in conjunction with tiling, it
-provides the intended benefits of tiling. On the one hand, tiling is performed
-so that reuse is exploited in multiple directions when the data accessed fits in
-a higher level of the memory hierarchy; on the other hand, the data accessed for
-a tile is no longer contiguous in the original matrix/tensor leading to conflict
-misses, TLB misses, and more prefetch streams --- taking away a lot of the gain
-even if there is high reuse. There is also a choice in terms of which depth /
-where one would like to introduce the copies, but this is quite clear for the
-tiling strategy we are using.
+lead to fewer prefetch streams). More importantly, in conjunction with tiling,
+it provides the intended benefits of tiling. On the one hand, tiling is
+performed so that reuse is exploited in multiple directions when the data
+accessed fits in a higher level of the memory hierarchy, on the other hand, the
+data accessed for a tile is no longer contiguous in the original matrix/tensor
+leading to conflict misses, TLB misses, and more prefetch streams --- taking
+away a lot of the gain even if there is high reuse. There is also a choice in
+terms of which depth / where one would like to introduce the copies, but this
+is quite clear for the tiling strategy we are using.
 
 The packing optimization is something that one would really wish a compiler
 performs automatically. MLIR has a pass
@@ -418,7 +422,7 @@ and a utility
 [mlir::affineDataCopyGenerate](https://github.com/tensorflow/mlir/blob/a4b11eba615c87b9253f61d9b66f02839490e12b/include/mlir/Transforms/LoopUtils.h#L186)
 that can perform explicit copying or packing.  The utility can also be called on
 a specific memref to perform the packing at a specific loop depth, and with a
-number of other options.
+number of other options (including DMA support).
 
 With the tiling approach we are using here, packing is performed for the LHS
 matrix %A right under the second loop (*i floordiv K_C* dimension in the
@@ -430,7 +434,7 @@ N_R (the third dimension).
 *Figure: The one in green is the LHS to be packed into a buffer that will reside
 in L2, and the RHS in blue will reside in L1.*.
 
-To accomplish automatically with MLIR, instead of calling the
+To perform the packing automatically with MLIR, instead of calling the
 -affine-data-copy-generate pass, we will just use the underlying utility
 [mlir::affineDataCopyGenerate](https://github.com/tensorflow/mlir/blob/a4b11eba615c87b9253f61d9b66f02839490e12b/include/mlir/Transforms/LoopUtils.h#L186)
 to place copies at the right depths.  For the purpose of this tutorial, we
@@ -500,10 +504,10 @@ performed. We will look at an example a little later.
 Note that our schedule already performed tiling so that an unroll-and-jam of the
 innermost two loops by N_R and M_R respectively could be achieved, but we
 actually didn't enable that yet. We use the option -hopt-unroll to turn this on
-and off. We also run scalar replacement in MLIR. Besides turning memref
-locations being reduced into scalars (single element memrefs) and hoisting them
-out, it also eliminates redundant loads, and hoists invariant loads out of
-loops.
+and off. We also run scalar replacement in MLIR post unroll-and-jam. Besides
+turning memref locations being reduced into scalars (single element memrefs) and
+hoisting them out, it also eliminates redundant loads, and hoists invariant
+loads out of loops.
 
 ```
 $ mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
@@ -513,20 +517,21 @@ Compilation time: 0.11306s
 
 This is just a further improvement of 30%. All of these improvements are
 significant from where we started but they are all finally just too little on an
-absolute scale (we are still at about 6% of the peak!) having reproduced a part
-of the OpenBLAS/BLIS recipe. Clearly, there is something orthogonal that all of
-this is missing. It looks like we completely missed vectorization. The highly
-tuned library kernels that we've set as a target often used a careful selection
-and schedule of vector instructions in inline assembly.
+absolute scale even after having reproduced a part of the OpenBLAS/BLIS recipe
+(we are still at about 6% of the peak!). Clearly, there is something orthogonal
+that all of this is missing. It looks like we completely missed vectorization!
+The highly tuned library kernels that we've set as a target often used a careful
+selection and schedule of vector instructions in inline assembly.
 
 Let's see whether our code is even being vectorized reasonably under the hood by
 LLVM.  It's pretty straightforward to check this. Instead of looking at the pass
 output remarks, we'll just look at the generated assembly. The
-'-dump-object-file -object-filename' options are useful for this purpose.
+'-dump-object-file -object-filename' options of mlir-cpu-runner are useful for
+this purpose.
 ```
 $ mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so -dump-object-file -object-filename=hopt.o > /dev/null
-$  llvm-objdump -d hopt.o | less
-
+$ llvm-objdump -d hopt.o | less
+    ...
     14e5:       c4 e2 a9 b9 e2  vfmadd231sd     %xmm2, %xmm10, %xmm4
 
     1856:       c4 42 e5 a8 f8  vfmadd213pd     %ymm8, %ymm3, %ymm15
@@ -565,6 +570,7 @@ $  llvm-objdump -d hopt.o | less
     192d:       c4 e2 7d 19 fc  vbroadcastsd    %xmm4, %ymm7
     1932:       c4 c2 f5 a8 c6  vfmadd213pd     %ymm14, %ymm1, %ymm0
     1937:       c4 c2 f5 a8 f8  vfmadd213pd     %ymm8, %ymm1, %ymm7
+    ...
 ```
 
 This is really not the code we'd like to see in the innermost loop!  Although
@@ -574,7 +580,8 @@ around them and neither should this have been necessary nor is it any good for
 performance! A good inner loop here is expected to only have one load of the LHS
 and RHS every N_R and M_R FMA ops, roughly speaking, because that's the amount
 of reuse we should be getting. In addition, there should be no loads or stores
-for output matrix in the innermost loop, which happens to be the case here.
+for output matrix in the innermost loop, which happens to be the case here. And
+finally, it all should have been %ymm.
 
 It is also important to note that vectorization is often nearly useless unless
 the code has been optimized for locality, (i.e., we should be getting data from
@@ -662,13 +669,13 @@ The code is only as fast as its weakest link. While the cache tiling really
 optimized reuse for the LHS and RHS, the strategy used by OpenBLAS and BLIS
 exploits reuse for the output matrix only in registers (not in L1 nor L2).  As
 such, without unroll-and-jam aka register tiling, brakes had been applied.  So,
-the last step opens the floodgate yielding a 4.5x improvement and getting us to
-49 GFLOPS -- only 23% away from BLIS and about 27% away from MKL or OpenBLAS.
+the last step opened the floodgates here yielding a 4.5x improvement and
+getting us to 49 GFLOPS -- only 23% away from BLIS and about 27% away from MKL
+or OpenBLAS.
 
 Let's see how the code looks like right after vectorization, tiling, copying,
 and unroll-and-jam (we will disable the K_C loop unroll, i.e., set K_U = 1 to
 make it easier to read; the unroll-jamming of i, j is still shown).
-
 
 ```
 affine.for %arg3 = 0 to 8 {
@@ -839,7 +846,7 @@ the block of A is L2 cache resident and is just streamed through L1, we still
 get both spatial reuse for it in L1 as well as L2, i.e., it is just that the
 reuse in space for A does not happen immediately but once you've traversed the
 M_R height.  And we know per this whole approach that it still stays in cache.
-However, there is no harm and it can only potentially get better if we ensure
+However, there is no harm (and it can only potentially get better) if we ensure
 that A is accessed contiguously.  For eg., it can only help with prefetching
 into L1.  Hence, we would like to pick a layout different from the default
 row-major for memref<64x256xf64>, and MLIR's affine layout maps make it
@@ -849,18 +856,18 @@ we simply change the memref type to:
 ```
 memref<64x256xf64, (d0, d1) -> (d0 floordiv M_R, d1, d0 mod M_R)>
 ```
-yields the desired layout. The rest of the IR does not need a single
-change. The mapping specifies that a (d0, d1) in the logical access space should
+it yields the desired layout. The rest of the IR does not need a single
+change! The mapping specifies that a (d0, d1) in the logical access space should
 be mapped to (d0 flooridv M_R, d1, d0 mod M_R) in a physical (contiguous) buffer
-of size 16x256x4.  When mlir::normalizeMemRefs runs, it will turn this memref
+of size 16x256x4.  When [mlir::normalizeMemRef](https://github.com/tensorflow/mlir/blob/331c663bd2735699267abcc850897aeaea8433eb/include/mlir/Transforms/Utils.h#L89) runs, it will turn this memref
 into:
 
 ```
 memref<16x256x4>
 ```
 And an access Abuf[%i, %j] is remapped to Abuf[%i floordiv 4, %j, %i mod 4].
-This is an example of a tiled layout (akin to how iteration space tiling is
-performed -- stripmine and interchange).
+This is an example of a tiled layout, akin to how iteration space tiling is
+performed -- stripmine and interchange -- but on the data space.
 
 As another example, here's a memref that accesses a non-contiguous sub-space of
 its underlying buffer.
@@ -870,9 +877,14 @@ memref<64x256xf64, (d0, d1) -> (d0, d1 floordiv 6, d1 mod 6)>
 Note that we'd have a "padding" worth 2 elements (256 % 6) at the end of each
 row that can never be accessed via this memref while staying in bounds. Another
 way to write this is:
-
 ```
 memref<64x256xf64, (d0, d1) -> (d0 * 258 + d1)
+```
+
+A memref with access strides say 128, 2 (for major, minor resp.) in a larger
+underlying buffer can be expressed for example as:
+```
+memref<126x100xf32, (d0, d1) -> (d0 * 128 + d1 * 2).
 ```
 
 More examples can be found [here](https://github.com/tensorflow/mlir/blob/master/test/Transforms/memref-normalize.mlir).
@@ -882,10 +894,10 @@ custom data layout for the buffer (being copied into/from). One can choose any
 layout map as long as it's injective: any injective layout will lead to
 semantically correct code.
 
-For Part I of this tutorial, we won't be using this layout -- since we've talked
-about software prefetching yet; we'll explore that in the next part. However,
-we'll see that this layout is still needed for an experiment ([Outer MLIR +
-inner BLIS](map-to-blis-micro-kernel-outer-mlir-inner-blis) further below.
+For Part I of this tutorial, we'll see that this layout is only needed for an
+experiment later ([Outer MLIR + inner
+BLIS](map-to-blis-micro-kernel-outer-mlir-inner-blis) further below. We'll get
+back to adjusting parameters to go full throttle.
 
 ### Tweaking M_C, K_C, M_R, N_R to maximize reuse
 
@@ -905,18 +917,23 @@ uses 12 vector registers for %C instead of the under utilization of 8 earlier.
 } : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2088x2048xf64>) -> (memref<2088x2048xf64>)
 ```
 
-The reason behind choosing M_R = 3 and N_R = 16 is that is leads to 3 * 16 /4 =
-12 256-bit vector registers for the output values. The BLIS provided kernels for
-Haswell otherwise include 6*8 and 8*6 -- they too use (2\*6 =) 12 registers but
-3\*4 is more balanced. Let's run this one.
-
+When one chooses M_R = 3 and N_R = 16, it leads to 3 * 16 /4 = 12 256-bit vector
+registers for the output values. The BLIS provided kernels for Haswell otherwise
+include 6\*8, 8\*6, 4\*12, 12\*4 -- they too use (2\*6 =) 12 registers, but
+these options differ in how much register reuse is relatively exploited along
+the two dimensions and how big the L1 resident buffer for the RHS is. 
 ```
 # M_C = 180 : i32, K_C = 480 : i32, M_R = 3, N_R = 16 : i32, K_U = 4 : i32
 $ mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=3 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.039474s
 61.939 GFLOPS
 ```
-We immediately see a 24% boost in performance!
+We immediately see a 24% boost in performance! A big
+strength of a pure compiler approach here is that one automatically generates
+everything -- all the way down to the innermost loop body. So, we have the
+opportunity to explore more than what's possible with a fixed set of manually
+pre-optimized kernels. This is all under the assumption that the compiler
+generated code is competitive or could be made competitive.
 
 ```
 # Let's see the impact of just the M_R, N_R values.
@@ -1004,6 +1021,9 @@ Compilation time: 0.0228369s
 10.785 GFLOPS
 ```
 
+Let's now look back at our journey up until this best performing result, and the
+role each optimization played.
+
 ![]( mlir-perf-with-opts.svg )
 
 ### Within 9% of OpenBLAS and MKL
@@ -1019,7 +1039,7 @@ also likely improved by tuning and playing around M_C and K_C as opposed to
 choosing the configuration it preset (M_C = 72, K_C = 256), but as we observed
 here, it's the M_R, N_R values that have a greater impact here as far as
 the MLIR + LLVM approach goes. Secondly, further tuning of BLIS is likely to
-still be within the OpenBLAS performance based on published results.
+still be around the OpenBLAS performance (based on published results).
 
 ### Vectorization with copying, unroll-and-jam, unrolling but no scalar replacement
 
@@ -1222,19 +1242,43 @@ Overall, we conclude here that the kind of code we could get automatically
 is clearly on par or close to what was achieved with expert written assembly.
 The best performing M_RxN_R of 3x16 is on par with the MLIR-BLIS configuration
 we explored. The 6x8 version, if made to work without spilling, will likely be
-on par with 3x16.  This basically means the 4-9% different between pure MLIR
-one and the BLIS/OpenBLAS ones likely stems from things around and outside the
-micro-kernel. This part requires more experimentation before any firm
+on par with 3x16.  This basically means the 4-9% difference between the pure
+MLIR one and the BLIS/OpenBLAS ones likely stems from things around and outside
+the micro-kernel. This part requires more experimentation before any firm
 conclusions can be made, and this will covered in Part II.
 
 On a separate note, one can see that MLIR does make it easier to map to external
 hand-optimized kernels, and combine the best of both worlds if that's necessary
 for peak performance. Also, it's very straightforward to perform a systematic
-exploration around interesting values by generating ops with the different
-attributes.  However, each choice requires a compile and execute cycle since we
-aren't generating any target code parametric in the identified parameters.
+exploration around interesting values by generating ops with different
+parameter attributes.  However, each choice requires a compile and execute
+cycle since we aren't generating any target code parametric in the identified
+parameters.
 
 ![]( dgemm-perf-blis.svg )
+
+### SGEMM performance
+
+We can similarly now quickly benchmark SGEMM performance. All that we need to
+change on the op's operands is an s/f64/f32! In addition, we will just double
+the register tile size N_R from 16 to 32 since two times the number of f32
+elements can be held in a vector register (8 x f32 instead of 4 x f64). We would
+thus still be using 3x4 = 12 vector registers for C. In addition, we will also
+double M_C to 348 for the same reason. We thus use this op to generate SGEMM.
+
+```
+"hop.matmul"(%A, %B, %C) {
+    M_C = 348 : i32, K_C = 512 : i32, M_R = 3, N_R = 32 : i32, K_U = 4 : i32
+} : (memref<2048x2048xf32>, memref<2048x2048xf32>, memref<2048x2048xf32>) -> (memref<2048x2048xf32>)
+```
+
+![]( sgemm-perf.svg)
+
+The performance of purely MLIR generated code is within 2% of MKL performance
+here!, and in fact marginally better than OpenBLAS and BLIS. The outer MLIR +
+inner BLIS version here delivers the expected performance, nearly on par with
+pure MLIR here.
+
 
 ### What about the remaining 9%?
 
@@ -1252,6 +1296,12 @@ In summary, we have been able to generate all code starting from just this op:
 } : (memref<2048x2048xf64>, memref<2048x2048xf64>, memref<2048x2048xf64>) -> (memref<2048x2048xf64>)
 ```
 
+Part II of this tutorial will demonstrate other code generation infrastructure,
+use cases, and show how the remaining gap here could be bridged.
+
+
+### Other questions
+
 There may be a few questions here.
 
 1. While the code was automatically generated, the transformation sequence was
@@ -1259,38 +1309,53 @@ specified from within an MLIR pass. What does the sequence look like - just C++
 IR building and calls to utilities/passes? How productive is it and the
 subsequent exploration?
 
-2. What about problem sizes that aren't a perfect multiple of register tile
-sizes (M_R, N_R)? While MLIR's unroll-and-jam works with cleanup code generated,
-there are unresolved issues in interactions downstream (for performance). There
-is literature in the polyhedral body of works on separation of full and partial
-tiles, and this is largely an implementation issue. Note that cache tile sizes
-need not perfectly divide problem sizes - this already works in MLIR in
-conjunction with packing and other transformations presented here. For eg. the
-best M_C size we used (180) does not divide 2048.
+2. *What about problem sizes that aren't a perfect multiple of register tile
+sizes (M_R, N_R)?* While MLIR's unroll-and-jam works with cleanup code
+generated, there are unresolved issues in interactions downstream (for
+performance). There is literature in the polyhedral body of works on separation
+of full and partial tiles, and this is largely an implementation issue. Note
+that cache tile sizes need not perfectly divide problem sizes - this already
+works in MLIR in conjunction with packing and other transformations presented
+here. For eg. the best M_C size we used (180) does not divide 2048.
 
-2. We've primarily used the polyhedral passes in MLIR here since the generated
+3. We've primarily used the polyhedral passes in MLIR here since the generated
 code at each stage always stays fine.  The [Linalg
 dialect](https://github.com/tensorflow/mlir/blob/master/test/Transforms/memref-normalize.mlir)
 does not have the utilities to automatically analyze and generate packing code
 for example.  Nearly all passes and utilities used here such as unroll-and-jam,
   scalar replacement, and memref normalization also work on affine dialect ops.
 
-Part II of this tutorial will demonstrate other code generation infrastructure,
-use cases, and show how the remaining gap here could be bridged.
+4. *What about all the other options around input matrices such as strides and
+transpose?*  These all are cleanly expressed via memrefs' [affine layout map
+discussed above](#a-quick-detour-into-affine-map-layouts). We also haven't
+considered the \alpha and \beta arguments for DGEMM (it's really C =
+\alpha\*A\*B + \beta\*C) - we've actually assumed \alpha = \beta = 1. In fact,
+MLIR's pattern rewrites can fold and optimize away code/nests when \alpha or
+\beta are 0 or 1.
+
+5. *How do we determine the good parameter values?* The work by [Low et al. ACM
+TOMS 2016](https://dl.acm.org/citation.cfm?id=2925987) is on analytical modeling
+to derive good parameter values. Besides such analytical modeling, there is a
+lot of room to play here depending on how powerful the generative infrastructure
+is, and to what extent we would like to generalize this approach beyond the
+domain considered here.
 
 ## Reproducing these Results
 
-Most of this tutorial can be reproduced with [MLIR
-trunk](https://github.com/tensorflow/mlir).  There are some features that are
-pending upstream integration (memref_shape_cast op, alloca op, scalar
-replacement, and a few packing options), but they will be available at
-https://github.com/bondhugula/mlir.
+A good part of this tutorial can be reproduced with [MLIR
+trunk](https://github.com/tensorflow/mlir).  There are some major features that
+are pending upstream integration (memref_shape_cast op, alloca op, scalar
+replacement, and support for a few packing options), but they will be available
+at https://github.com/bondhugula/mlir.
+
+Software versions and setup: Fedora Linux 30 running 5.3.6-200.fc30.x86_64, MLIR
+used with LLVM git 52bfa73af84 from Oct 2019, BLIS version 0.6.0-40-gf4f5170f,
+MKL version 2019.4.243, and OpenBLAS 0.3.7-1.fc30.x86_64. *cpupower* was used to
+set the frequency governor to 'performance'.
 
 ## References
 
-The following works provide additional background necessary, and these were
-cited inline.
-
+The following works provide additional background, and these were cited inline.
 
 * [Anatomy of high-performance matrix
 multiplication](https://dl.acm.org/citation.cfm?id=1356053), Goto and van de
@@ -1301,20 +1366,20 @@ Functionality](https://dl.acm.org/citation.cfm?id=2764454) Field G. Van Zee,
 Robert A. van de Geijn, ACM TOMS 2015.
 
 * [Analytical Modeling Is Enough for High-Performance BLIS](
-  https://dl.acm.org/citation.cfm?id=2925987), Low et al., ACM TOMS 2018.
+  https://dl.acm.org/citation.cfm?id=2925987), Low et al., ACM TOMS 2016.
 
 * [LAFF - On Programming for High
 Performance](http://www.cs.utexas.edu/users/flame/laff/pfhp/), notes from a
-course by R van de Geijn, Margaret Myers, Devangi Parikh, 2019.
+course by Robert van de Geijn, Margaret Myers, Devangi Parikh, 2019.
 
 * [High-Performance Generalized Tensor Operations: A Compiler-Oriented
 Approach](https://doi.org/10.1145/3235029), *R. Gareev, T. Grosser, and M.
 Kruse, ACM TACO 2018*.  This is the only approach I am aware of that tried the
 BLIS approach from inside a compiler (Polly/LLVM here). From the results, they
-appeared to reach 70% of MKL/OpenBLAS performance.  With a low-level IR such as
-LLVM and with Polly and LLVM infrastructure decoupled to some extent, one's
-expressive power and mileage varies.
+appeared to reach about 70% of MKL/OpenBLAS performance.  With a low-level IR
+such as LLVM and with Polly and LLVM infrastructure decoupled to some extent,
+one's expressive power and mileage varies.
 
 * [An Introduction to the Polyhedral
 Framework](https://www.csa.iisc.ac.in/~udayb/slides/uday-polyhedral-opt.pdf)
-(slides), Uday Bondhugula
+(slides), Uday Bondhugula.
