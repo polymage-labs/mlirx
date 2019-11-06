@@ -138,7 +138,7 @@ picture for now.]
 
 ## Using MLIR
 
-There is currently no C/C++ or a frontend that emits MLIR. The way to get
+There is currently no C/C++ or another frontend that emits MLIR. The way to get
 something in MLIR run on CPUs is through *mlir-cpu-runner* which can take MLIR
 as input and JIT compile and execute it.  As part of this process, optimized
 MLIR is converted to LLVM IR, which then goes through its optimization pipeline
@@ -206,13 +206,12 @@ is a reference to the in-memory representation of a tensor value in MLIR.
 Depending on its layout map, it could refer to a potentially non-contiguous
 sub-region of the tensor's buffer. All memrefs in the above snippet have the
 default identity layout map (d0, d1) -> (d0, d1), which corresponds to a row
-major layout of in contiguous memory.  2088 x 2048 is the shape of memref where
-each of its element is an f64 (double). There is other information such as an
-affine layout map (a mapping for its logical coordinate space to physical
-memory) that is elided when these are an identity map (the default). We will
-look at an example of this a little
-[later](#a-quick-detour-into-affine-map-layouts). The only way to access the
-elements of a memref is through load and store operations.  .
+major layout in memory.  2088 x 2048 is the shape of memref where each of its
+element is an f64 (double). There is other information such as an affine layout
+map (a mapping for its logical coordinate space to physical memory) that is
+elided when these are an identity map (the default). We will look at an example
+of this a little [later](#a-quick-detour-into-affine-map-layouts). The only way
+to access the elements of a memref is through load and store operations.
 
 ### A high-level domain-specific op that can expand
 
