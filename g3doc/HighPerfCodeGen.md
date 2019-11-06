@@ -160,7 +160,7 @@ func @matmul(%A: memref<2048x2048xf64>, %B: memref<2048x2048xf64>, %C:
         %ci = affine.load %C[%arg3, %arg4] : memref<2048x2048xf64>
         %p = mulf %a, %b : f64
         %co = addf %ci, %p : f64
-        affine.store %4, %C[%arg3, %arg4] : memref<2048x2048xf64>
+        affine.store %co, %C[%arg3, %arg4] : memref<2048x2048xf64>
       }
     }
   }

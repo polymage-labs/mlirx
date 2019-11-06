@@ -298,7 +298,7 @@ static ParseResult parseVariableDecorations(OpAsmParser &parser,
   }
 
   // Parse other attributes
-  if (parser.parseOptionalAttributeDict(state.attributes))
+  if (parser.parseOptionalAttrDict(state.attributes))
     return failure();
 
   return success();
@@ -383,7 +383,7 @@ static inline bool isMergeBlock(Block &block) {
 
 // Parses an op that has no inputs and no outputs.
 static ParseResult parseNoIOOp(OpAsmParser &parser, OperationState &state) {
-  if (parser.parseOptionalAttributeDict(state.attributes))
+  if (parser.parseOptionalAttrDict(state.attributes))
     return failure();
   return success();
 }
@@ -1363,8 +1363,8 @@ static ParseResult parseLoadOp(OpAsmParser &parser, OperationState &state) {
   if (parseEnumAttribute(storageClass, parser) ||
       parser.parseOperand(ptrInfo) ||
       parseMemoryAccessAttributes(parser, state) ||
-      parser.parseOptionalAttributeDict(state.attributes) ||
-      parser.parseColon() || parser.parseType(elementType)) {
+      parser.parseOptionalAttrDict(state.attributes) || parser.parseColon() ||
+      parser.parseType(elementType)) {
     return failure();
   }
 
@@ -1628,10 +1628,8 @@ static ParseResult parseModuleOp(OpAsmParser &parser, OperationState &state) {
   if (parser.parseRegion(*body, /*arguments=*/{}, /*argTypes=*/{}))
     return failure();
 
-  if (succeeded(parser.parseOptionalKeyword("attributes"))) {
-    if (parser.parseOptionalAttributeDict(state.attributes))
-      return failure();
-  }
+  if (parser.parseOptionalAttrDictWithKeyword(state.attributes))
+    return failure();
 
   spirv::ModuleOp::ensureTerminator(*body, parser.getBuilder(), state.location);
   return success();
@@ -1657,19 +1655,7 @@ static void print(spirv::ModuleOp moduleOp, OpAsmPrinter &printer) {
 
   printer.printRegion(op->getRegion(0), /*printEntryBlockArgs=*/false,
                       /*printBlockTerminators=*/false);
-
-  bool printAttrDict =
-      elidedAttrs.size() != 2 ||
-      llvm::any_of(op->getAttrs(), [&addressingModelAttrName,
-                                    &memoryModelAttrName](NamedAttribute attr) {
-        return attr.first != addressingModelAttrName &&
-               attr.first != memoryModelAttrName;
-      });
-
-  if (printAttrDict) {
-    printer << " attributes";
-    printer.printOptionalAttrDict(op->getAttrs(), elidedAttrs);
-  }
+  printer.printOptionalAttrDictWithKeyword(op->getAttrs(), elidedAttrs);
 }
 
 static LogicalResult verify(spirv::ModuleOp moduleOp) {

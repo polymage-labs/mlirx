@@ -24,6 +24,14 @@ llvm.mlir.global constant @string_const("foobar") : !llvm<"[6 x i8]">
 // CHECK: @int_global_undef = internal global i64 undef
 llvm.mlir.global @int_global_undef() : !llvm.i64
 
+// CHECK: @int_gep = internal constant i32* getelementptr (i32, i32* @i32_global, i32 2)
+llvm.mlir.global constant @int_gep() : !llvm<"i32*"> {
+  %addr = llvm.mlir.addressof @i32_global : !llvm<"i32*">
+  %_c0 = llvm.mlir.constant(2: i32) :!llvm.i32
+  %gepinit = llvm.getelementptr %addr[%_c0] : (!llvm<"i32*">, !llvm.i32) -> !llvm<"i32*">
+  llvm.return %gepinit : !llvm<"i32*">
+}
+
 //
 // Declarations of the allocation functions to be linked against.
 //
@@ -802,6 +810,9 @@ llvm.func @ops(%arg0: !llvm.float, %arg1: !llvm.float, %arg2: !llvm.i32, %arg3: 
   %17 = llvm.lshr %arg2, %arg3 : !llvm.i32
 // CHECK-NEXT: %22 = ashr i32 %2, %3
   %18 = llvm.ashr %arg2, %arg3 : !llvm.i32
+
+// CHECK-NEXT: fneg float %0
+  %19 = llvm.fneg %arg0 : !llvm.float
 
   llvm.return %10 : !llvm<"{ float, i32 }">
 }
