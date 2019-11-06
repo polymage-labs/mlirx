@@ -186,8 +186,6 @@ func @main() {
 func @print_memref_2d_f64(memref<2048x2048xf64>)
 ```
 
-### Affine Ops
-
 [affine.for](https://github.com/tensorflow/mlir/blob/master/g3doc/Dialects/Affine.md#affinefor-operation)
 and
 [affine.load/store](https://github.com/tensorflow/mlir/blob/master/include/mlir/Dialect/AffineOps/AffineOps.h#L398)
