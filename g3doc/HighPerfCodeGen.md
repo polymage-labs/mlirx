@@ -74,7 +74,7 @@ Let's see what current compilers do if this is written as a naive nest in C.
 These results can be reproduced with the setup in
 [Pluto](https://github.com/bondhugula/pluto) from under examples/matmul/.
 
-```
+```shell
 ₹ clang -v
 clang version 8.0.0 (Fedora 8.0.0-3.fc30)
 Target: x86_64-unknown-linux-gnu
@@ -101,7 +101,7 @@ We'll get to that shortly, but while on this let's also see what a polyhedral
 tool ([Pluto](https://github.com/bondhugula/pluto)), which is a source to source
 translator, does on this. The below run shows it's at about 25% of the machine
 peak, which is better but also pretty unsatisfying.
-```
+```shell
 $ make tiled
 ./tiled
 0.889177s
@@ -115,7 +115,7 @@ setup in
 [Pluto](https://github.com/bondhugula/pluto/tree/master/examples/matmul) allows
 experimenting with OpenBLAS, BLIS, or MKL quickly.
 
-```
+```shell
 ₹ make mkl blis openblas
 
 ₹ ./blis
@@ -234,7 +234,7 @@ purpose of this tutorial, we will create a hop.matmul op.
 An operation in MLIR typically has inputs, results, and [attributes](https://github.com/tensorflow/mlir/blob/master/g3doc/LangRef.md#attributes) (ones
 with regions have region arguments as well).
 
-```
+```mlir
 "hop.matmul"(%A, %B, %C) {some_attr = 96, another_attr = 4}
        : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2048x2048xf64>)
 ```
@@ -257,7 +257,7 @@ expand out hop.matmul into the naive 3-d loop nest shown further above. Let's
 just execute this with MLIR without any optimization to see where we are
 starting our journey from.
 
-```
+```shell
 $ mlir-opt -hopt -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.015995s
 0.558177 GFLOPS
@@ -349,7 +349,7 @@ ISL, and convert the ISL AST back to MLIR. We will now use M_C, K_C, M_R, N_R as
 [attributes](https://github.com/tensorflow/mlir/blob/master/g3doc/LangRef.md#attributes)
 on the hop.matmul op.
 
-```
+```mlir
 "hop.matmul"(%A, %B, %C) { M_C = 64 : i32, K_C = 256 : i32, M_R = 4 : i32, N_R = 8 : i32}
   : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2048x2048xf64>) -> (memref<2048x2048xf64>)
 ```
@@ -362,7 +362,7 @@ dimension).
 Now, with the schedule that performs the specific tiling used by BLIS, we get
 this tiled loop nest:
 
-```
+```mlir
 affine.for %arg3 = 0 to 8 {
   affine.for %arg4 = 0 to 32 {
     affine.for %arg5 = 0 to 256 {
@@ -388,7 +388,7 @@ affine.for %arg3 = 0 to 8 {
 Note that the invariant load on %A has been hoisted. When we execute this, we
 get:
 
-```
+```mlir
 # With tiling
 $ mlir-opt -hopt -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.0443082s
@@ -441,7 +441,7 @@ to place copies at the right depths.  For the purpose of this tutorial, we
 enabled this under the -hopt-copy option.  With -hopt-copy, now the nest looks
 like:
 
-```
+```mlir
 affine.for %arg3 = 0 to 8 {
   affine.for %arg4 = 0 to 32 {
     %0 = alloc() {alignment = 32 : i32} : memref<64x256xf64>
@@ -483,7 +483,7 @@ affine.for %arg3 = 0 to 8 {
 }
 ```
 
-```
+```shell
 $ mlir-opt -hopt -hopt-copy=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.116971s
 3.4348 GFLOPS
@@ -509,7 +509,7 @@ turning memref locations being reduced into scalars (single element memrefs) and
 hoisting them out, it also eliminates redundant loads, and hoists invariant
 loads out of loops.
 
-```
+```shell
 $ mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.11306s
 4.24429 GFLOPS
@@ -528,7 +528,7 @@ LLVM.  It's pretty straightforward to check this. Instead of looking at the pass
 output remarks, we'll just look at the generated assembly. The
 '-dump-object-file -object-filename' options of mlir-cpu-runner are useful for
 this purpose.
-```
+```shell
 $ mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so -dump-object-file -object-filename=hopt.o > /dev/null
 $ llvm-objdump -d hopt.o | less
     ...
@@ -605,7 +605,7 @@ The vectorization needed here is quite straightforward at a higher level, and is
 a simple loop vectorization along the j loop.  Here's how the vectorized MLIR
 looks like if we started with the naive matmul nest.
 
-```
+```mlir
 func @matmul_vector(%A: memref<2048x2048xf64>, %B: memref<2048x2048xf64>, %C: memref<2048x2048xf64>) -> memref<2048x2048xf64> {
   %0 = memref_shape_cast %B : memref<2048x2048xf64> to memref<2048x512xvector<4xf64>>
   %1 = memref_shape_cast %C : memref<2048x2048xf64> to memref<2048x512xvector<4xf64>>
@@ -641,7 +641,7 @@ some of the infra around it in MLIR is still being built.
 Let's rewind and see how the vectorized code performs without any
 optimizations, then step by step, with tiling, with packing, and with register
 tiling / unroll-and-jam.
-```
+```shell
 # Just vectorization
 Compilation time: 0.016561s
 2.0043 GFLOPS
@@ -653,7 +653,7 @@ Compilation time: 0.0209861s
 It's well known that simply vectorizing without worrying about memory bandwidth
 gets us nowhere. We've now broken that barrier, and can now go further here.
 
-```
+```shell
 # Vectorization, tiling, and packing/copying
 $ mlir-opt -hopt -hopt-copy=true -lower-to-llvm hopt.mlir   | mlir-cpu-runner -O3 -e main -entry-point-result=void -reps=5  -shared-libs=lib/libmlir_runner_utils.so,/usr/local/lib/libblis.so  > /dev/null
 Compilation time: 0.0409529s
@@ -677,7 +677,7 @@ Let's see how the code looks like right after vectorization, tiling, copying,
 and unroll-and-jam (we will disable the K_C loop unroll, i.e., set K_U = 1 to
 make it easier to read; the unroll-jamming of i, j is still shown).
 
-```
+```mlir
 affine.for %arg3 = 0 to 8 {
   affine.for %arg4 = 0 to 33 {
     %2 = alloc() {alignment = 32 : i32} : memref<64x256xf64>
@@ -801,7 +801,7 @@ selection, scheduling, and register allocation.  Note that we've got here with
 the following values of M_C, K_C, M_R, N_R through hop.matmul as indicated
 below:
 
-```
+```mlir
 "hop.matmul"(%A, %B, %C) {
     M_C = 64 : i32, K_C = 256 : i32, M_R = 4, N_R = 8 : i32, K_U = 4 : i32
 } : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2088x2048xf64>) -> (memref<2088x2048xf64>)
@@ -817,7 +817,7 @@ map](https://github.com/tensorflow/mlir/blob/master/g3doc/LangRef.md#memref-type
 works. A memref type has three pieces of information: its shape, a affine
 layout map, and a memory space.
 
-```
+```mlir
 memref<64x256xf32, (d0, d1) -> (d0, d1), 0>
 ```
 
@@ -853,7 +853,7 @@ row-major for memref<64x256xf64>, and MLIR's affine layout maps make it
 convenient to express the desired layout here in a compact and powerful way. If
 we simply change the memref type to:
 
-```
+```mlir
 memref<64x256xf64, (d0, d1) -> (d0 floordiv M_R, d1, d0 mod M_R)>
 ```
 it yields the desired layout. The rest of the IR does not need a single
@@ -862,7 +862,7 @@ be mapped to (d0 flooridv M_R, d1, d0 mod M_R) in a physical (contiguous) buffer
 of size 16x256x4.  When [mlir::normalizeMemRef](https://github.com/tensorflow/mlir/blob/331c663bd2735699267abcc850897aeaea8433eb/include/mlir/Transforms/Utils.h#L89) runs, it will turn this memref
 into:
 
-```
+```mlir
 memref<16x256x4>
 ```
 And an access Abuf[%i, %j] is remapped to Abuf[%i floordiv 4, %j, %i mod 4].
@@ -871,19 +871,19 @@ performed -- stripmine and interchange -- but on the data space.
 
 As another example, here's a memref that accesses a non-contiguous sub-space of
 its underlying buffer.
-```
+```mlir
 memref<64x256xf64, (d0, d1) -> (d0, d1 floordiv 6, d1 mod 6)>
 ```
 Note that we'd have a "padding" worth 2 elements (256 % 6) at the end of each
 row that can never be accessed via this memref while staying in bounds. Another
 way to write this is:
-```
+```mlir
 memref<64x256xf64, (d0, d1) -> (d0 * 258 + d1)
 ```
 
 A memref with access strides say 128, 2 (for major, minor resp.) in a larger
 underlying buffer can be expressed for example as:
-```
+```mlir
 memref<126x100xf32, (d0, d1) -> (d0 * 128 + d1 * 2).
 ```
 
@@ -911,7 +911,7 @@ K_C, M_R, and N_R for better utilization of registers and primarily L2 cache
 capacity as far %A's buffer goes. We'll set M_R to 3 and N_R to 16 since this 
 uses 12 vector registers for %C instead of the under utilization of 8 earlier.
 
-```
+```mlir
 "hop.matmul"(%A, %B, %C) {
     M_C = 180 : i32, K_C = 480 : i32, M_R = 3, N_R = 16 : i32, K_U = 4 : i32
 } : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2088x2048xf64>) -> (memref<2088x2048xf64>)
@@ -922,7 +922,7 @@ registers for the output values. The BLIS provided kernels for Haswell otherwise
 include 6\*8, 8\*6, 4\*12, 12\*4 -- they too use (2\*6 =) 12 registers, but
 these options differ in how much register reuse is relatively exploited along
 the two dimensions and how big the L1 resident buffer for the RHS is. 
-```
+```shell
 # M_C = 180 : i32, K_C = 480 : i32, M_R = 3, N_R = 16 : i32, K_U = 4 : i32
 $ mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=3 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.039474s
@@ -935,7 +935,7 @@ opportunity to explore more than what's possible with a fixed set of manually
 pre-optimized kernels. This is all under the assumption that the compiler
 generated code is competitive or could be made competitive.
 
-```
+```shell
 # Let's see the impact of just the M_R, N_R values.
 # M_C = 72 : i32, K_C = 256 : i32, M_R = 3, N_R = 16 : i32, K_U = 4 : i32
 $ mlir-opt -hopt  -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=3 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
@@ -999,7 +999,7 @@ registers (no spilling). There are aligned loads with high reuse at regular
 intervals for the LHS and RHS. The LHS is being broadcast/splat (the
 vbroadcastsd) and the RHS is being moved in via aligned vector loads.
 
-```
+```shell
 # Let's look at the benefit of packing in isolation on the best code we have:
 % mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=3 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.039474s
@@ -1047,7 +1047,7 @@ On this note, let's look at what happens if we disabled MLIR's scalar
 replacement but enabled unroll-and-jam, sort of leaving it to LLVM to perform
 the replacement.
 
-```
+```shell
 $ mlir-opt -hopt -hopt-scalrep=false -lower-to-llvm hopt.mlir -lower-to-llvm | mlir-cpu-runner -O3 -e main -entry-point-result=void -reps=5 -shared-libs=/home/uday/llvm-project/build.release/lib/libmlir_runner_utils.so,/usr/local/lib/libblis.so > /dev/null
 Compilation time: 0.038455s
 10.7969 GFLOPS
@@ -1108,7 +1108,7 @@ layouts work](#a-quick-detour-into-affine-map-layouts).
 Let's look at the structure of MLIR here with tiling and packing, but without
 vectorization or any unroll-jamming enabled since the inner portion is going to
 be swapped out.
-```
+```mlir
 affine.for %arg1 = 0 to 4 {
   affine.for %arg2 = 0 to 12 {
     %9 = alloc() : memref<29x512x6xf64>
@@ -1156,7 +1156,7 @@ tutorial, we developed a -hopt-blis pass option that actually maps the right
 part to the BLIS micro-kernel.  For a 2088x2048 matrix, this is
 the generated IR:
 
-```
+```mlir
 affine.for %arg1 = 0 to 4 {
   affine.for %arg2 = 0 to 12 {
     %9 = alloc() : memref<29x512x6xf64>
@@ -1195,7 +1195,7 @@ since the loads and stores on vector types will have the vector size as the
 default ABI alignment, leading to aligned load/stores during LLVM code
 generation; so the alloc's need to be aligned to the vector size boundaries.
 
-```
+```shell
 # MLIR with BLIS micro-kernel: M_R = 6, N_R = 8
 $ mlir-opt -hopt -hopt-blis -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=../../../build/lib/libmlir_runner_utils.so,/usr/local/lib/libblis.so -dump-object-file -object-filename=hopt.o > /dev/null
 Compilation time: 0.0281591s
@@ -1266,7 +1266,7 @@ elements can be held in a vector register (8 x f32 instead of 4 x f64). We would
 thus still be using 3x4 = 12 vector registers for C. In addition, we will also
 double M_C to 348 for the same reason. We thus use this op to generate SGEMM.
 
-```
+```mlir
 "hop.matmul"(%A, %B, %C) {
     M_C = 348 : i32, K_C = 512 : i32, M_R = 3, N_R = 32 : i32, K_U = 4 : i32
 } : (memref<2048x2048xf32>, memref<2048x2048xf32>, memref<2048x2048xf32>) -> (memref<2048x2048xf32>)
@@ -1290,7 +1290,7 @@ with these along with a bunch of other things.
 
 In summary, we have been able to generate all code starting from just this op:
 
-```
+```mlir
 "hop.matmul"(%A, %B, %C) {
     M_C = 180 : i32, K_C = 480 : i32, M_R = 3, N_R = 16 : i32, K_U = 4 : i32
 } : (memref<2048x2048xf64>, memref<2048x2048xf64>, memref<2048x2048xf64>) -> (memref<2048x2048xf64>)
