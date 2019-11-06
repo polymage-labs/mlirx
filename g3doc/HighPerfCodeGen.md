@@ -148,7 +148,7 @@ to generate target code, all of this through *mlir-cpu-runner*.
 Here is how a simple canonical matrix-matrix multiplication looks like in MLIR
 -- the structure is close to its form in C.
 
-```
+```mlir
 // C += A * B.
 func @matmul(%A: memref<2048x2048xf64>, %B: memref<2048x2048xf64>, %C:
   memref<2048x2048xf64>) -> memref<2048x2048xf64> {
