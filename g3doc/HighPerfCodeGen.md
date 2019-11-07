@@ -1409,9 +1409,10 @@ are pending upstream integration (memref_shape_cast op, alloca op, scalar
 replacement, and support for a few packing options), but they will be available
 at https://github.com/bondhugula/mlir.
 
-Software versions and setup: Fedora Linux 30 running 5.3.6-200.fc30.x86_64, MLIR
-used with LLVM git 52bfa73af84 from Oct 2019, BLIS version 0.6.0-40-gf4f5170f,
-MKL version 2019.4.243, and OpenBLAS 0.3.7-1.fc30.x86_64. *cpupower* was used to
+Software versions and setup: Fedora Linux 30 running kernel
+5.3.6-200.fc30.x86_64, MLIR used with LLVM git 52bfa73af84 from Oct 2019, BLIS
+version 0.6.0-40-gf4f5170f, MKL version 2019.4.243, OpenBLAS
+0.3.7-1.fc30.x86_64, and Pluto git 0.11.4-903-g7f21ab57. *cpupower* was used to
 set the frequency governor to 'performance'.
 
 ## References
