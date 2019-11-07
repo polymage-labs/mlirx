@@ -708,7 +708,7 @@ tiling, with packing, and with register tiling / unroll-and-jam.
 ```shell
 # Just vectorization
 Compilation time: 0.016561s
-2.0043 GFLOPS
+1.53043 GFLOPS
 # Vectorization with tiling
 Compilation time: 0.0209861s
 7.05307 GFLOPS
