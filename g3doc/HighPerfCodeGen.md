@@ -357,17 +357,21 @@ earlier. This is functionally equivalent to using the following schedule with
 HOP and fully unrolling the last two dimensions, d1, d0, which will be of trip
 counts 8 and 4 respectively):
 
+```
 "hop.matmul"(%A, %B, %C) {
     schedule = (d0, d1, d2) -> (d2 floordiv 256, d0 floordiv 64, d1 floordiv 8, d0 floordiv 4, d2, d1, d0) 
   } : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2088x2048xf64>)
+```
 
+In order to just look at cache tiling, we will just use the following schedule
+(drop the tiling for registers):
 
-We'll add one more parameter to the list,  K_U, which will be the
-unroll factor for the K_C loop (intra-tile loop corresponding to k reduction
-dimension).
-
-Now, with the schedule that performs the specific tiling used by BLIS, we get
-this tiled loop nest:
+```
+"hop.matmul"(%A, %B, %C) {
+    schedule = (d0, d1, d2) -> (d2 floordiv 256, d0 floordiv 64, d1, d0, d2)
+  } : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2088x2048xf64>)
+```
+Now, with this specific tiling, we get this tiled loop nest:
 
 ```mlir
 ...
@@ -378,20 +382,21 @@ func @matmul(%A: memref<2088x2048xf64>, %B: memref<2048x2048xf64>, %C: memref<20
   %c0 = constant 0 : index
   affine.for %arg3 = 0 to 8 {
     affine.for %arg4 = 0 to 33 {
-      affine.for %arg5 = 0 to 256 {
-        affine.for %arg6 = #map8(%arg4) to #map9(%arg4) {
+      affine.for %arg5 = 0 to 2048 {
+        affine.for %arg6 = #map7(%arg4) to min #map8(%arg4) {
+          %0 = alloca() : memref<1xf64>
+          %1 = affine.load %C[%arg6, %arg5] : memref<2088x2048xf64>
+          affine.store %1, %0[%c0] : memref<1xf64>
           affine.for %arg7 = 0 to 256 {
-            affine.for %arg8 = 0 to 8 {
-              %0 = affine.load %B[%arg3 * 256 + %arg7, %arg5 * 8 + %arg8] : memref<2048x2048xf64>
-              affine.for %arg9 = 0 to 4 {
-                %1 = affine.load %A[%arg6 * 4 + %arg9, %arg3 * 256 + %arg7] : memref<2088x2048xf64>
-                %2 = affine.load %C[%arg6 * 4 + %arg9, %arg5 * 8 + %arg8] : memref<2088x2048xf64>
-                %3 = mulf %1, %0 : f64
-                %4 = addf %2, %3 : f64
-                affine.store %4, %C[%arg6 * 4 + %arg9, %arg5 * 8 + %arg8] : memref<2088x2048xf64>
-              } {poly_codegen_name = "c6"}
-            } {poly_codegen_name = "c5"}
+            %3 = affine.load %A[%arg6, %arg3 * 256 + %arg7] : memref<2088x2048xf64>
+            %4 = affine.load %B[%arg3 * 256 + %arg7, %arg5] : memref<2048x2048xf64>
+            %5 = affine.load %0[0] : memref<1xf64>
+            %6 = mulf %3, %4 : f64
+            %7 = addf %5, %6 : f64
+            affine.store %7, %0[0] : memref<1xf64>
           } {poly_codegen_name = "c4"}
+          %2 = affine.load %0[%c0] : memref<1xf64>
+          affine.store %2, %C[%arg6, %arg5] : memref<2088x2048xf64>
         } {poly_codegen_name = "c3"}
       } {poly_codegen_name = "c2"}
     } {poly_codegen_name = "c1"}
@@ -407,10 +412,10 @@ we get:
 # With tiling
 $ mlir-opt -hopt -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.0443082s
-2.17698 GFLOPS
+1.6012 GFLOPS
 ```
 
-This is roughly a 4x improvement in performance, but still no where close to the
+This is nearly a 3x improvement in performance, but still no where close to the
 machine peak or the performance of MKL, OpenBLAS or BLIS!
 
 ### Explicit Copying or Packing
@@ -500,8 +505,8 @@ affine.for %arg3 = 0 to 8 {
 
 ```shell
 $ mlir-opt -hopt -hopt-copy=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
-Compilation time: 0.116971s
-3.4348 GFLOPS
+Compilation time: 0.0506358s
+2.38624 GFLOPS
 ```
 
 This is nearly a 1.5x improvement in performance, but in absolute terms still
@@ -516,28 +521,68 @@ performed. We will look at an example a little later.
 
 ### Unroll and Jam
 
-Note that our schedule already performed tiling so that an unroll-and-jam of the
-innermost two loops by N_R and M_R respectively could be achieved, but we
-actually didn't enable that yet. We use the option -hopt-unroll to turn this on
-and off. We also run scalar replacement in MLIR post unroll-and-jam. While at
-this, we also use K_U = 4 to unroll the k loop (which will end up as the
-innermost loop post all register tiling). Besides turning memref locations being
-reduced into scalars (single element memrefs) and hoisting them out, it also
-eliminates redundant loads, and hoists invariant loads out of loops.
+We will now use the complete schedule that has the M_R and N_R register tiling
+so that an unroll-and-jam of the innermost two loops by N_R and M_R
+respectively could be achieved, but we actually didn't enable that yet. We use
+the option -hopt-unroll to turn this on and off. We also run scalar replacement
+in MLIR post unroll-and-jam. Besides turning memref locations being reduced
+into scalars (single element memrefs) and hoisting them out, it also eliminates
+redundant loads, and hoists invariant loads out of loops.
 
-```shell
-$ mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
-Compilation time: 0.11306s
-4.24429 GFLOPS
+While at unroll-and-jam, we'll also add one more parameter to the list,  K_U,
+which will be the unroll factor for the K_C loop (intra-tile loop corresponding
+to k reduction dimension). We use K_U = 4 to unroll the k loop (which will end
+up as the innermost loop post all register tiling). So, we have:
+
+```mlir
+"hop.matmul"(%A, %B, %C) { M_C = 64 : i32, K_C = 256 : i32, M_R = 4 : i32, N_R = 8 : i32, K_U = 4 : i32}
+  : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2048x2048xf64>)
 ```
 
-This is just a further improvement of 30%. All of these improvements are
-significant from where we started but they are all finally just too little on an
-absolute scale even after having reproduced a part of the OpenBLAS/BLIS recipe
-(we are still at about 6% of the peak!). Clearly, there is something orthogonal
-that all of this is missing. It looks like we completely missed vectorization!
-The highly tuned library kernels that we've set as a target often used a careful
-selection and schedule of vector instructions in inline assembly.
+```shell
+# With tiling, packing, and unroll-and-jam/unroll.
+$ mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
+Compilation time: 0.11306s
+23.2737 GFLOPS
+```
+A code is only as fast as its weakest link. While the cache tiling really
+optimized reuse for the LHS and RHS, the strategy used by OpenBLAS and BLIS
+exploits reuse for the output matrix only in registers (not in L1 nor L2).  As
+such, without unroll-and-jam aka register tiling, brakes had been applied.  So,
+this last step opened the floodgates here yielding a 10x improvement and
+getting us to 23 GFLOPS.
+
+A code is only as fast as its weakest link. While the cache tiling really
+optimized reuse for the LHS and RHS, the strategy used by OpenBLAS and BLIS
+exploits reuse for the output matrix only in registers (not in L1 nor L2).  As
+such, without unroll-and-jam aka register tiling, brakes had been applied.  So,
+this last step opened the floodgates here yielding a 10x improvement and
+getting us to 23 GFLOPS.
+
+Let us go back a step and check what would happen if we disabled packing while
+performing unroll-and-jam.
+```shell
+# With tiling, unroll-and-jam/unroll, but no packing
+$ mlir-opt -hopt -hopt-copy=false -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
+Compilation time: 0.0568249s
+11.5595 GFLOPS
+```
+We lose over 2x of the performance if we don't perform packing here. And if 
+we hadn't performed the innermost loop unrolling (i.e., set K_U = 1), we get:
+```shell
+# With tiling, packing, and unroll-and-jam/unroll, but K_U = 1.
+$ mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
+Compilation time: 0.0881901s
+23.5949 GFLOPS
+```
+
+All of these improvements are significant from where we started but they are
+all finally not enough on an absolute scale even after having reproduced a
+part of the OpenBLAS/BLIS recipe (we are still at about 34% of the peak!).
+Clearly, there is something orthogonal that all of this is missing. It looks
+like we completely missed vectorization! The highly tuned library kernels that
+we've set as a target often used a careful selection and schedule of vector
+instructions in inline assembly.
 
 Let's see whether our code is even being vectorized reasonably under the hood by
 LLVM.  It's pretty straightforward to check this. Instead of looking at the pass
@@ -687,13 +732,9 @@ Compilation time: 0.0383081s
 49.8336 GFLOPS
 ```
 
-The code is only as fast as its weakest link. While the cache tiling really
-optimized reuse for the LHS and RHS, the strategy used by OpenBLAS and BLIS
-exploits reuse for the output matrix only in registers (not in L1 nor L2).  As
-such, without unroll-and-jam aka register tiling, brakes had been applied.  So,
-the last step opened the floodgates here yielding a 4.5x improvement and
-getting us to 49 GFLOPS -- only 23% away from BLIS and about 27% away from MKL
-or OpenBLAS.
+As observed earlier, once again, the last step opened the floodgates here
+yielding a 4.5x improvement and getting us to 49 GFLOPS -- only 23% away from
+BLIS and about 27% away from MKL or OpenBLAS.
 
 Let's see how the MLIR looks like right after vectorization, tiling, copying,
 and unroll-and-jam (we will disable the K_C loop unroll, i.e., set K_U = 1 to
@@ -1244,8 +1285,9 @@ N_R = 8, which we wanted for 1:1 comparison shows a performance drop of 35%.
 The 6x8 should have still met the register budget and led to no spilling, but it
 looks like it made the LLVM backend spill.  The assembly dump confirms this
 (notice the vmovupd stores in between the FMAs, which didn't exist earlier).
-Also, the sub-optimal sizes of M_R = 4, N_R = 8 provides better performance than
-the spilled ones.
+Also, the intuitively sub-optimal sizes of M_R = 4, N_R = 8 provide better
+performance than the tighter M_R = 6, M_R = 8, indicating the cliff associated
+with spilling.
 
 ```
 c4 62 95 b8 f0  vfmadd231pd     %ymm0, %ymm13, %ymm14
@@ -1343,7 +1385,7 @@ works in MLIR in conjunction with packing and other transformations presented
 here. For eg. the best M_C size we used (180) does not divide 2048.
 
 3. We've primarily used the polyhedral passes in MLIR here since the generated
-code at each stage always stays fine.  The [Linalg
+code at each stage always stays affine.  The [Linalg
 dialect](https://github.com/tensorflow/mlir/blob/master/test/Transforms/memref-normalize.mlir)
 does not have the utilities to automatically analyze and generate packing code
 for example.  Nearly all passes and utilities used here such as unroll-and-jam,
@@ -1351,18 +1393,20 @@ for example.  Nearly all passes and utilities used here such as unroll-and-jam,
 
 4. *What about all the other options around input matrices such as strides and
 transpose?*  These all are cleanly expressed via memrefs' [affine layout map
-discussed above](#a-quick-detour-into-affine-map-layouts). We also haven't
-considered the \alpha and \beta arguments for DGEMM (it's really C =
-\alpha\*A\*B + \beta\*C) - we've actually assumed \alpha = \beta = 1. In fact,
-MLIR's pattern rewrites can fold and optimize away code/nests when \alpha or
-\beta are 0 or 1.
+discussed above](#a-quick-detour-into-affine-map-layouts). We haven't considered
+the \alpha and \beta arguments for DGEMM though (it's really C = \alpha\*A\*B +
+\beta\*C) - we've actually assumed \alpha = \beta = 1. In fact, MLIR's pattern
+rewrites can fold and optimize away code/nests when \alpha or \beta are 0 or 1.
+Overall, these aspects are something to keep in mind before making a
+complete/exact comparison.
 
-5. *How do we determine the good parameter values?* The work by [Low et al. ACM
-TOMS 2016](https://dl.acm.org/citation.cfm?id=2925987) is on analytical modeling
-to derive good parameter values. Besides such analytical modeling, there is a
-lot of room to play here depending on how powerful the generative infrastructure
-is, and to what extent we would like to generalize this approach beyond the
-domain considered here.
+5. *How do we determine good or the optimal parameter values?* The work by [Low
+et al.  ACM TOMS 2016](https://dl.acm.org/citation.cfm?id=2925987) is on
+analytical modeling to derive good parameter values (the derived formulae are
+pretty straightforward to just plug values from hardware resources into).
+Besides such analytical modeling, there is a lot of room to play here depending
+on how powerful the generative infrastructure is, and to what extent we would
+like to generalize this approach beyond the domain considered here.
 
 ## Reproducing these Results
 
