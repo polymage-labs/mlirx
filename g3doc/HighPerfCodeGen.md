@@ -234,7 +234,7 @@ with regions have region arguments as well).
 
 ```mlir
 "hop.matmul"(%A, %B, %C) {some_attr = 96, another_attr = 4}
-       : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2048x2048xf64>)
+       : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2088x2048xf64>)
 ```
 hop.matmul above is an operation that operates on three memrefs, %A, %B, and %C,
 which are the LHS, the RHS, and the output corresponding to a matrix-matrix
@@ -292,14 +292,14 @@ tiling and corresponding intra-tile loop orders used in the OpenBLAS/BLIS
 approach can be expressed as the following polyhedral schedule:
 
 ```
-(i, j, k) -> (j / N_C, k / K_C, i / M_C, j / N_R, i / M_R, k, j mod N_R, i mod M_R)
+(i, j, k) -> (j / N_C, k / K_C, i / M_C, j / N_R, i / M_R, k mod K_C, j mod N_R, i mod M_R)
 ```
 The innermost two loops after applying the above schedule are meant to be fully
 unrolled leading to an M_R x N_R loop body. Ignoring tiling for the L3 cache,
 this becomes:
 ```
-(i, j, k) -> (k / K_C, i / M_C, j / N_R, i / M_R, k, j mod N_R, i mod M_R)
-``` 
+(i, j, k) -> (k / K_C, i / M_C, j / N_R, i / M_R, k mod K_C, j mod N_R, i mod M_R)
+```
 
 The following from the BLIS works (source in caption) is a great illustration of
 its optimization strategy.
@@ -351,7 +351,7 @@ on the hop.matmul op.
 "hop.matmul"(%A, %B, %C) { M_C = 64 : i32, K_C = 256 : i32, M_R = 4 : i32, N_R = 8 : i32}
   : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2048x2048xf64>)
 ```
-We've used K_C = 256, M_C = 64, M_R = 8, N_R = 4 as a starting point: these can
+We've used K_C = 256, M_C = 64, M_R = 4, N_R = 8 as a starting point: these can
 be analyzed to be good values given the cache size constraints described
 earlier. This is functionally equivalent to using the following schedule with
 HOP and fully unrolling the last two dimensions, d1, d0, which will be of trip
@@ -359,7 +359,7 @@ counts 8 and 4 respectively):
 
 "hop.matmul"(%A, %B, %C) {
     schedule = (d0, d1, d2) -> (d2 floordiv 256, d0 floordiv 64, d1 floordiv 8, d0 floordiv 4, d2, d1, d0) 
-  } : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2048x2048xf64>)
+  } : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2088x2048xf64>)
 
 
 We'll add one more parameter to the list,  K_U, which will be the
@@ -370,30 +370,38 @@ Now, with the schedule that performs the specific tiling used by BLIS, we get
 this tiled loop nest:
 
 ```mlir
-affine.for %arg3 = 0 to 8 {
-  affine.for %arg4 = 0 to 32 {
-    affine.for %arg5 = 0 to 256 {
-      affine.for %arg6 = #map9(%arg4) to #map10(%arg4) {
-        affine.for %arg7 = #map7(%arg3) to #map8(%arg3) {
-          affine.for %arg8 = #map5(%arg5) to #map6(%arg5) {
-            %0 = affine.load %B[%arg7, %arg8] : memref<2048x2048xf64>
-            affine.for %arg9 = #map3(%arg6) to #map4(%arg6) {
-              %1 = affine.load %A[%arg9, %arg7] : memref<2048x2048xf64>
-              %2 = affine.load %C[%arg9, %arg8] : memref<2048x2048xf64>
-              %3 = mulf %1, %0 : f64
-              %4 = addf %2, %3 : f64
-              affine.store %4, %C[%arg9, %arg8] : memref<2048x2048xf64>
-            } {poly_codegen_name = "c6"}
-          } {poly_codegen_name = "c5"}
-        } {poly_codegen_name = "c4"}
-      } {poly_codegen_name = "c3"}
-    } {poly_codegen_name = "c2"}
-  } {poly_codegen_name = "c1"}
-} {poly_codegen_name = "c0"}
+...
+#map8 = (d0) -> (d0 * 16)
+#map9 = (d0) -> (522, d0 * 16 + 16)
+...
+func @matmul(%A: memref<2088x2048xf64>, %B: memref<2048x2048xf64>, %C: memref<2088x2048xf64>) {
+  %c0 = constant 0 : index
+  affine.for %arg3 = 0 to 8 {
+    affine.for %arg4 = 0 to 33 {
+      affine.for %arg5 = 0 to 256 {
+        affine.for %arg6 = #map8(%arg4) to #map9(%arg4) {
+          affine.for %arg7 = 0 to 256 {
+            affine.for %arg8 = 0 to 8 {
+              %0 = affine.load %B[%arg3 * 256 + %arg7, %arg5 * 8 + %arg8] : memref<2048x2048xf64>
+              affine.for %arg9 = 0 to 4 {
+                %1 = affine.load %A[%arg6 * 4 + %arg9, %arg3 * 256 + %arg7] : memref<2088x2048xf64>
+                %2 = affine.load %C[%arg6 * 4 + %arg9, %arg5 * 8 + %arg8] : memref<2088x2048xf64>
+                %3 = mulf %1, %0 : f64
+                %4 = addf %2, %3 : f64
+                affine.store %4, %C[%arg6 * 4 + %arg9, %arg5 * 8 + %arg8] : memref<2088x2048xf64>
+              } {poly_codegen_name = "c6"}
+            } {poly_codegen_name = "c5"}
+          } {poly_codegen_name = "c4"}
+        } {poly_codegen_name = "c3"}
+      } {poly_codegen_name = "c2"}
+    } {poly_codegen_name = "c1"}
+  } {poly_codegen_name = "c0"}
+  return
+}
 ```
 
-Note that the invariant load on %A has been hoisted. When we execute this, we
-get:
+Note that the invariant load on %B has been hoisted out. When we execute this,
+we get:
 
 ```mlir
 # With tiling
@@ -511,10 +519,11 @@ performed. We will look at an example a little later.
 Note that our schedule already performed tiling so that an unroll-and-jam of the
 innermost two loops by N_R and M_R respectively could be achieved, but we
 actually didn't enable that yet. We use the option -hopt-unroll to turn this on
-and off. We also run scalar replacement in MLIR post unroll-and-jam. Besides
-turning memref locations being reduced into scalars (single element memrefs) and
-hoisting them out, it also eliminates redundant loads, and hoists invariant
-loads out of loops.
+and off. We also run scalar replacement in MLIR post unroll-and-jam. While at
+this, we also use K_U = 4 to unroll the k loop (which will end up as the
+innermost loop post all register tiling). Besides turning memref locations being
+reduced into scalars (single element memrefs) and hoisting them out, it also
+eliminates redundant loads, and hoists invariant loads out of loops.
 
 ```shell
 $ mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
@@ -686,7 +695,7 @@ the last step opened the floodgates here yielding a 4.5x improvement and
 getting us to 49 GFLOPS -- only 23% away from BLIS and about 27% away from MKL
 or OpenBLAS.
 
-Let's see how the code looks like right after vectorization, tiling, copying,
+Let's see how the MLIR looks like right after vectorization, tiling, copying,
 and unroll-and-jam (we will disable the K_C loop unroll, i.e., set K_U = 1 to
 make it easier to read; the unroll-jamming of i, j is still shown).
 
@@ -801,17 +810,17 @@ affine.for %arg3 = 0 to 8 {
 } {poly_codegen_name = "c0"}
 ```
 
-The memref<1 x f64> types (single element memrefs) that we see below a result of
-the scalar replace pass (-affine-scalrep) that runs after the unroll-and-jam.
-We see eight of these summing up to 32 elements of the output matrix, and these
-are held in registers when the innermost loop (k) is iterating. LLVM's passes
-later turn these into virtual registers.
+The memref<1 x f64> values (single element memrefs) that we see below are a
+result of the scalar replacement pass (-affine-scalrep) that runs after the
+unroll-and-jam.  We see eight of these summing up to 32 elements of the output
+matrix, and these are held in registers when the innermost loop (k) is
+iterating. LLVM's passes later turn these into virtual registers.
 
 Both BLIS and OpenBLAS use inline assembly microkernels and other hand written
 components that are composed in a modular/reusable way. OTOH, we've been trying
 to generate all our code all the way down, including using LLVM's instruction
 selection, scheduling, and register allocation.  Note that we've got here with
-the following values of M_C, K_C, M_R, N_R through hop.matmul as indicated
+the following values of M_C, K_C, M_R, N_R, K_U through hop.matmul as indicated
 below:
 
 ```mlir
@@ -844,15 +853,15 @@ to each.  Whenever the layout map is identity, its printing is elided;
 similarly, in the case of memory space 0.
 
 Now, let's look at the memref corresponding to the buffer for the LHS matrix
-(%A), which of type memref<64x256xf64>.
+(%A), which is of type memref<64x256xf64>.
 
 ![](lhs-layout.png)
 
 *Figure: LHS buffer layout*
 
 This block is being multiplied with the RHS panel of type
-memref<256x2xvector<2xf64>>. The figure above shows how the elements of the A
-block get traversed, along columns of height M_R all the way up to K_C columns,
+memref<256x2xvector<2xf64>>. The figure above shows how the elements of A
+block get traversed: along columns of height M_R all the way up to K_C columns,
 and then turn around for the next panel, until one has processed all M_C/M_R
 panels.  Note that the elements aren't being accessed contiguously. But since
 the block of A is L2 cache resident and is just streamed through L1, we still
@@ -909,8 +918,8 @@ semantically correct code.
 
 For Part I of this tutorial, we'll see that this layout is only needed for an
 experiment later ([Outer MLIR + inner
-BLIS](map-to-blis-micro-kernel-outer-mlir-inner-blis) further below. We'll get
-back to adjusting parameters to go full throttle.
+BLIS](map-to-blis-micro-kernel-outer-mlir-inner-blis) further below. We'll now
+get back to adjusting parameters to go full throttle.
 
 ### Tweaking M_C, K_C, M_R, N_R to maximize reuse
 
@@ -919,10 +928,11 @@ attributes on the hop.matmul op. Note that although one can tune these
 parameters on BLIS, its ASM kernel has to be among those that shipped --- these
 are long hand-written / hand-unrolled
 ones. However, with MLIR we are in a position to also play around with the
-register tile sizes just as easily. Let's pick a different set of values of M_C, 
-K_C, M_R, and N_R for better utilization of registers and primarily L2 cache 
-capacity as far %A's buffer goes. We'll set M_R to 3 and N_R to 16 since this 
-uses 12 vector registers for %C instead of the under utilization of 8 earlier.
+register tile sizes just as easily. Let's pick a different set of values of
+M_C, K_C, M_R, and N_R for better utilization of registers and L2 cache
+capacity as far %A's buffer goes. We'll set M_R to 3 and N_R to 16 since this
+uses 12 vector registers for %C instead of the under utilization of 8 earlier
+(there are a total of 16 %ymm registers on x86-64).
 
 ```mlir
 "hop.matmul"(%A, %B, %C) {
@@ -934,7 +944,8 @@ When one chooses M_R = 3 and N_R = 16, it leads to 3 * 16 /4 = 12 256-bit vector
 registers for the output values. The BLIS provided kernels for Haswell otherwise
 include 6\*8, 8\*6, 4\*12, 12\*4 -- they too use (2\*6 =) 12 registers, but
 these options differ in how much register reuse is relatively exploited along
-the two dimensions and how big the L1 resident buffer for the RHS is. 
+the two dimensions and how big the L1 resident buffer for the RHS is. Let's 
+executre the M_R = 3, N_R = 16 configuration.
 ```shell
 # M_C = 180 : i32, K_C = 480 : i32, M_R = 3, N_R = 16 : i32, K_U = 4 : i32
 $ mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=3 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
@@ -950,7 +961,7 @@ generated code is competitive or could be made competitive.
 
 ```shell
 # Let's see the impact of just the M_R, N_R values.
-# M_C = 72 : i32, K_C = 256 : i32, M_R = 3, N_R = 16 : i32, K_U = 4 : i32
+# M_C = 72 : i32, K_C = 256 : i32, M_R = 4, N_R = 8 : i32, K_U = 4 : i32
 $ mlir-opt -hopt  -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=3 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.04356s
 49.7282 GFLOPS
