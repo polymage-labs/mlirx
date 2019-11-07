@@ -74,7 +74,7 @@ Let's see what current compilers do if this is written as a naive nest in C.
 These results can be reproduced with the setup in
 [Pluto](https://github.com/bondhugula/pluto) from under examples/matmul/. (We
 use -ffast-math along with -O3 to be fair given the other things we are going
-to compare soon.)
+to compare this with soon.)
 
 ```shell
 ₹ clang -v
@@ -874,7 +874,7 @@ works. A memref type has three pieces of information: its shape, a affine
 layout map, and a memory space.
 
 ```mlir
-memref<64x256xf32, (d0, d1) -> (d0, d1), 0>
+memref<64x256xf64, (d0, d1) -> (d0, d1), 0>
 ```
 
 This is a memref of shape 64x256, and with the identity map (d0, d1) -> (d0,
@@ -919,7 +919,7 @@ of size 16x256x4.  When [mlir::normalizeMemRef](https://github.com/tensorflow/ml
 into:
 
 ```mlir
-memref<16x256x4>
+memref<16x256x4xf64>
 ```
 And an access Abuf[%i, %j] is remapped to Abuf[%i floordiv 4, %j, %i mod 4].
 This is an example of a tiled layout, akin to how iteration space tiling is
