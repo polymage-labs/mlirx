@@ -217,20 +217,24 @@ to access the elements of a memref is through load and store operations.
 MLIR is extensible in several ways, and one of them is in the ease of
 adding/creating new ops at the level of abstraction we desire. One way of
 classifying ops or IR in general in MLIR is into high-level, mid-level, and
-low-level although there isn't a clear distinction and lowering can be
-progressive and you can have a mix. High-level ops operate on [tensor](https://github.com/tensorflow/mlir/blob/master/g3doc/LangRef.md#tensor-type) and
-[memref](https://github.com/tensorflow/mlir/blob/master/g3doc/LangRef.md#memref-type) types themselves, i.e., their inputs (operands) and results are of
-that type.  affine.for and affine.if are mid-level ops -- these have nested
-blocks (which are themselves a list of ops) and a particular structure to them.
-Low-level ops are at the same level as instructions in MLIR, and these typically
-correspond to either one or a flat sequence of instructions matching a target
-(three address code style in other words).
+low-level, although there isn't a clear distinction and lowering can be
+progressive and you can have a mix. High-level ops operate on
+[tensor](https://github.com/tensorflow/mlir/blob/master/g3doc/LangRef.md#tensor-type)
+and
+[memref](https://github.com/tensorflow/mlir/blob/master/g3doc/LangRef.md#memref-type)
+types themselves, i.e., their inputs (operands) and results are of that type.
+affine.for and affine.if are mid-level ops -- these have nested blocks (which
+are themselves a list of ops) and a particular structure to them.  Low-level ops
+are at the same level as instructions in LLVM, and these typically correspond to
+either one or a flat sequence of instructions matching a target (three address
+code style in other words).
 
 If one is building a DSL and knows that they need or have a matmul, one could
 just define an op that does the matmul taking memrefs as operands. For the
-purpose of this tutorial, we will create a hop.matmul op.
-An operation in MLIR typically has inputs, results, and [attributes](https://github.com/tensorflow/mlir/blob/master/g3doc/LangRef.md#attributes) (ones
-with regions have region arguments as well).
+purpose of this tutorial, we will create a hop.matmul op.  An operation in MLIR
+has inputs, results, and
+[attributes](https://github.com/tensorflow/mlir/blob/master/g3doc/LangRef.md#attributes)
+(ones with regions have region arguments as well).
 
 ```mlir
 "hop.matmul"(%A, %B, %C) {some_attr = 96, another_attr = 4}
