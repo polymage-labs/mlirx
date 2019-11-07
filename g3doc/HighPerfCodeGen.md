@@ -256,6 +256,7 @@ just execute this with MLIR without any optimization to see where we are
 starting our journey from.
 
 ```shell
+# This is where we start. No optimizations performed in MLIR besides canonicalization.
 $ mlir-opt -hopt -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.015995s
 0.558177 GFLOPS
@@ -363,15 +364,14 @@ counts 8 and 4 respectively):
   } : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2088x2048xf64>)
 ```
 
-In order to just look at cache tiling, we will just use the following schedule
+In order to just evaluate cache tiling for now, we will just use the following schedule
 (drop the tiling for registers):
-
 ```
 "hop.matmul"(%A, %B, %C) {
     schedule = (d0, d1, d2) -> (d2 floordiv 256, d0 floordiv 64, d1, d0, d2)
   } : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2088x2048xf64>)
 ```
-Now, with this specific tiling, we get this tiled loop nest:
+Now, with the above tiling, we get this loop nest:
 
 ```mlir
 ...
@@ -405,8 +405,7 @@ func @matmul(%A: memref<2088x2048xf64>, %B: memref<2048x2048xf64>, %C: memref<20
 }
 ```
 
-Note that the invariant load on %B has been hoisted out. When we execute this,
-we get:
+Note that the invariant load on %B has been hoisted out. When we execute this:
 
 ```mlir
 # With tiling
@@ -504,6 +503,7 @@ affine.for %arg3 = 0 to 8 {
 ```
 
 ```shell
+# With tiling and packing.
 $ mlir-opt -hopt -hopt-copy=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.0506358s
 2.38624 GFLOPS
@@ -552,13 +552,6 @@ such, without unroll-and-jam aka register tiling, brakes had been applied.  So,
 this last step opened the floodgates here yielding a 10x improvement and
 getting us to 23 GFLOPS.
 
-A code is only as fast as its weakest link. While the cache tiling really
-optimized reuse for the LHS and RHS, the strategy used by OpenBLAS and BLIS
-exploits reuse for the output matrix only in registers (not in L1 nor L2).  As
-such, without unroll-and-jam aka register tiling, brakes had been applied.  So,
-this last step opened the floodgates here yielding a 10x improvement and
-getting us to 23 GFLOPS.
-
 Let us go back a step and check what would happen if we disabled packing while
 performing unroll-and-jam.
 ```shell
@@ -567,22 +560,22 @@ $ mlir-opt -hopt -hopt-copy=false -hopt-unroll=true -hopt-scalrep=true -lower-to
 Compilation time: 0.0568249s
 11.5595 GFLOPS
 ```
-We lose over 2x of the performance if we don't perform packing here. And if 
+We lose over 2x of the performance if we don't perform packing here! And if 
 we hadn't performed the innermost loop unrolling (i.e., set K_U = 1), we get:
 ```shell
 # With tiling, packing, and unroll-and-jam/unroll, but K_U = 1.
 $ mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.0881901s
-23.5949 GFLOPS
+20.249 GFLOPS
 ```
 
 All of these improvements are significant from where we started but they are
-all finally not enough on an absolute scale even after having reproduced a
-part of the OpenBLAS/BLIS recipe (we are still at about 34% of the peak!).
-Clearly, there is something orthogonal that all of this is missing. It looks
-like we completely missed vectorization! The highly tuned library kernels that
-we've set as a target often used a careful selection and schedule of vector
-instructions in inline assembly.
+all finally not enough at all on an absolute scale --- we are still at about
+34% of the peak even after having reproduced a good part of the OpenBLAS/BLIS
+recipe!  Clearly, there is something orthogonal that all of this is missing. It
+looks like we completely missed vectorization! The highly tuned library kernels
+that we've set as a target often used a careful selection and schedule of
+vector instructions in inline assembly.
 
 Let's see whether our code is even being vectorized reasonably under the hood by
 LLVM.  It's pretty straightforward to check this. Instead of looking at the pass
