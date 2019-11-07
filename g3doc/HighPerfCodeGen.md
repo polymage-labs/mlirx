@@ -536,7 +536,7 @@ up as the innermost loop post all register tiling). So, we have:
 
 ```mlir
 "hop.matmul"(%A, %B, %C) { M_C = 64 : i32, K_C = 256 : i32, M_R = 4 : i32, N_R = 8 : i32, K_U = 4 : i32}
-  : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2048x2048xf64>)
+  : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2088x2048xf64>)
 ```
 
 ```shell
@@ -1352,7 +1352,7 @@ In summary, we have been able to generate all code starting from just this op:
 ```mlir
 "hop.matmul"(%A, %B, %C) {
     M_C = 180 : i32, K_C = 480 : i32, M_R = 3, N_R = 16 : i32, K_U = 4 : i32
-} : (memref<2048x2048xf64>, memref<2048x2048xf64>, memref<2048x2048xf64>)
+} : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2088x2048xf64>)
 ```
 
 Part II of this tutorial will demonstrate other code generation infrastructure,
