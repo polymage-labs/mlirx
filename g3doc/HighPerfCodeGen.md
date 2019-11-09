@@ -36,7 +36,7 @@ compiler IR that has the necessary abstractions and infrastructure. This
 completely avoids the need to write any code by hand --- be it C or inline
 assembly.  The IR infrastructure that will be used here is of course,
 [MLIR](https://github.com/tensorflow/mlir), and we will try to recreate the
-OpenBLAS/BLIS' approach to tiling in a compiler-oriented way using MLIR.
+OpenBLAS/BLIS' optimization approach in a compiler-oriented way using MLIR.
 
 ### Setup
 
@@ -714,7 +714,7 @@ Compilation time: 0.0209861s
 7.05307 GFLOPS
 ```
 
-It's well known that simply vectorizing without worrying about memory bandwidth
+As mentioned earlier, simply vectorizing without worrying about memory bandwidth
 gets us nowhere. We've now broken that barrier, and can now go further here.
 
 ```shell
@@ -1410,8 +1410,8 @@ like to generalize this approach beyond the domain considered here.
 A good part of this tutorial can be reproduced with [MLIR
 trunk](https://github.com/tensorflow/mlir).  There are some major features that
 are pending upstream integration (memref_shape_cast op, alloca op, scalar
-replacement, and support for a few packing options), but they will be available
-at https://github.com/bondhugula/mlir.
+replacement, and support for a few packing options), but they will soon be
+available at least at https://github.com/bondhugula/mlir.
 
 Software versions and setup: Fedora Linux 30 running kernel
 5.3.6-200.fc30.x86_64, MLIR used with LLVM git 52bfa73af84 from Oct 2019, BLIS
