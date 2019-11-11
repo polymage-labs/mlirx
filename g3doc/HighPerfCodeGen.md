@@ -467,7 +467,7 @@ like:
 ```mlir
 affine.for %arg3 = 0 to 8 {
   affine.for %arg4 = 0 to 32 {
-    %0 = alloc() {alignment = 32 : i32} : memref<64x256xf64>
+    %0 = alloc() : memref<64x256xf64>
     // Packing for %A into 64x256 buffer.
     affine.for %arg5 = #map6(%arg4) to #map7(%arg4) {
       affine.for %arg6 = #map4(%arg3) to #map5(%arg3) {
@@ -476,7 +476,7 @@ affine.for %arg3 = 0 to 8 {
       }
     }
     affine.for %arg5 = 0 to 256 {
-      %1 = alloc() {alignment = 32 : i32} : memref<256x8xf64>
+      %1 = alloc() : memref<256x8xf64>
       // Packing for %B into 256x8 buffer.
       affine.for %arg6 = #map4(%arg3) to #map5(%arg3) {
         affine.for %arg7 = #map9(%arg5) to #map10(%arg5) {
@@ -740,7 +740,7 @@ make it easier to read; the unroll-jamming of i, j is still shown).
 ```mlir
 affine.for %arg3 = 0 to 8 {
   affine.for %arg4 = 0 to 33 {
-    %2 = alloc() {alignment = 32 : i32} : memref<64x256xf64>
+    %2 = alloc() : memref<64x256xf64>
     affine.for %arg5 = #map6(%arg4) to min #map7(%arg4) {
       affine.for %arg6 = #map4(%arg3) to #map5(%arg3) {
         %3 = affine.load %arg0[%arg5, %arg6] : memref<2088x2048xf64>
@@ -748,7 +748,7 @@ affine.for %arg3 = 0 to 8 {
       }
     }
     affine.for %arg5 = 0 to 256 {
-      %3 = alloc() {alignment = 32 : i32} : memref<256x2xvector<4xf64>>
+      %3 = alloc() : memref<256x2xvector<4xf64>>
       affine.for %arg6 = #map4(%arg3) to #map5(%arg3) {
         affine.for %arg7 = #map9(%arg5) to #map10(%arg5) {
           %4 = affine.load %0[%arg6, %arg7] : memref<2048x512xvector<4xf64>>
@@ -1183,7 +1183,7 @@ affine.for %arg1 = 0 to 4 {
       }
     }
     affine.for %arg3 = 0 to 256 {
-      %10 = alloc() {alignment = 32 : i32} : memref<512x8xf64>
+      %10 = alloc() : memref<512x8xf64>
       affine.for %arg4 = #map2(%arg1) to #map3(%arg1) {
         affine.for %arg5 = #map7(%arg3) to #map8(%arg3) {
           %11 = affine.load %1[%arg4, %arg5] : memref<2048x2048xf64>
@@ -1223,7 +1223,7 @@ the generated IR:
 ```mlir
 affine.for %arg1 = 0 to 4 {
   affine.for %arg2 = 0 to 12 {
-    %9 = alloc() { alignment = 32 : i32} : memref<29x512x6xf64>
+    %9 = alloc() {alignment = 32 : i32} : memref<29x512x6xf64>
     affine.for %arg3 = #map4(%arg2) to #map5(%arg2) {
       affine.for %arg4 = #map2(%arg1) to #map3(%arg1) {
         %10 = affine.load %0[%arg3, %arg4] : memref<2088x2048xf64>
@@ -1254,11 +1254,11 @@ and just wraps around
 
 The allocs above have alignments since the BLIS kernel uses 256-bit aligned
 loads on these buffers. So, this experimentation was done with additional
-support in the MLIR's std to llvm dialect conversion to use posix_memaligned
-allocations. We have these alignments set even for the pure MLIR generated code
-since the loads and stores on vector types will have the vector size as the
-default ABI alignment, leading to aligned load/stores during LLVM code
-generation; so the alloc's need to be aligned to the vector size boundaries.
+support in the MLIR's std to llvm dialect conversion to use posix_memaligned.
+We have these alignments set even for the pure MLIR generated code since the
+loads and stores on vector types will have the vector size as the default ABI
+alignment, leading to aligned load/stores during LLVM code
+generation; so the alloc's need to be aligned to vector size boundaries.
 
 ```shell
 # MLIR with BLIS micro-kernel: M_R = 6, N_R = 8
