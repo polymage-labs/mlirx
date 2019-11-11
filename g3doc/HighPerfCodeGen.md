@@ -638,8 +638,8 @@ around them and neither should this have been necessary nor is it any good for
 performance! A good inner loop here is expected to only have one load of the LHS
 and RHS every N_R and M_R FMA ops, roughly speaking, because that's the amount
 of reuse we should be getting. In addition, there should be no loads or stores
-for output matrix in the innermost loop, which happens to be the case here. And
-finally, it all should have been %ymm.
+for the output matrix in the innermost loop, which happens to be the case here.
+And finally, it all should have been %ymm.
 
 It is also important to note that vectorization is often nearly useless unless
 the code has been optimized for locality, (i.e., we should be getting data from
@@ -653,10 +653,10 @@ opportunity.
 ### Vectorization
 
 MLIR supports vector types and vector types as element types for memrefs. Unlike
-LLVM, vector types in MLIR can be multi-dimensional. However, we only need 1-d
-types here. Vectorization in MLIR would thus lead to IR that turns memrefs of
-f64 into memrefs of vector of f64 besides transforming loops/loop bodies.  In
-addition there is a [splat
+in LLVM, vector types in MLIR can be multi-dimensional. However, we only need
+1-d vector types here. Vectorization in MLIR would thus lead to IR that turns
+memrefs of f64 into memrefs of vector of f64 besides transforming loops/loop
+bodies.  In addition, there is a [splat
 op](https://github.com/tensorflow/mlir/blob/master/g3doc/Dialects/Standard.md#splat-operation).
 
 The vectorization needed here is quite straightforward at a higher level, and is
@@ -715,7 +715,7 @@ Compilation time: 0.0209861s
 ```
 
 As mentioned earlier, simply vectorizing without worrying about memory bandwidth
-gets us nowhere. We've now broken that barrier, and can now go further here.
+gets us nowhere. We've now broken that barrier, and can go further here.
 
 ```shell
 # Vectorization, tiling, and packing/copying
@@ -729,7 +729,7 @@ Compilation time: 0.0383081s
 49.8336 GFLOPS
 ```
 
-As observed earlier, once again, the last step opened the floodgates here
+As observed earlier, once again, the last step has opened the floodgates here
 yielding a 4.5x improvement and getting us to 49 GFLOPS -- only 23% away from
 BLIS and about 27% away from MKL or OpenBLAS.
 
@@ -995,7 +995,9 @@ strength of a pure compiler approach here is that one automatically generates
 everything -- all the way down to the innermost loop body. So, we have the
 opportunity to explore more than what's possible with a fixed set of manually
 pre-optimized kernels. This is all under the assumption that the compiler
-generated code is competitive or could be made competitive.
+generated code is competitive or could be made competitive. Let's now explore
+the impact of just the M_R, N_R values around the best configuration we've
+found.
 
 ```shell
 # Let's see the impact of just the M_R, N_R values.
@@ -1057,9 +1059,9 @@ are named %ymm[0-15].
 ```
 
 This looks as good as we may expect. The output matrix values are always in
-registers (no spilling). There are aligned loads with high reuse at regular
-intervals for the LHS and RHS. The LHS is being broadcast/splat (the
-vbroadcastsd) and the RHS is being moved in via aligned vector loads.
+registers (no spilling). There are aligned loads for the LHS and RHS with high
+reuse at regular intervals. The LHS is being broadcast/splat (vbroadcastsd) and
+the RHS is being moved in via aligned vector loads.
 
 ```shell
 # Let's look at the benefit of packing in isolation on the best code we have:
@@ -1154,7 +1156,7 @@ worked on the LLVM backends and surrounding infrastructure.
 
 ![](blis-micro-kernel.png)
 
-*Figure: The BLIS micro-kernel.*.
+*Figure: The BLIS micro-kernel.*
 
 The BLIS micro-kernel being used here is [bli_dgemm_haswell_asm_6x8](https://github.com/flame/blis/blob/b426f9e04e5499c6f9c752e49c33800bfaadda4c/kernels/haswell/3/bli_gemm_haswell_asm_d6x8.c#L926); this
 corresponds to M_R = 6 and N_R = 8. We'll thus run a pure MLIR code generated
@@ -1221,7 +1223,7 @@ the generated IR:
 ```mlir
 affine.for %arg1 = 0 to 4 {
   affine.for %arg2 = 0 to 12 {
-    %9 = alloc() : memref<29x512x6xf64>
+    %9 = alloc() { alignment = 32 : i32} : memref<29x512x6xf64>
     affine.for %arg3 = #map4(%arg2) to #map5(%arg2) {
       affine.for %arg4 = #map2(%arg1) to #map3(%arg1) {
         %10 = affine.load %0[%arg3, %arg4] : memref<2088x2048xf64>
@@ -1247,7 +1249,8 @@ affine.for %arg1 = 0 to 4 {
 
 The hopt_dgemm_blis_kernel function is added to
 [mlir_runtime_utils](https://github.com/tensorflow/mlir/blob/master/test/mlir-cpu-runner/mlir_runner_utils.cpp),
-and just wraps around bli_dgemm_haswell_asm_6x8.
+and just wraps around
+[bli_dgemm_haswell_asm_6x8](https://github.com/flame/blis/blob/b426f9e04e5499c6f9c752e49c33800bfaadda4c/kernels/haswell/3/bli_gemm_haswell_asm_d6x8.c#L926).
 
 The allocs above have alignments since the BLIS kernel uses 256-bit aligned
 loads on these buffers. So, this experimentation was done with additional
@@ -1332,7 +1335,7 @@ double M_C to 348 for the same reason. We thus use this op to generate SGEMM.
 ```mlir
 "hop.matmul"(%A, %B, %C) {
     M_C = 348 : i32, K_C = 512 : i32, M_R = 3, N_R = 32 : i32, K_U = 4 : i32
-} : (memref<2048x2048xf32>, memref<2048x2048xf32>, memref<2048x2048xf32>)
+} : (memref<2088x2048xf32>, memref<2048x2048xf32>, memref<2088x2048xf32>)
 ```
 
 ![]( sgemm-perf.svg)
