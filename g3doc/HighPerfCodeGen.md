@@ -40,18 +40,24 @@ OpenBLAS/BLIS' optimization approach in a compiler-oriented way using MLIR.
 
 ### Setup
 
-We are going to be using a Intel Skylake-based high-end desktop/workstation
-processor for all experimentation. The processor is an *Intel(R) Core(TM)
-i7-8700K CPU @ 3.70GHz*. Note that although is based on the Skylake
-microarchitecture, it's not a SkyLake-X: as such, its vectors are not AVX-512,
-but just AVX-2 (256-bit).
+We are going to be using an Intel Skylake-based high-end desktop/workstation
+processor for all experimentation. The processor is an *[Intel(R) Core(TM)
+i7-8700K CPU @ 
+3.70GHz](https://ark.intel.com/content/www/us/en/ark/products/126684/intel-core-i7-8700k-processor-12m-cache-up-to-4-70-ghz.html)*, 
+which is actually based on [Coffee 
+Lake](https://en.wikichip.org/wiki/intel/microarchitectures/coffee_lake), a 
+process refinement of Skylake, and thus the same core/performance 
+characteristics.  Note that although this is based on the Skylake 
+microarchitecture, it's not a SkyLake-X: as such, its vectors are not AVX-512 
+but just AVX-2 (256-bit). It has a 32 KiB L1 data cache and a 256 KiB L2 unified
+cache per core, and a 12 MiB shared L3 cache (2 MiB / core).
 
-Before we start, we are going to compute the machine peak on it. This processor
-supports AVX-2 and has two FMA units that can operate on 256-bit wide vectors.
-As such, one can perform 2 * 4 * 2 double precision floating-point multiply and
-adds per cycle, which at the max turbo boost frequency of 4.7 GHz would
-translate to 75.2 GFLOPS. (Frequency scaling can impact how this figure is
-calculated, but we'll ignore that for now.)
+Before we start, we are going to compute the machine peak on this processor.  
+This CPU supports AVX-2 and has two FMA units that can operate on 256-bit wide
+vectors.  As such, one can perform 2 * 4 * 2 double-precision floating-point
+multiply and adds per cycle, which at the max turbo boost frequency of 4.7 GHz
+translates to 75.2 GFLOPS per core. (Frequency scaling can impact how this
+figure is calculated, but we'll ignore that for now.)
 
 ### Running example: DGEMM
 
@@ -300,8 +306,8 @@ approach can be expressed as the following polyhedral schedule:
 (i, j, k) -> (j / N_C, k / K_C, i / M_C, j / N_R, i / M_R, k mod K_C, j mod N_R, i mod M_R)
 ```
 The innermost two loops after applying the above schedule are meant to be fully
-unrolled leading to an M_R x N_R loop body. Ignoring tiling for the L3 cache,
-this becomes:
+unrolled leading to an M_R x N_R loop body. Ignoring the last level of tiling 
+(for the L3 cache), this becomes:
 ```
 (i, j, k) -> (k / K_C, i / M_C, j / N_R, i / M_R, k mod K_C, j mod N_R, i mod M_R)
 ```
@@ -330,7 +336,6 @@ body of size M_R x N_R times the original one. For readers seeking more detail
 in general on this and on programming for high performance, please see [these
 course notes](http://www.cs.utexas.edu/users/flame/laff/pfhp/) from the same
 group or the papers in [References](#References).
-
 
 ### Tiling in MLIR
 
@@ -1084,6 +1089,18 @@ $ mlir-opt -hopt -hopt-copy=false -hopt-unroll=false -hopt-scalrep=true -linalg-
 Compilation time: 0.0228369s
 10.785 GFLOPS
 ```
+
+As for M_C, K_C, note that we are using large enough values that the M_C x K_C 
+tile (675 KB for M_C = 180, K_C = 480) of the LHS matrix (A) actually fits in 
+the L3 cache, as opposed to in the L2 cache, which was the plan with the 
+BLIS/OpenBLAS tiling approach.  Since we haven't really done the additional 
+level of tiling (N_C) per the OpenBLAS/BLIS strategy, we notice that we get more
+mileage here out of using a larger tile for the LHS in L3 instead of a smaller
+tile in L2 (the L3 was sort of unoccupied for us). Note that a larger M_C in
+particular amortizes the cost of the RHS's transfer into L1 and exploits more L1
+reuse on that tile.  The additional level of tiling is conceptually
+straightforward given where we are now, and this will be evaluated in Part II of
+this article along with better values for M_C, K_C for improved L2 and L3 reuse.
 
 Let's now look back at our journey up until this best performing result, and the
 role each optimization played.
