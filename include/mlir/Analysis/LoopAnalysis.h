@@ -51,6 +51,8 @@ void buildTripCountMapAndOperands(AffineForOp forOp, AffineMap *map,
 /// in non-trivial cases.
 llvm::Optional<uint64_t> getConstantTripCount(AffineForOp forOp);
 
+uint64_t getLowerBoundOnTripCount(AffineForOp forOp);
+
 /// Returns the greatest known integral divisor of the trip count. Affine
 /// expression analysis is used (indirectly through getTripCount), and
 /// this method is thus able to determine non-trivial divisors.

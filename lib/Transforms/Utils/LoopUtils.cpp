@@ -1203,56 +1203,82 @@ static void getMultiLevelStrides(const MemRefRegion &region,
 /// returns the outermost AffineForOp of the copy loop nest. `memIndicesStart'
 /// holds the lower coordinates of the region in the original memref to copy
 /// in/out. If `copyOut' is true, generates a copy-out; otherwise a copy-in.
-static AffineForOp generatePointWiseCopy(Location loc, Value *memref,
-                                         Value *fastMemRef,
-                                         AffineMap memAffineMap,
-                                         ArrayRef<Value *> memIndicesStart,
-                                         ArrayRef<int64_t> fastBufferShape,
-                                         bool isCopyOut, OpBuilder b) {
-  assert(!memIndicesStart.empty() && "only 1-d or more memrefs");
+static AffineForOp
+generatePointWiseCopy(Location loc, Value *memref, Value *fastMemRef,
+                      ArrayRef<AffineMap> lbMaps, ArrayRef<Value *> lbOperands,
+                      ArrayRef<AffineMap> ubMaps, ArrayRef<Value *> ubOperands,
+                      bool isCopyOut, OpBuilder b) {
+  assert(llvm::all_of(lbMaps, [&](AffineMap lbMap) {
+    return lbMap.getNumInputs() == lbOperands.size();
+  }));
+  assert(llvm::all_of(ubMaps, [&](AffineMap ubMap) {
+    return ubMap.getNumInputs() == ubOperands.size();
+  }));
+
+  unsigned rank = memref->getType().cast<MemRefType>().getRank();
+  (void) rank; // unused in opt mode
+  assert(lbMaps.size() == rank && "wrong number of lb maps");
+  assert(ubMaps.size() == rank && "wrong number of ub maps");
 
   // The copy-in nest is generated as follows as an example for a 2-d region:
   // for x = ...
   //   for y = ...
   //     fast_buf[x][y] = buf[mem_x + x][mem_y + y]
 
-  SmallVector<Value *, 4> fastBufIndices, memIndices;
+  SmallVector<Value *, 4> memIndices;
+  SmallVector<AffineExpr, 4> fastBufExprs;
+  SmallVector<Value *, 4> fastBufMapOperands;
   AffineForOp copyNestRoot;
-  for (unsigned d = 0, e = fastBufferShape.size(); d < e; ++d) {
-    auto forOp = b.create<AffineForOp>(loc, 0, fastBufferShape[d]);
+  for (unsigned d = 0, e = ubMaps.size(); d < e; ++d) {
+    SmallVector<Value *, 4> thisUbOperands(ubOperands.begin(),
+                                           ubOperands.end());
+    AffineMap ubMap = ubMaps[d];
+    canonicalizeMapAndOperands(&ubMap, &thisUbOperands);
+
+    AffineMap lbMap = lbMaps[d];
+    SmallVector<Value *, 4> thisLbOperands(lbOperands.begin(),
+                                           lbOperands.end());
+    canonicalizeMapAndOperands(&lbMap, &thisLbOperands);
+
+    auto forOp = b.create<AffineForOp>(loc, thisLbOperands, lbMap,
+                                       thisUbOperands, ubMap);
     if (d == 0)
       copyNestRoot = forOp;
+
     b = forOp.getBodyBuilder();
-    fastBufIndices.push_back(forOp.getInductionVar());
 
-    Value *memBase =
-        (memAffineMap == b.getMultiDimIdentityMap(memAffineMap.getNumDims()))
-            ? memIndicesStart[d]
-            : b.create<AffineApplyOp>(
-                  loc,
-                  AffineMap::get(memAffineMap.getNumDims(),
-                                 memAffineMap.getNumSymbols(),
-                                 memAffineMap.getResult(d)),
-                  memIndicesStart);
+    // TODO: get rid of this affine.apply as well.
+    Value *lb = (lbMap.getNumResults() == 1 &&
+                 lbMap == b.getMultiDimIdentityMap(lbMap.getNumDims()))
+                    ? thisLbOperands[0]
+                    : b.create<AffineApplyOp>(loc, lbMap, thisLbOperands);
 
-    // Construct the subscript for the slow memref being copied.
-    SmallVector<Value *, 2> operands = {memBase, forOp.getInductionVar()};
-    auto memIndex = b.create<AffineApplyOp>(
-        loc,
-        AffineMap::get(2, 0, b.getAffineDimExpr(0) + b.getAffineDimExpr(1)),
-        operands);
-    memIndices.push_back(memIndex);
+    // Construct the subscript for the fast memref being copied.
+    fastBufExprs.push_back(b.getAffineDimExpr(2 * d + 1) -
+                           b.getAffineDimExpr(2 * d));
+    fastBufMapOperands.push_back(lb);
+    fastBufMapOperands.push_back(forOp.getInductionVar());
+
+    // Subscript for the slow memref being copied.
+    memIndices.push_back(forOp.getInductionVar());
   }
+
+  auto fastBufAccessMap = AffineMap::get(2 * ubMaps.size(), 0, fastBufExprs);
+  fullyComposeAffineMapAndOperands(&fastBufAccessMap, &fastBufMapOperands);
+  fastBufAccessMap = simplifyAffineMap(fastBufAccessMap);
+  canonicalizeMapAndOperands(&fastBufAccessMap, &fastBufMapOperands);
 
   if (!isCopyOut) {
     // Copy in.
     auto load = b.create<AffineLoadOp>(loc, memref, memIndices);
-    b.create<AffineStoreOp>(loc, load, fastMemRef, fastBufIndices);
+    b.create<AffineStoreOp>(loc, load, fastMemRef, fastBufAccessMap,
+                            fastBufMapOperands);
     return copyNestRoot;
   }
 
   // Copy out.
-  auto load = b.create<AffineLoadOp>(loc, fastMemRef, fastBufIndices);
+  auto load = b.create<AffineLoadOp>(loc, fastMemRef, fastBufAccessMap,
+                                     fastBufMapOperands);
   b.create<AffineStoreOp>(loc, load, memref, memIndices);
   return copyNestRoot;
 }
@@ -1325,6 +1351,9 @@ static LogicalResult generateCopy(
 
   unsigned rank = memRefType.getRank();
   SmallVector<int64_t, 4> fastBufferShape;
+  AffineMap fastBufferLayout = copyOptions.fastBufferLayout
+                                   ? copyOptions.fastBufferLayout
+                                   : b.getMultiDimIdentityMap(rank);
 
   // Compute the extents of the buffer.
   std::vector<SmallVector<int64_t, 4>> lbs;
@@ -1342,6 +1371,10 @@ static LogicalResult generateCopy(
     *sizeInBytes = 0;
     return success();
   }
+
+  SmallVector<AffineMap, 4> lbMaps(rank), ubMaps(rank);
+  for (unsigned i = 0; i < rank; ++i)
+    region.getLowerAndUpperBound(i, &lbMaps[i], &ubMaps[i]);
 
   const FlatAffineConstraints *cst = region.getConstraints();
   // 'regionSymbols' hold values that this memory region is symbolic/parametric
@@ -1400,7 +1433,6 @@ static LogicalResult generateCopy(
   // Check if a buffer was already created.
   bool existingBuf = fastBufferMap.count(memref) > 0;
   if (!existingBuf) {
-    AffineMap fastBufferLayout = b.getMultiDimIdentityMap(rank);
     auto fastMemRefType =
         MemRefType::get(fastBufferShape, memRefType.getElementType(),
                         fastBufferLayout, copyOptions.fastMemorySpace);
@@ -1457,8 +1489,9 @@ static LogicalResult generateCopy(
 
   if (!copyOptions.generateDma) {
     // Point-wise copy generation.
-    auto copyNest = generatePointWiseCopy(loc, memref, fastMemRef, memAffineMap,
-                                          memIndices, fastBufferShape,
+    auto copyNest = generatePointWiseCopy(loc, memref, fastMemRef, lbMaps,
+                                          /*lbOperands=*/regionSymbols, ubMaps,
+                                          /*ubOperands=*/regionSymbols,
                                           /*isCopyOut=*/region.isWrite(), b);
 
     // Record this so that we can skip it from yet another copy.
@@ -1609,7 +1642,9 @@ static bool getFullMemRefAsRegion(Operation *opInst, unsigned numParamLoopIVs,
 uint64_t mlir::affineDataCopyGenerate(Block::iterator begin,
                                       Block::iterator end,
                                       const AffineCopyOptions &copyOptions,
-                                      DenseSet<Operation *> &copyNests) {
+                                      Optional<Value *> filterMemRef,
+                                      DenseSet<Operation *> &copyNests,
+                                      SmallVectorImpl<Value *> *fastBufs) {
   if (begin == end)
     return 0;
 
@@ -1645,12 +1680,16 @@ uint64_t mlir::affineDataCopyGenerate(Block::iterator begin,
   block->walk(begin, end, [&](Operation *opInst) {
     // Gather regions to allocate to buffers in faster memory space.
     if (auto loadOp = dyn_cast<AffineLoadOp>(opInst)) {
-      if ((loadOp.getMemRefType().getMemorySpace() !=
+      if ((filterMemRef.hasValue() &&
+           filterMemRef.getValue() != loadOp.getMemRef()) ||
+          (loadOp.getMemRefType().getMemorySpace() !=
            copyOptions.slowMemorySpace))
         return;
     } else if (auto storeOp = dyn_cast<AffineStoreOp>(opInst)) {
-      if (storeOp.getMemRefType().getMemorySpace() !=
-          copyOptions.slowMemorySpace)
+      if ((filterMemRef.hasValue() &&
+           filterMemRef.getValue() != storeOp.getMemRef()) ||
+          storeOp.getMemRefType().getMemorySpace() !=
+              copyOptions.slowMemorySpace)
         return;
     } else {
       // Neither load nor a store op.
@@ -1786,6 +1825,14 @@ uint64_t mlir::affineDataCopyGenerate(Block::iterator begin,
     StringRef str = "Total size of all copy buffers' for this block "
                     "exceeds fast memory capacity\n";
     block->getParentOp()->emitError(str);
+  }
+
+  if (fastBufs) {
+    fastBufs->clear();
+    fastBufs->reserve(fastBufferMap.size());
+    for (const auto &entry : fastBufferMap) {
+      fastBufs->push_back(entry.second);
+    }
   }
 
   return totalCopyBuffersSizeInBytes;

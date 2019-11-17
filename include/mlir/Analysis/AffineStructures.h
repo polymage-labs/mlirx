@@ -36,7 +36,6 @@ class AffineForOp;
 class IntegerSet;
 class MLIRContext;
 class Value;
-class HyperRectangularSet;
 class MemRefType;
 
 /// A mutable affine map. Its affine expressions are however unique.
@@ -243,8 +242,8 @@ public:
   /// of constraints and identifiers..
   FlatAffineConstraints(unsigned numReservedInequalities,
                         unsigned numReservedEqualities,
-                        unsigned numReservedCols, unsigned numDims = 0,
-                        unsigned numSymbols = 0, unsigned numLocals = 0,
+                        unsigned numReservedCols, unsigned numDims,
+                        unsigned numSymbols, unsigned numLocals = 0,
                         ArrayRef<Optional<Value *>> idArgs = {})
       : numReservedCols(numReservedCols), numDims(numDims),
         numSymbols(numSymbols) {
@@ -260,9 +259,11 @@ public:
       ids.append(idArgs.begin(), idArgs.end());
   }
 
+  FlatAffineConstraints() : FlatAffineConstraints(0, 0) {}
+
   /// Constructs a constraint system with the specified number of
   /// dimensions and symbols.
-  FlatAffineConstraints(unsigned numDims = 0, unsigned numSymbols = 0,
+  FlatAffineConstraints(unsigned numDims, unsigned numSymbols,
                         unsigned numLocals = 0,
                         ArrayRef<Optional<Value *>> idArgs = {})
       : numReservedCols(numDims + numSymbols + numLocals + 1), numDims(numDims),
@@ -277,13 +278,11 @@ public:
       ids.append(idArgs.begin(), idArgs.end());
   }
 
-  explicit FlatAffineConstraints(const HyperRectangularSet &set);
-
   /// Create a flat affine constraint system from an AffineValueMap or a list of
-  /// these. The constructed system will only include equalities.
-  // TODO(bondhugula)
+  /// these. The constructed system will only include equalities corresponding
+  /// to the map's results and other constraints connecting dimensions and
+  /// symbols to local variables if any.
   explicit FlatAffineConstraints(const AffineValueMap &avm);
-  explicit FlatAffineConstraints(ArrayRef<const AffineValueMap *> avmRef);
 
   /// Creates an affine constraint system from an IntegerSet.
   explicit FlatAffineConstraints(IntegerSet set);
@@ -655,7 +654,7 @@ public:
   Optional<int64_t> getConstantUpperBound(unsigned pos) const;
 
   /// Gets the lower and upper bound of the pos^th identifier treating
-  /// [0, offset) U [offset + num, symbStartPos) as dimensions and
+  /// [0, offset) U [offset + num, symStartPos) as dimensions and
   /// [symStartPos, getNumDimAndSymbolIds) as symbols. The returned
   /// multi-dimensional maps in the pair represent the max and min of
   /// potentially multiple affine expressions. The upper bound is exclusive.
@@ -664,7 +663,7 @@ public:
   std::pair<AffineMap, AffineMap>
   getLowerAndUpperBound(unsigned pos, unsigned offset, unsigned num,
                         unsigned symStartPos, ArrayRef<AffineExpr> localExprs,
-                        MLIRContext *context);
+                        MLIRContext *context) const;
 
   /// Returns true if the set can be trivially detected as being
   /// hyper-rectangular on the specified contiguous set of identifiers.

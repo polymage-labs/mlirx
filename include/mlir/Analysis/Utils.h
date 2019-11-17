@@ -235,6 +235,9 @@ struct MemRefRegion {
       std::vector<SmallVector<int64_t, 4>> *lbs = nullptr,
       SmallVectorImpl<int64_t> *lbDivisors = nullptr) const;
 
+  void getLowerAndUpperBound(unsigned pos, AffineMap *lbMap,
+                             AffineMap *ubMap) const;
+
   /// A wrapper around FlatAffineConstraints::getConstantBoundOnDimSize(). 'pos'
   /// corresponds to the position of the memref shape's dimension (major to
   /// minor) which matches 1:1 with the dimensional identifier positions in
