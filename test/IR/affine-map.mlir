@@ -174,6 +174,12 @@
 // CHECK: #map{{[0-9]+}} = (d0) -> (d0 - (d0 + 1))
 #map53 = (d0) -> (d0 - (d0 + 1))
 
+// CHECK: #map{{[0-9]+}} = (d0)[s0] -> ((-s0) floordiv 4, d0 floordiv -1)
+#map54 = (d0)[s0] -> (-s0 floordiv 4, d0 floordiv -1)
+
+// CHECK: #map{{[0-9]+}} = () -> ()
+#map55 = () -> ()
+
 // Single identity maps are removed.
 // CHECK: func @f0(memref<2x4xi8, 1>)
 func @f0(memref<2x4xi8, #map0, 1>)
@@ -343,3 +349,9 @@ func @f52(memref<1xi8, #map52>)
 
 // CHECK: func @f53(memref<1xi8, #map{{[0-9]+}}>)
 func @f53(memref<1xi8, #map53>)
+
+// CHECK: func @f54(memref<10xi32, #map{{[0-9]+}}>)
+func @f54(memref<10xi32, #map54>)
+
+// CHECK: "foo.op"() {map = #map{{[0-9]+}}} : () -> ()
+"foo.op"() {map = #map55} : () -> ()

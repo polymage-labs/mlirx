@@ -12,22 +12,20 @@
 // CHECK-DAG: #[[Stride2Dilation4:.*]] = (d0, d1) -> (d0 * 2 + d1 * 4)
 // CHECK-DAG: #[[Stride3Dilation5:.*]] = (d0, d1) -> (d0 * 3 + d1 * 5)
 
-func @matmul(%arg0: !linalg.buffer<?xf32>, %arg1: index, %arg2: index, %arg3: index) {
+
+func @matmul(%arg0: memref<?xi8>, %M: index, %N: index, %K: index) {
   %c0 = constant 0 : index
   %c1 = constant 1 : index
-  %I = linalg.range %c0:%arg1:%c1 : !linalg.range
-  %J = linalg.range %c0:%arg2:%c1 : !linalg.range
-  %K = linalg.range %c0:%arg3:%c1 : !linalg.range
-  %A = linalg.view %arg0[%I, %K] : !linalg.buffer<?xf32> -> memref<?x?xf32, offset: ?, strides: [?, 1]>
-  %B = linalg.view %arg0[%K, %J] : !linalg.buffer<?xf32> -> memref<?x?xf32, offset: ?, strides: [?, 1]>
-  %C = linalg.view %arg0[%I, %J] : !linalg.buffer<?xf32> -> memref<?x?xf32, offset: ?, strides: [?, 1]>
+  %A = view %arg0[%M, %K][%c0] : memref<?xi8> to memref<?x?xf32, offset: ?, strides: [?, 1]>
+  %B = view %arg0[%K, %N][%c0] : memref<?xi8> to memref<?x?xf32, offset: ?, strides: [?, 1]>
+  %C = view %arg0[%M, %N][%c0] : memref<?xi8> to memref<?x?xf32, offset: ?, strides: [?, 1]>
   linalg.matmul(%A, %B, %C) : memref<?x?xf32, offset: ?, strides: [?, 1]>, memref<?x?xf32, offset: ?, strides: [?, 1]>, memref<?x?xf32, offset: ?, strides: [?, 1]>
   return
 }
-// CHECK-LABEL: func @matmul(%{{.*}}: !linalg.buffer<?xf32>, %{{.*}}: index, %{{.*}}: index, %{{.*}}: index) {
-//       CHECK: %[[A:.*]] = linalg.view %arg0[{{.*}}] : !linalg.buffer<?xf32> -> memref<?x?xf32, #[[strided2D]]>
-//       CHECK: %[[B:.*]] = linalg.view %arg0[{{.*}}] : !linalg.buffer<?xf32> -> memref<?x?xf32, #[[strided2D]]>
-//       CHECK: %[[C:.*]] = linalg.view %arg0[{{.*}}] : !linalg.buffer<?xf32> -> memref<?x?xf32, #[[strided2D]]>
+// CHECK-LABEL: func @matmul(%{{.*}}: memref<?xi8>, %{{.*}}: index, %{{.*}}: index, %{{.*}}: index) {
+//       CHECK: %[[A:.*]] = std.view %{{.*}}[{{.*}}] : memref<?xi8> to memref<?x?xf32, #[[strided2D]]>
+//       CHECK: %[[B:.*]] = std.view %{{.*}}[{{.*}}] : memref<?xi8> to memref<?x?xf32, #[[strided2D]]>
+//       CHECK: %[[C:.*]] = std.view %{{.*}}[{{.*}}] : memref<?xi8> to memref<?x?xf32, #[[strided2D]]>
 //       CHECK: %[[M:.*]] = dim %[[A]], 0 : memref<?x?xf32, #[[strided2D]]>
 //       CHECK: %[[K:.*]] = dim %[[A]], 1 : memref<?x?xf32, #[[strided2D]]>
 //       CHECK: %[[N:.*]] = dim %[[B]], 1 : memref<?x?xf32, #[[strided2D]]>
@@ -41,21 +39,19 @@ func @matmul(%arg0: !linalg.buffer<?xf32>, %arg1: index, %arg2: index, %arg3: in
 //   CHECK-DAG:       %[[res:.*]] = addf %[[c]], %[[inc]] : f32
 //       CHECK:       store %[[res]], %[[C]][%{{.*}}, %{{.*}}] : memref<?x?xf32, #[[strided2D]]>
 
-func @matvec(%arg0: !linalg.buffer<?xf32>, %arg1: index, %arg2: index, %arg3: index) {
+func @matvec(%arg0: memref<?xi8>, %M: index, %N: index) {
   %c0 = constant 0 : index
   %c1 = constant 1 : index
-  %I = linalg.range %c0:%arg1:%c1 : !linalg.range
-  %J = linalg.range %c0:%arg2:%c1 : !linalg.range
-  %2 = linalg.view %arg0[%I, %J] : !linalg.buffer<?xf32> -> memref<?x?xf32, offset: ?, strides: [?, 1]>
-  %3 = linalg.view %arg0[%J] : !linalg.buffer<?xf32> -> memref<?xf32, offset: ?, strides: [1]>
-  %4 = linalg.view %arg0[%I] : !linalg.buffer<?xf32> -> memref<?xf32, offset: ?, strides: [1]>
+  %2 = view %arg0[%M, %N][%c0] : memref<?xi8> to memref<?x?xf32, offset: ?, strides: [?, 1]>
+  %3 = view %arg0[%M][%c0] : memref<?xi8> to memref<?xf32, offset: ?, strides: [1]>
+  %4 = view %arg0[%N][%c0] : memref<?xi8> to memref<?xf32, offset: ?, strides: [1]>
   linalg.matvec(%2, %3, %4) : memref<?x?xf32, offset: ?, strides: [?, 1]>, memref<?xf32, offset: ?, strides: [1]>, memref<?xf32, offset: ?, strides: [1]>
   return
 }
-// CHECK-LABEL: func @matvec(%{{.*}}: !linalg.buffer<?xf32>, %{{.*}}: index, %{{.*}}: index, %{{.*}}: index) {
-//       CHECK: %[[A:.*]] = linalg.view %arg0[{{.*}}] : !linalg.buffer<?xf32> -> memref<?x?xf32, #[[strided2D]]>
-//       CHECK: %[[B:.*]] = linalg.view %arg0[{{.*}}] : !linalg.buffer<?xf32> -> memref<?xf32, #[[strided1D]]>
-//       CHECK: %[[C:.*]] = linalg.view %arg0[{{.*}}] : !linalg.buffer<?xf32> -> memref<?xf32, #[[strided1D]]>
+// CHECK-LABEL: func @matvec(%{{.*}}: memref<?xi8>, %{{.*}}: index, %{{.*}}: index) {
+//       CHECK: %[[A:.*]] = std.view %{{.*}}[{{.*}}] : memref<?xi8> to memref<?x?xf32, #[[strided2D]]>
+//       CHECK: %[[B:.*]] = std.view %{{.*}}[{{.*}}] : memref<?xi8> to memref<?xf32, #[[strided1D]]>
+//       CHECK: %[[C:.*]] = std.view %{{.*}}[{{.*}}] : memref<?xi8> to memref<?xf32, #[[strided1D]]>
 //       CHECK: %[[M:.*]] = dim %[[A]], 0 : memref<?x?xf32, #[[strided2D]]>
 //       CHECK: %[[K:.*]] = dim %[[A]], 1 : memref<?x?xf32, #[[strided2D]]>
 //       CHECK: loop.for %{{.*}} = %{{.*}} to %[[M]] step %{{.*}} {
@@ -67,20 +63,19 @@ func @matvec(%arg0: !linalg.buffer<?xf32>, %arg1: index, %arg2: index, %arg3: in
 //   CHECK-DAG:     %[[res:.*]] = addf %[[c]], %[[inc]] : f32
 //       CHECK:     store %[[res]], %[[C]][%{{.*}}] : memref<?xf32, #[[strided1D]]>
 
-func @dot(%arg0: !linalg.buffer<?xf32>, %arg1: index, %arg2: index, %arg3: index) {
+func @dot(%arg0: memref<?xi8>, %M: index) {
   %c0 = constant 0 : index
   %c1 = constant 1 : index
-  %I = linalg.range %c0:%arg1:%c1 : !linalg.range
-  %1 = linalg.view %arg0[%I] : !linalg.buffer<?xf32> -> memref<?xf32, offset: ?, strides: [1]>
-  %2 = linalg.view %arg0[%I] : !linalg.buffer<?xf32> -> memref<?xf32, offset: ?, strides: [1]>
-  %3 = linalg.view %arg0[] : !linalg.buffer<?xf32> -> memref<f32>
+  %1 = view %arg0[%M][%c0] : memref<?xi8> to memref<?xf32, offset: ?, strides: [1]>
+  %2 = view %arg0[%M][%c0] : memref<?xi8> to memref<?xf32, offset: ?, strides: [1]>
+  %3 = view %arg0[][] : memref<?xi8> to memref<f32>
   linalg.dot(%1, %2, %3) : memref<?xf32, offset: ?, strides: [1]>, memref<?xf32, offset: ?, strides: [1]>, memref<f32>
   return
 }
-// CHECK-LABEL: func @dot(%{{.*}}: !linalg.buffer<?xf32>, %{{.*}}: index, %{{.*}}: index, %{{.*}}: index) {
-//       CHECK: %[[A:.*]] = linalg.view %arg0[{{.*}}] : !linalg.buffer<?xf32> -> memref<?xf32, #[[strided1D]]>
-//       CHECK: %[[B:.*]] = linalg.view %arg0[{{.*}}] : !linalg.buffer<?xf32> -> memref<?xf32, #[[strided1D]]>
-//       CHECK: %[[C:.*]] = linalg.view %arg0[] : !linalg.buffer<?xf32> -> memref<f32>
+// CHECK-LABEL: func @dot(%{{.*}}: memref<?xi8>, %{{.*}}: index) {
+//       CHECK: %[[A:.*]] = std.view %{{.*}}[{{.*}}][{{.*}}] : memref<?xi8> to memref<?xf32, #[[strided1D]]>
+//       CHECK: %[[B:.*]] = std.view %{{.*}}[{{.*}}][{{.*}}] : memref<?xi8> to memref<?xf32, #[[strided1D]]>
+//       CHECK: %[[C:.*]] = std.view %{{.*}}[][] : memref<?xi8> to memref<f32>
 //       CHECK: %[[K:.*]] = dim %[[A]], 0 : memref<?xf32, #[[strided1D]]>
 //       CHECK: loop.for %{{.*}} = %{{.*}} to %[[K]] step %{{.*}} {
 //   CHECK-DAG:   %[[a:.*]] = load %[[A]][%{{.*}}] : memref<?xf32, #[[strided1D]]>
@@ -278,3 +273,82 @@ func @generic_region(%arg0: memref<?x?xf32, offset: ?, strides: [?, 1]>, %arg1: 
 //       CHECK:       %[[e:.*]] = addf %[[c]], %[[d]] : f32
 //       CHECK:       store %[[d]], %{{.*}}[%[[i]], %[[j]], %[[k]]] : memref<?x?x?xf32, #[[strided3D]]>
 //       CHECK:       store %[[e]], %{{.*}}[%[[i]], %[[k]], %[[j]]] : memref<?x?x?xf32, #[[strided3D]]>
+
+func @indexed_foo(%i: index, %j: index, %k: index, %0: f32, %1: f32, %2: f32) -> (f32, f32) {
+  %i_int = index_cast %i: index to i32
+  %i_float = sitofp %i_int : i32 to f32
+  return %i_float, %i_float : f32, f32
+}
+#trait3 = {
+  n_views = [1, 2],
+  n_loop_types = [3, 0, 0],
+  indexing_maps = #accesses,
+  fun = @indexed_foo,
+  library_call = "some_external_function_name_1",
+  doc = "b(i,j,k), c(i,k,j) = foo(a(i, j), b(i,j,k), c(i,k,j))"
+}
+func @indexed_generic_function(
+         %arg0: memref<?x?xf32, offset: ?, strides: [?, 1]>,
+         %arg1: memref<?x?x?xf32, offset: ?, strides: [?, ?, 1]>,
+         %arg2: memref<?x?x?xf32, offset: ?, strides: [?, ?, 1]>) {
+  linalg.indexed_generic #trait3 %arg0, %arg1, %arg2:
+    memref<?x?xf32, offset: ?, strides: [?, 1]>,
+    memref<?x?x?xf32, offset: ?, strides: [?, ?, 1]>,
+    memref<?x?x?xf32, offset: ?, strides: [?, ?, 1]>
+  return
+}
+// CHECK-LABEL: @indexed_foo
+// CHECK-LABEL: @indexed_generic_function
+// CHECK: loop.for %[[i:.*]] = {{.*}}
+// CHECK:   loop.for %[[j:.*]] = {{.*}}
+// CHECK:     loop.for %[[k:.*]] = {{.*}}
+// CHECK:       %[[a:.*]] = load %{{.*}}[%[[i]], %[[j]]] : memref<?x?xf32, #[[strided2D]]>
+// CHECK:       %[[b:.*]] = load %{{.*}}[%[[i]], %[[j]], %[[k]]] : memref<?x?x?xf32, #[[strided3D]]>
+// CHECK:       %[[c:.*]] = load %{{.*}}[%[[i]], %[[k]], %[[j]]] : memref<?x?x?xf32, #[[strided3D]]>
+// CHECK:       %[[res:.*]]:2 = call @indexed_foo(%[[i]], %[[j]], %[[k]], %[[a]], %[[b]], %[[c]]) : (index, index, index, f32, f32, f32) -> (f32, f32)
+// CHECK:       store %[[res]]#0, %{{.*}}[%[[i]], %[[j]], %[[k]]] : memref<?x?x?xf32, #[[strided3D]]>
+// CHECK:       store %[[res]]#1, %{{.*}}[%[[i]], %[[k]], %[[j]]] : memref<?x?x?xf32, #[[strided3D]]>
+
+#trait4 = {
+  n_views = [1, 2],
+  n_loop_types = [3, 0, 0],
+  indexing_maps = #accesses,
+  library_call = "some_external_function_name_2",
+  doc = "B(i,j,k), C(i,k,j) = foo(A(i, j) * B(i,j,k), i * j * k + C(i,k,j))"
+}
+func @indexed_generic_region(
+        %arg0: memref<?x?xf32, offset: ?, strides: [?, 1]>,
+        %arg1: memref<?x?x?xf32, offset: ?, strides: [?, ?, 1]>,
+        %arg2: memref<?x?x?xf32, offset: ?, strides: [?, ?, 1]>) {
+  linalg.indexed_generic #trait4 %arg0, %arg1, %arg2 {
+    ^bb0(%i: index, %j: index, %k: index, %a: f32, %b: f32, %c: f32):
+      %result_1 = mulf %a, %b : f32
+
+      %ij = addi %i, %j : index
+      %ijk = addi %ij, %k : index
+      %ijk_int = index_cast %ijk : index to i32
+      %ijk_float = sitofp %ijk_int : i32 to f32
+
+      %result_2 = addf %c, %ijk_float : f32
+      linalg.yield %result_1, %result_2 : f32, f32
+  }: memref<?x?xf32, offset: ?, strides: [?, 1]>,
+     memref<?x?x?xf32, offset: ?, strides: [?, ?, 1]>,
+     memref<?x?x?xf32, offset: ?, strides: [?, ?, 1]>
+  return
+}
+
+// CHECK-LABEL: @indexed_generic_region
+// CHECK: loop.for %[[i:.*]] = {{.*}}
+// CHECK:   loop.for %[[j:.*]] = {{.*}}
+// CHECK:     loop.for %[[k:.*]] = {{.*}}
+// CHECK:       %[[a:.*]] = load %{{.*}}[%[[i]], %[[j]]]
+// CHECK:       %[[b:.*]] = load %{{.*}}[%[[i]], %[[j]], %[[k]]]
+// CHECK:       %[[c:.*]] = load %{{.*}}[%[[i]], %[[k]], %[[j]]]
+// CHECK:       %[[result_1:.*]] = mulf %[[a]], %[[b]] : f32
+// CHECK:       %[[ij:.*]] = addi %[[i]], %[[j]] : index
+// CHECK:       %[[ijk:.*]] = addi %[[ij]], %[[k]] : index
+// CHECK:       %[[ijk_int:.*]] = index_cast %[[ijk]] : index to i32
+// CHECK:       %[[ijk_float:.*]] = sitofp %[[ijk_int]] : i32 to f32
+// CHECK:       %[[result_2:.*]] = addf %[[c]], %[[ijk_float]] : f32
+// CHECK:       store %[[result_1]], %{{.*}}[%[[i]], %[[j]], %[[k]]]
+// CHECK:       store %[[result_2]], %{{.*}}[%[[i]], %[[k]], %[[j]]]

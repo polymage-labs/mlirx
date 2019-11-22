@@ -1,4 +1,4 @@
-//===- LowerVectorTransfers.cpp - LowerVectorTransfers Pass Impl ----------===//
+//===- VectorToLoops.cpp - Conversion from Vector to mix of Loops and Std -===//
 //
 // Copyright 2019 The MLIR Authors.
 //
@@ -21,12 +21,7 @@
 
 #include <type_traits>
 
-#include "mlir/Analysis/AffineAnalysis.h"
-#include "mlir/Analysis/NestedMatcher.h"
-#include "mlir/Analysis/Utils.h"
-#include "mlir/Analysis/VectorAnalysis.h"
-#include "mlir/Dialect/LoopOps/LoopOps.h"
-#include "mlir/Dialect/StandardOps/Ops.h"
+#include "mlir/Conversion/VectorConversions/VectorConversions.h"
 #include "mlir/Dialect/VectorOps/VectorOps.h"
 #include "mlir/EDSC/Builders.h"
 #include "mlir/EDSC/Helpers.h"
@@ -39,9 +34,12 @@
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Types.h"
-#include "mlir/Pass/Pass.h"
-#include "mlir/Support/Functional.h"
-#include "mlir/Transforms/Passes.h"
+
+using namespace mlir;
+using vector::VectorTransferReadOp;
+using vector::VectorTransferWriteOp;
+
+namespace {
 
 /// Implements lowering of VectorTransferReadOp and VectorTransferWriteOp to a
 /// proper abstraction for the hardware.
@@ -58,7 +56,7 @@
 ///    loop.for %i0 = 0 to %0 {
 ///      loop.for %i1 = 0 to %1 step %c256 {
 ///        loop.for %i2 = 0 to %2 step %c32 {
-///          %v = vector.transfer_read %A[%i0, %i1, %i2], (%f0)
+///          %v = vector.transfer_read %A[%i0, %i1, %i2], %f0
 ///               {permutation_map: (d0, d1, d2) -> (d2, d1)} :
 ///               memref<?x?x?xf32>, vector<32x256xf32>
 ///    }}}
@@ -81,17 +79,16 @@
 /// which creates individual indexing expressions of the form:
 ///
 /// ```mlir-dsc
-///    SELECT(i + ii < zero, zero, SELECT(i + ii < N, i + ii, N - one))
+///    auto condMax = i + ii < N;
+///    auto max = select(condMax, i + ii, N - one)
+///    auto cond = i + ii < zero;
+///    select(cond, zero, max);
 /// ```
-
-using namespace mlir;
-using vector::VectorTransferReadOp;
-using vector::VectorTransferWriteOp;
-
-#define DEBUG_TYPE "affine-lower-vector-transfers"
-
-namespace {
-
+///
+/// In the future, clipping should not be the only way and instead we should
+/// load vectors + mask them. Similarly on the write side, load/mask/store for
+/// implementing RMW behavior.
+///
 /// Lowers VectorTransferOp into a combination of:
 ///   1. local memory allocation;
 ///   2. perfect loop nest over:
@@ -111,12 +108,6 @@ struct VectorTransferRewriter : public RewritePattern {
     auto vectorType = transfer.getVectorType();
     return MemRefType::get(vectorType.getShape(), vectorType.getElementType(),
                            {}, 0);
-  }
-
-  /// View of tmpMemRefType as one vector, used in vector load/store to tmp
-  /// buffer.
-  MemRefType vectorMemRefType(VectorTransferOpTy transfer) const {
-    return MemRefType::get({1}, transfer.getVectorType(), {}, 0);
   }
 
   /// Performs the rewrite.
@@ -139,7 +130,7 @@ void coalesceCopy(VectorTransferOpTy transfer,
   // the loop order for creating pointwise copies between remote and local
   // memories.
   int coalescedIdx = -1;
-  auto exprs = transfer.getPermutationMap().getResults();
+  auto exprs = transfer.permutation_map().getResults();
   for (auto en : llvm::enumerate(exprs)) {
     auto dim = en.value().template dyn_cast<AffineDimExpr>();
     if (!dim) {
@@ -170,7 +161,7 @@ llvm::SmallVector<edsc::ValueHandle, 8> clip(VectorTransferOpTy transfer,
   using edsc::intrinsics::select;
 
   IndexHandle zero(index_t(0)), one(index_t(1));
-  llvm::SmallVector<edsc::ValueHandle, 8> memRefAccess(transfer.getIndices());
+  llvm::SmallVector<edsc::ValueHandle, 8> memRefAccess(transfer.indices());
   llvm::SmallVector<edsc::ValueHandle, 8> clippedScalarAccessExprs(
       memRefAccess.size(), edsc::IndexHandle());
 
@@ -180,7 +171,7 @@ llvm::SmallVector<edsc::ValueHandle, 8> clip(VectorTransferOpTy transfer,
        ++memRefDim) {
     // Linear search on a small number of entries.
     int loopIndex = -1;
-    auto exprs = transfer.getPermutationMap().getResults();
+    auto exprs = transfer.permutation_map().getResults();
     for (auto en : llvm::enumerate(exprs)) {
       auto expr = en.value();
       auto dim = expr.template dyn_cast<AffineDimExpr>();
@@ -273,9 +264,9 @@ VectorTransferRewriter<VectorTransferReadOp>::matchAndRewrite(
 
   // 1. Setup all the captures.
   ScopedContext scope(rewriter, transfer.getLoc());
-  IndexedValue remote(transfer.getMemRef());
-  MemRefView view(transfer.getMemRef());
-  VectorView vectorView(transfer.getVector());
+  IndexedValue remote(transfer.memref());
+  MemRefView view(transfer.memref());
+  VectorView vectorView(transfer.vector());
   SmallVector<IndexHandle, 8> ivs = makeIndexHandles(vectorView.rank());
   SmallVector<ValueHandle *, 8> pivs =
       makeIndexHandlePointers(MutableArrayRef<IndexHandle>(ivs));
@@ -291,12 +282,12 @@ VectorTransferRewriter<VectorTransferReadOp>::matchAndRewrite(
   // 2. Emit alloc-copy-load-dealloc.
   ValueHandle tmp = alloc(tmpMemRefType(transfer));
   IndexedValue local(tmp);
-  ValueHandle vec = vector_type_cast(tmp, vectorMemRefType(transfer));
+  ValueHandle vec = vector_type_cast(tmp);
   LoopNestBuilder(pivs, lbs, ubs, steps)([&] {
     // Computes clippedScalarAccessExprs in the loop nest scope (ivs exist).
     local(ivs) = remote(clip(transfer, view, ivs));
   });
-  ValueHandle vectorValue = std_load(vec, {constant_index(0)});
+  ValueHandle vectorValue = std_load(vec);
   (dealloc(tmp)); // vexing parse
 
   // 3. Propagate.
@@ -336,10 +327,10 @@ VectorTransferRewriter<VectorTransferWriteOp>::matchAndRewrite(
 
   // 1. Setup all the captures.
   ScopedContext scope(rewriter, transfer.getLoc());
-  IndexedValue remote(transfer.getMemRef());
-  MemRefView view(transfer.getMemRef());
-  ValueHandle vectorValue(transfer.getVector());
-  VectorView vectorView(transfer.getVector());
+  IndexedValue remote(transfer.memref());
+  MemRefView view(transfer.memref());
+  ValueHandle vectorValue(transfer.vector());
+  VectorView vectorView(transfer.vector());
   SmallVector<IndexHandle, 8> ivs = makeIndexHandles(vectorView.rank());
   SmallVector<ValueHandle *, 8> pivs = makeIndexHandlePointers(ivs);
   coalesceCopy(transfer, &pivs, &vectorView);
@@ -354,8 +345,8 @@ VectorTransferRewriter<VectorTransferWriteOp>::matchAndRewrite(
   // 2. Emit alloc-store-copy-dealloc.
   ValueHandle tmp = alloc(tmpMemRefType(transfer));
   IndexedValue local(tmp);
-  ValueHandle vec = vector_type_cast(tmp, vectorMemRefType(transfer));
-  std_store(vectorValue, vec, {constant_index(0)});
+  ValueHandle vec = vector_type_cast(tmp);
+  std_store(vectorValue, vec);
   LoopNestBuilder(pivs, lbs, ubs, steps)([&] {
     // Computes clippedScalarAccessExprs in the loop nest scope (ivs exist).
     remote(clip(transfer, view, ivs)) = local(ivs);
@@ -365,26 +356,12 @@ VectorTransferRewriter<VectorTransferWriteOp>::matchAndRewrite(
   rewriter.eraseOp(op);
   return matchSuccess();
 }
+} // namespace
 
-struct LowerVectorTransfersPass
-    : public FunctionPass<LowerVectorTransfersPass> {
-  void runOnFunction() override {
-    OwningRewritePatternList patterns;
-    auto *context = &getContext();
-    patterns.insert<VectorTransferRewriter<vector::VectorTransferReadOp>,
-                    VectorTransferRewriter<vector::VectorTransferWriteOp>>(
-        context);
-    applyPatternsGreedily(getFunction(), patterns);
-  }
-};
-
-} // end anonymous namespace
-
-std::unique_ptr<OpPassBase<FuncOp>> mlir::createLowerVectorTransfersPass() {
-  return std::make_unique<LowerVectorTransfersPass>();
+/// Populate the given list with patterns that convert from Vector to LLVM.
+void mlir::populateVectorToAffineLoopsConversionPatterns(
+    MLIRContext *context, OwningRewritePatternList &patterns) {
+  patterns.insert<VectorTransferRewriter<vector::VectorTransferReadOp>,
+                  VectorTransferRewriter<vector::VectorTransferWriteOp>>(
+      context);
 }
-
-static PassRegistration<LowerVectorTransfersPass>
-    pass("affine-lower-vector-transfers",
-         "Materializes vector transfer ops to a "
-         "proper abstraction for the hardware");

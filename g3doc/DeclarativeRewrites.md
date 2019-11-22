@@ -43,8 +43,16 @@ operations. This gives DRR both its strengths and limitations: it is good at
 expressing op to op conversions, but not that well suited for, say, converting
 an op into a loop nest.
 
-Per the current implementation, DRR also does not have good support for regions
-in general.
+Per the current implementation, DRR does not have good support for the following
+features:
+
+*   Matching and generating ops with regions.
+*   Matching and generating ops with block arguments.
+*   Matching multi-result ops in nested patterns.
+*   Matching and generating variadic operand/result ops in nested patterns.
+*   Packing and unpacking variaidc operands/results during generation.
+*   [`NativeCodeCall`](#native-code-call-transforming-the-generated-op)
+    returning more than one results.
 
 ## Rule Definition
 
@@ -216,12 +224,13 @@ In the above, we are using `BOp`'s result for building `COp`.
 #### Building operations
 
 Given that `COp` was specified with table-driven op definition, there will be
-several `build()` methods generated for it. One of them has a separate argument
-in the signature for each argument appearing in the op's `arguments` list:
-`void COp::build(..., Value *input, Attribute attr)`. The pattern in the above
-calls this `build()` method for constructing the `COp`.
+several `build()` methods generated for it. One of them has aggregated
+parameters for result types, operands, and attributes in the signature: `void
+COp::build(..., ArrayRef<Type> resultTypes, Array<Value *> operands,
+ArrayRef<NamedAttribute> attr)`. The pattern in the above calls this `build()`
+method for constructing the `COp`.
 
-In general, arguments in the the result pattern will be passed directly to the
+In general, arguments in the result pattern will be passed directly to the
 `build()` method to leverage the auto-generated `build()` method, list them in
 the pattern by following the exact same order as the ODS `arguments` definition.
 Otherwise, a custom `build()` method that matches the argument list is required.
@@ -238,16 +247,29 @@ that has result type deduction ability via `OpBuilder` in ODS. For example,
 in the following pattern
 
 ```tblgen
-def : Pat<(AOp $input, $attr), (COp (BOp) $attr)>;
+def : Pat<(AOp $input, $attr), (COp (AOp $input, $attr) $attr)>;
 ```
 
-`BOp` is generated via a nested result pattern; DRR won't be able to deduce the
-result type for it. A custom builder for `BOp` should be defined and it should
-deduce the result type by itself.
+`AOp` is generated via a nested result pattern; DRR won't be able to deduce the
+result type for it. A custom builder for `AOp` should be defined and it should
+deduce the result type by itself. The builder should have the a separate
+parameter for each operand and attribute and deduce the result type internally
+by itself. For example, for the above `AOp`, a possible builder is:
 
-Failing to define such a builder will result in an error at C++ compilation
-time saying the call to `BOp::build()` cannot be resolved because of the number
-of parameters mismatch.
+```c++
+
+void AOp::build(Builder *builder, OperationState &state,
+                Value *input, Attribute attr) {
+  state.addOperands({input});
+  state.addAttribute("a_attr", attr);
+  Type type = ...; // Deduce result type here
+  state.addTypes({type});
+}
+```
+
+Failing to define such a builder will result in an error at C++ compilation time
+saying the call to `AOp::build()` cannot be resolved because of the number of
+parameters mismatch.
 
 #### Generating DAG of operations
 
@@ -344,6 +366,9 @@ In the above example, we are using a string to specialize the `NativeCodeCall`
 template. The string can be an arbitrary C++ expression that evaluates into
 some C++ object expected at the `NativeCodeCall` site (here it would be
 expecting an array attribute). Typically the string should be a function call.
+
+Note that currently `NativeCodeCall` must return no more than one value or
+attribute. This might change in the future.
 
 ##### `NativeCodeCall` placeholders
 
@@ -628,6 +653,30 @@ pattern's benefit. Just supply `(addBenefit N)` to add `N` to the benefit value.
 ## Special directives
 
 [TODO]
+
+## Debugging Tips
+
+### Run `mlir-tblgen` to see the generated content
+
+TableGen syntax sometimes can be obscure; reading the generated content can be
+a very helpful way to understand and debug issues. To build `mlir-tblgen`, run
+`cmake --build . --target mlir-tblgen` in your build directory and find the
+`mlir-tblgen` binary in the `bin/` subdirectory. All the supported generators
+can be found via `mlir-tblgen --help`.
+
+To see the generated code, invoke `mlir-tblgen` with a specific generator by
+providing include paths via `-I`. For example,
+
+```sh
+# To see all the C++ pattern rewrite classes
+mlir-tblgen --gen-rewriters -I /path/to/mlir/include /path/to/input/td/file
+```
+
+### Compilation error: no matching member function for call to 'build'
+
+This is because DRR is failing to call a `build()` mehtod with result type
+deduction ability. See [building operations](#building-operations) for more
+details.
 
 [TableGen]: https://llvm.org/docs/TableGen/index.html
 [OpBase]: https://github.com/tensorflow/mlir/blob/master/include/mlir/IR/OpBase.td
