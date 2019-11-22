@@ -42,17 +42,17 @@ OpenBLAS/BLIS' optimization approach in a compiler-oriented way using MLIR.
 
 We are going to be using an Intel Skylake-based high-end desktop/workstation
 processor for all experimentation. The processor is an *[Intel(R) Core(TM)
-i7-8700K CPU @ 
-3.70GHz](https://ark.intel.com/content/www/us/en/ark/products/126684/intel-core-i7-8700k-processor-12m-cache-up-to-4-70-ghz.html)*, 
-which is actually based on [Coffee 
-Lake](https://en.wikichip.org/wiki/intel/microarchitectures/coffee_lake), a 
-process refinement of Skylake, and thus the same core/performance 
-characteristics.  Note that although this is based on the Skylake 
-microarchitecture, it's not a SkyLake-X: as such, its vectors are not AVX-512 
+i7-8700K CPU @
+3.70GHz](https://ark.intel.com/content/www/us/en/ark/products/126684/intel-core-i7-8700k-processor-12m-cache-up-to-4-70-ghz.html)*,
+which is actually based on [Coffee
+Lake](https://en.wikichip.org/wiki/intel/microarchitectures/coffee_lake), a
+process refinement of Skylake, and thus the same core/performance
+characteristics.  Note that although this is based on the Skylake
+microarchitecture, it's not a SkyLake-X: as such, its vectors are not AVX-512
 but just AVX-2 (256-bit). It has a 32 KiB L1 data cache and a 256 KiB L2 unified
 cache per core, and a 12 MiB shared L3 cache (2 MiB / core).
 
-Before we start, we are going to compute the machine peak on this processor.  
+Before we start, we are going to compute the machine peak on this processor.
 This CPU supports AVX-2 and has two FMA units that can operate on 256-bit wide
 vectors.  As such, one can perform 2 * 4 * 2 double-precision floating-point
 multiply and adds per cycle, which at the max turbo boost frequency of 4.7 GHz
@@ -306,7 +306,7 @@ approach can be expressed as the following polyhedral schedule:
 (i, j, k) -> (j / N_C, k / K_C, i / M_C, j / N_R, i / M_R, k mod K_C, j mod N_R, i mod M_R)
 ```
 The innermost two loops after applying the above schedule are meant to be fully
-unrolled leading to an M_R x N_R loop body. Ignoring the last level of tiling 
+unrolled leading to an M_R x N_R loop body. Ignoring the last level of tiling
 (for the L3 cache), this becomes:
 ```
 (i, j, k) -> (k / K_C, i / M_C, j / N_R, i / M_R, k mod K_C, j mod N_R, i mod M_R)
@@ -369,7 +369,7 @@ counts 8 and 4 respectively):
 
 ```
 "hop.matmul"(%A, %B, %C) {
-    schedule = (d0, d1, d2) -> (d2 floordiv 256, d0 floordiv 64, d1 floordiv 8, d0 floordiv 4, d2, d1, d0) 
+    schedule = (d0, d1, d2) -> (d2 floordiv 256, d0 floordiv 64, d1 floordiv 8, d0 floordiv 4, d2, d1, d0)
   } : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2088x2048xf64>)
 ```
 
@@ -569,7 +569,7 @@ $ mlir-opt -hopt -hopt-copy=false -hopt-unroll=true -hopt-scalrep=true -lower-to
 Compilation time: 0.0568249s
 11.5595 GFLOPS
 ```
-We lose over 2x of the performance if we don't perform packing here! And if 
+We lose over 2x of the performance if we don't perform packing here! And if
 we hadn't performed the innermost loop unrolling (i.e., set K_U = 1), we get:
 ```shell
 # With tiling, packing, and unroll-and-jam/unroll, but K_U = 1.
@@ -987,7 +987,7 @@ When one chooses M_R = 3 and N_R = 16, it leads to 3 * 16 /4 = 12 256-bit vector
 registers for the output values. The BLIS provided kernels for Haswell otherwise
 include 6\*8, 8\*6, 4\*12, 12\*4 -- they too use (2\*6 =) 12 registers, but
 these options differ in how much register reuse is relatively exploited along
-the two dimensions and how big the L1 resident buffer for the RHS is. Let's 
+the two dimensions and how big the L1 resident buffer for the RHS is. Let's
 executre the M_R = 3, N_R = 16 configuration.
 ```shell
 # M_C = 180 : i32, K_C = 480 : i32, M_R = 3, N_R = 16 : i32, K_U = 4 : i32
@@ -1090,10 +1090,10 @@ Compilation time: 0.0228369s
 10.785 GFLOPS
 ```
 
-As for M_C, K_C, note that we are using large enough values that the M_C x K_C 
-tile (675 KB for M_C = 180, K_C = 480) of the LHS matrix (A) actually fits in 
-the L3 cache, as opposed to in the L2 cache, which was the plan with the 
-BLIS/OpenBLAS tiling approach.  Since we haven't really done the additional 
+As for M_C, K_C, note that we are using large enough values that the M_C x K_C
+tile (675 KB for M_C = 180, K_C = 480) of the LHS matrix (A) actually fits in
+the L3 cache, as opposed to in the L2 cache, which was the plan with the
+BLIS/OpenBLAS tiling approach.  Since we haven't really done the additional
 level of tiling (N_C) per the OpenBLAS/BLIS strategy, we notice that we get more
 mileage here out of using a larger tile for the LHS in L3 instead of a smaller
 tile in L2 (the L3 was sort of unoccupied for us). Note that a larger M_C in
@@ -1406,7 +1406,7 @@ code at each stage always stays affine.  The [Linalg
 dialect](https://github.com/tensorflow/mlir/blob/master/test/Transforms/memref-normalize.mlir)
 does not have the utilities to automatically analyze and generate packing code
 for example.  Nearly all passes and utilities used here such as unroll-and-jam,
-  scalar replacement, and memref normalization also work on affine dialect ops.
+  scalar replacement, and memref normalization work on affine dialect ops.
 
 4. *What about all the other options around input matrices such as strides and
 transpose?*  These all are cleanly expressed via memrefs' [affine layout map
