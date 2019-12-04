@@ -185,7 +185,7 @@ func @main() {
   linalg.fill(%B, %cf1) : memref<2048x2048xf64>, f64
   linalg.fill(%C, %cf1) : memref<2048x2048xf64>, f64
 
-  call @matmul(%A, %B, %C) : (memref<2048x2048xf64>, memref<2048x2048xf64>, memref<2048x2048xf64>)
+  call @matmul(%A, %B, %C) : (memref<2048x2048xf64>, memref<2048x2048xf64>, memref<2048x2048xf64>) -> ()
   call @print_memref_2d_f64(%C): (memref<2048x2048xf64>) -> ()
   return
 }
