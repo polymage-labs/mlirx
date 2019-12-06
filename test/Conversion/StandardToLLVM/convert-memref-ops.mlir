@@ -414,7 +414,6 @@ func @memref_cast_unranked_to_ranked(%arg : memref<*xf32>) {
 // CHECK-NEXT: llvm.bitcast %[[p]] : !llvm<"i8*"> to !llvm<"{ float*, float*, i64, [4 x i64], [4 x i64] }*">
   %0 = memref_cast %arg : memref<*xf32> to memref<?x?x10x2xf32>
   return
->>>>>>> origin/master
 }
 
 // CHECK-LABEL: func @mixed_memref_dim(%arg0: !llvm<"{ float*, float*, i64, [5 x i64], [5 x i64] }*">) {

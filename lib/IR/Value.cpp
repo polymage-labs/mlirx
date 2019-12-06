@@ -18,6 +18,8 @@
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Operation.h"
+#include "llvm/ADT/SmallPtrSet.h"
+
 using namespace mlir;
 
 /// If this value is the result of an Operation, return the operation that
@@ -59,5 +61,15 @@ void IRObjectWithUseList::replaceAllUsesWith(IRObjectWithUseList *newValue) {
 void IRObjectWithUseList::dropAllUses() {
   while (!use_empty()) {
     use_begin()->drop();
+  }
+}
+
+// Replaces all uses of `orig` with `replacement` except if the user is listed
+// in `exceptions`.
+void mlir::replaceAllUsesExcept(Value *orig, Value *replacement,
+                     const SmallPtrSetImpl<Operation *> &exceptions) {
+  for (auto &use : llvm::make_early_inc_range(orig->getUses())) {
+    if (exceptions.count(use.getOwner()) == 0)
+      use.set(replacement);
   }
 }

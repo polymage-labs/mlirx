@@ -22,10 +22,12 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Support/MathExtras.h"
 #include "mlir/Transforms/InliningUtils.h"
 #include "mlir/Transforms/SideEffectsInterface.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallBitVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/Debug.h"
 
 using namespace mlir;
@@ -1459,12 +1461,47 @@ struct AffineForOpBoundCanonicalizer : public OpRewritePattern<AffineForOp> {
   }
 };
 
+// This is a pattern to simplify to unit stride in simple cases.
+struct AffineStrideNormalizer : public OpRewritePattern<AffineForOp> {
+  using OpRewritePattern<AffineForOp>::OpRewritePattern;
+
+  PatternMatchResult matchAndRewrite(AffineForOp forOp,
+                                     PatternRewriter &rewriter) const override {
+    SmallVector<Value *, 4> lbOperands(forOp.getLowerBoundOperands());
+    SmallVector<Value *, 4> ubOperands(forOp.getUpperBoundOperands());
+
+    int64_t step = forOp.getStep();
+
+    // TODO: keeping it very simple.
+    if (step == 1 || !forOp.hasConstantBounds())
+      return matchFailure();
+
+    int64_t lb = forOp.getConstantLowerBound();
+    int64_t ub = forOp.getConstantUpperBound();
+
+    forOp.setStep(1);
+    forOp.setConstantUpperBound(lb + mlir::ceilDiv(ub - lb, step));
+
+    OpBuilder b(&forOp.getBody()->front());
+    auto d0 = getAffineDimExpr(0, b.getContext());
+    auto ivScaleUp = b.create<AffineApplyOp>(
+      forOp.getLoc(), AffineMap::get(1, 0, d0 * step), forOp.getInductionVar());
+
+    SmallPtrSet<Operation *, 1> exceptions = {ivScaleUp};
+    replaceAllUsesExcept(forOp.getInductionVar(), ivScaleUp, exceptions);
+
+    rewriter.updatedRootInPlace(forOp);
+    return matchSuccess();
+  }
+};
+
 } // end anonymous namespace
 
 void AffineForOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
                                               MLIRContext *context) {
   results.insert<AffineForEmptyLoopFolder, AffineForOpBoundFolder,
-                 AffineForOpBoundCanonicalizer>(context);
+                 AffineForOpBoundCanonicalizer, AffineStrideNormalizer>(
+      context);
 }
 
 AffineBound AffineForOp::getLowerBound() {

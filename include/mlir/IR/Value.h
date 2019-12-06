@@ -161,6 +161,11 @@ private:
   Operation *const owner;
 };
 
+// Replaces all uses of `orig` with `replacement` except if the user is listed
+// in `exceptions`.
+void replaceAllUsesExcept(Value *orig, Value *replacement,
+                          const SmallPtrSetImpl<Operation *> &exceptions);
+
 } // namespace mlir
 
 #endif

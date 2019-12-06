@@ -57,6 +57,9 @@ llvm::Optional<uint64_t> getConstantTripCount(AffineForOp forOp);
 /// this method is thus able to determine non-trivial divisors.
 uint64_t getLargestDivisorOfTripCount(AffineForOp forOp);
 
+template <typename LoadOrStoreOp>
+bool isInvariantAccess(LoadOrStoreOp memOp, AffineForOp forOp);
+
 /// Given an induction variable `iv` of type AffineForOp and `indices` of type
 /// IndexType, returns the set of `indices` that are independent of `iv`.
 ///
@@ -77,6 +80,10 @@ using VectorizableLoopFun = std::function<bool(AffineForOp)>;
 /// TODO(ntv): relax the no-conditionals restriction
 bool isVectorizableLoopBody(AffineForOp loop,
                             NestedPattern &vectorTransferMatcher);
+
+template <typename LoadOrStoreOp>
+bool isContiguousAccess(Value *iv, LoadOrStoreOp memoryOp,
+                               int *memRefDim);
 
 /// Checks whether the loop is structurally vectorizable and that all the LoadOp
 /// and StoreOp matched have access indexing functions that are are either:

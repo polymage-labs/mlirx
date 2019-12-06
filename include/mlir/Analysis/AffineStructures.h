@@ -788,15 +788,17 @@ private:
 AffineExpr simplifyAffineExpr(AffineExpr expr, unsigned numDims,
                               unsigned numSymbols);
 
-/// Flattens 'expr' into 'flattenedExpr'. Returns failure if 'expr' could not be
-/// flattened (i.e., semi-affine is not yet handled). 'cst' contains constraints
-/// that connect newly introduced local identifiers to existing dimensional and
-/// symbolic identifiers. See documentation for AffineExprFlattener on how
-/// mod's and div's are flattened.
+/// Flattens 'expr' into 'flattenedExpr', which contains the coefficients of the
+/// dimensions, symbols, and additional variables that represent floor divisions
+/// of dimensions, symbols, and in turn other floor divisions.  Returns failure
+/// if 'expr' could not be flattened (i.e., semi-affine is not yet handled).
+/// 'cst' contains constraints that connect newly introduced local identifiers
+/// to existing dimensional and symbolic identifiers. See documentation for
+/// AffineExprFlattener on how mod's and div's are flattened.
 LogicalResult
 getFlattenedAffineExpr(AffineExpr expr, unsigned numDims, unsigned numSymbols,
                        llvm::SmallVectorImpl<int64_t> *flattenedExpr,
-                       FlatAffineConstraints *cst = nullptr);
+                       FlatAffineConstraints *cst);
 
 /// Flattens the result expressions of the map to their corresponding flattened
 /// forms and set in 'flattenedExprs'. Returns failure if any expression in the

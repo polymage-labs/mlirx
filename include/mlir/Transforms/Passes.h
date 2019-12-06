@@ -44,7 +44,10 @@ std::unique_ptr<Pass> createCSEPass();
 /// Creates a pass to vectorize loops, operations and data types using a
 /// target-independent, n-D super-vector abstraction.
 std::unique_ptr<OpPassBase<FuncOp>>
-createVectorizePass(llvm::ArrayRef<int64_t> virtualVectorSize);
+createSuperVectorizePass(llvm::ArrayRef<int64_t> virtualVectorSize);
+
+/// Creates a pass to vectorize affine loops (the new one).
+std::unique_ptr<OpPassBase<FuncOp>> createAffineVectorizePass();
 
 /// Creates a pass to allow independent testing of vectorizer functionality with
 /// FileCheck.

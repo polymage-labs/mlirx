@@ -198,6 +198,11 @@ TileLoops extractFixedOuterLoops(loop::ForOp rootFOrOp,
 /// independent of any loop induction variable involved in the nest.
 void coalesceLoops(MutableArrayRef<loop::ForOp> loops);
 
+/// Vectorizes a loop (either outer or inner, with a perfect or imperfectly
+/// nested body).
+LogicalResult loopVectorize(AffineForOp forOp,
+                            DenseMap<Value *, Value *> *vecMemRefs = nullptr);
+
 /// Maps `forOp` for execution on a parallel grid of virtual `processorIds` of
 /// size given by `numProcessors`. This is achieved by embedding the SSA values
 /// corresponding to `processorIds` and `numProcessors` into the bounds and step

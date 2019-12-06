@@ -197,6 +197,40 @@ static bool isAccessIndexInvariant(Value *iv, Value *index) {
   return !(AffineValueMap(composeOp).isFunctionOf(0, iv));
 }
 
+/// Checks if an affine load or store access depends on `forOp'. This also
+/// transitively checks if the load/store is dependent on another loop IV which in
+/// turn uses `forOp` is its loop bounds.
+//
+/// Pre-requisite: Loop bounds should be in canonical form.
+template <typename LoadOrStoreOp>
+bool mlir::isInvariantAccess(LoadOrStoreOp memOp, AffineForOp forOp) {
+
+  for (auto *operand : memOp.getMapOperands()) {
+    if (!isAccessIndexInvariant(forOp.getInductionVar(), operand)) {
+      return false;
+    }
+  }
+  // Check whether other for op that use this IV as a bound operand impact the
+  // access.
+  DenseSet<Operation *> depForOps;
+  for (auto &use : forOp.getInductionVar()->getUses()) {
+    if (auto depForOp = dyn_cast<AffineForOp>(use.getOwner()))
+      depForOps.insert(depForOp.getOperation());
+  }
+
+  // TODO/FIXME: assert if affine for op bounds are in canonical form.
+  for (auto depForOp : depForOps) {
+    if (!isInvariantAccess(memOp, cast<AffineForOp>(depForOp)))
+      return false;
+  }
+
+  return true;
+}
+
+// Explicitly instantiate the template so that the compiler knows we need them.
+template bool mlir::isInvariantAccess(AffineLoadOp loadOp, AffineForOp);
+template bool mlir::isInvariantAccess(AffineStoreOp loadOp, AffineForOp);
+
 llvm::DenseSet<Value *>
 mlir::getInvariantAccesses(Value *iv, llvm::ArrayRef<Value *> indices) {
   llvm::DenseSet<Value *> res;
@@ -227,10 +261,10 @@ mlir::getInvariantAccesses(Value *iv, llvm::ArrayRef<Value *> indices) {
 /// Returns false if the MemRef has a non-identity layoutMap or more than 1
 /// layoutMap. This is conservative.
 ///
-// TODO(ntv): check strides.
+// TODO(mlir-team): checks for positive stride alone.
 template <typename LoadOrStoreOp>
-static bool isContiguousAccess(Value *iv, LoadOrStoreOp memoryOp,
-                               int *memRefDim) {
+bool mlir::isContiguousAccess(Value *iv, LoadOrStoreOp memoryOp,
+                              int *memRefDim) {
   static_assert(std::is_same<LoadOrStoreOp, AffineLoadOp>::value ||
                     std::is_same<LoadOrStoreOp, AffineStoreOp>::value,
                 "Must be called on either const LoadOp & or const StoreOp &");
@@ -248,29 +282,37 @@ static bool isContiguousAccess(Value *iv, LoadOrStoreOp memoryOp,
     return memoryOp.emitError("NYI: non-trivial layoutMap"), false;
   }
 
+  Optional<int64_t> stride;
   int uniqueVaryingIndexAlongIv = -1;
   auto accessMap = memoryOp.getAffineMap();
-  SmallVector<Value *, 4> mapOperands(memoryOp.getMapOperands());
-  unsigned numDims = accessMap.getNumDims();
   for (unsigned i = 0, e = memRefType.getRank(); i < e; ++i) {
     // Gather map operands used result expr 'i' in 'exprOperands'.
     SmallVector<Value *, 4> exprOperands;
     auto resultExpr = accessMap.getResult(i);
-    resultExpr.walk([&](AffineExpr expr) {
-      if (auto dimExpr = expr.dyn_cast<AffineDimExpr>())
-        exprOperands.push_back(mapOperands[dimExpr.getPosition()]);
-      else if (auto symExpr = expr.dyn_cast<AffineSymbolExpr>())
-        exprOperands.push_back(mapOperands[numDims + symExpr.getPosition()]);
-    });
-    // Check access invariance of each operand in 'exprOperands'.
-    for (auto *exprOperand : exprOperands) {
-      if (!isAccessIndexInvariant(iv, exprOperand)) {
-        if (uniqueVaryingIndexAlongIv != -1) {
-          // 2+ varying indices -> do not vectorize along iv.
-          return false;
-        }
-        uniqueVaryingIndexAlongIv = i;
+
+    SmallVector<int64_t, 4> flat;
+    getFlattenedAffineExpr(resultExpr, accessMap.getNumDims(),
+                           accessMap.getNumSymbols(), &flat);
+
+    unsigned j = 0;
+    int pos = -1;
+    for (auto *mapOperand : memoryOp.getMapOperands()) {
+      assert((isValidSymbol(mapOperand) || isForInductionVar(mapOperand))
+             && "loadOp not canonicalized");
+      if (mapOperand == iv)
+        pos = j;
+      j++;
+    }
+
+    if (pos != -1 && flat[pos] > 0) {
+      if (uniqueVaryingIndexAlongIv != -1) {
+        // 2+ varying indices -> do not vectorize along iv.
+        return false;
       }
+      if (flat[pos] > 1)
+        // High stride - not contiguous.
+        return false;
+      uniqueVaryingIndexAlongIv = i;
     }
   }
 
@@ -278,6 +320,26 @@ static bool isContiguousAccess(Value *iv, LoadOrStoreOp memoryOp,
     *memRefDim = -1;
   else
     *memRefDim = memRefType.getRank() - (uniqueVaryingIndexAlongIv + 1);
+
+  // Check whether other for op that use this IV as a bound operand impact the
+  // access.
+  DenseSet<Operation *> depForOps;
+  for (auto &use : iv->getUses()) {
+    if (auto depForOp = dyn_cast<AffineForOp>(use.getOwner()))
+      depForOps.insert(depForOp.getOperation());
+  }
+  // FIXME: check whether affine for ops' bounds are canonicalized.
+  for (auto depForOp : depForOps) {
+    int depMemRefDim;
+    if (!isContiguousAccess(cast<AffineForOp>(depForOp).getInductionVar(),
+                            memoryOp, &depMemRefDim))
+      return false;
+    if (*memRefDim == -1)
+      *memRefDim = depMemRefDim;
+    else if (*memRefDim != depMemRefDim)
+      return false;
+  }
+
   return true;
 }
 
