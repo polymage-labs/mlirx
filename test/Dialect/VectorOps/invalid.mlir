@@ -9,6 +9,20 @@ func @broadcast_rank_too_high(%arg0: vector<4x4xf32>) {
 
 // -----
 
+func @broadcast_dim1_mismatch(%arg0: vector<7xf32>) {
+  // expected-error@+1 {{vector.broadcast' op dimension mismatch (7 vs. 3)}}
+  %1 = vector.broadcast %arg0 : vector<7xf32> to vector<3xf32>
+}
+
+// -----
+
+func @broadcast_dim2_mismatch(%arg0: vector<4x8xf32>) {
+  // expected-error@+1 {{vector.broadcast' op dimension mismatch (4 vs. 1)}}
+  %1 = vector.broadcast %arg0 : vector<4x8xf32> to vector<1x8xf32>
+}
+
+// -----
+
 func @extract_element_vector_type(%arg0: index) {
   // expected-error@+1 {{expected vector type}}
   %1 = vector.extractelement %arg0[] : index
@@ -583,12 +597,53 @@ func @contraction(%arg0: vector<7x8x16x15xf32>, %arg1: vector<8x16x7x5xf32>,
 func @contraction(%arg0: vector<7x8x16x15xf32>, %arg1: vector<8x16x7x5xf32>,
                   %arg2: vector<8x15x5xf32>, %arg3 :  vector<8x15x8x5xf32>,
                   %arg4 : index) {
-  %lhs_mask = vector.make_index_tuple %arg4, %arg4, %arg4, %arg4
-    : tuple<index, index, index, index>
-  %rhs_mask = vector.make_index_tuple %arg4, %arg4, %arg4, %arg4
-    : tuple<index, index, index, index>
+  %lhs_mask = vector.constant_mask [7, 8, 16, 15] : vector<7x8x16x15xi1>
+  %rhs_mask = vector.constant_mask [8, 16, 7, 5] : vector<8x16x7x5xi1>
   // expected-error@+1 {{expected zero or exactly 2 vector mask operands}}
   %0 = vector.contract #contraction_trait %arg0, %arg1, %arg2, %lhs_mask
       : vector<7x8x16x15xf32>, vector<8x16x7x5xf32> into vector<8x15x5xf32>
+  return
+}
+
+// -----
+
+func @create_mask() {
+  %c2 = constant 2 : index
+  %c3 = constant 3 : index
+  // expected-error@+1 {{must specify an operand for each result vector dimension}}
+  %0 = vector.create_mask %c3, %c2 : vector<4x3x7xi1>
+  return
+}
+
+
+// -----
+
+func @constant_mask() {
+  // expected-error@+1 {{must specify array attr of size equal vector result rank}}
+  %0 = vector.constant_mask [3, 2, 7] : vector<4x3xi1>
+  return
+}
+
+// -----
+
+func @constant_mask_out_of_bounds() {
+  // expected-error@+1 {{array attr of size out of bounds of vector result dimension size}}
+  %0 = vector.constant_mask [-1, 2] : vector<4x3xi1>
+  return
+}
+
+// -----
+
+func @constant_mask_out_of_bounds() {
+  // expected-error@+1 {{array attr of size out of bounds of vector result dimension size}}
+  %0 = vector.constant_mask [3, 4] : vector<4x3xi1>
+  return
+}
+
+// -----
+
+func @constant_mask_with_zero_mask_dim_size() {
+  // expected-error@+1 {{expected all mask dim sizes to be zeros, as a result of conjunction with zero mask dim}}
+  %0 = vector.constant_mask [0, 2] : vector<4x3xi1>
   return
 }

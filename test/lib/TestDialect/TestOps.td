@@ -92,6 +92,12 @@ def SymbolScopeOp : TEST_Op<"symbol_scope",
   let regions = (region SizedRegion<1>:$region);
 }
 
+def SymbolTableRegionOp : TEST_Op<"symbol_table_region", [SymbolTable]> {
+  let summary =  "operation which defines a new symbol table without a "
+                 "restriction on a terminator";
+  let regions = (region SizedRegion<1>:$region);
+}
+
 //===----------------------------------------------------------------------===//
 // Test Operands
 //===----------------------------------------------------------------------===//
@@ -478,6 +484,18 @@ def : Pat<(OpH $input), (OpI $input)>;
 def OpJ : TEST_Op<"op_j">, Arguments<(ins)>, Results<(outs I32)>;
 def OpK : TEST_Op<"op_k">, Arguments<(ins)>, Results<(outs I32)>;
 def : Pat<(OpJ), (OpK)>;
+
+// Test `$_` for ignoring op argument match.
+def TestIgnoreArgMatchSrcOp : TEST_Op<"ignore_arg_match_src"> {
+  let arguments = (ins
+    AnyType:$a, AnyType:$b, AnyType:$c,
+    AnyAttr:$d, AnyAttr:$e, AnyAttr:$f);
+}
+def TestIgnoreArgMatchDstOp : TEST_Op<"ignore_arg_match_dst"> {
+  let arguments = (ins AnyType:$b, AnyAttr:$f);
+}
+def : Pat<(TestIgnoreArgMatchSrcOp $_, $b, I32, I64Attr:$_, $_, $f),
+          (TestIgnoreArgMatchDstOp $b, $f)>;
 
 def OpInterleavedOperandAttribute1 : TEST_Op<"interleaved_operand_attr1"> {
   let arguments = (ins

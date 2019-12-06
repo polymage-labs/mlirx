@@ -1,4 +1,4 @@
-//===- FunctionSupport.cpp - Utility types for function-like ops ----------===//
+//===- FunctionImplementation.cpp - Utilities for function-like ops -------===//
 //
 // Copyright 2019 The MLIR Authors.
 //
@@ -15,9 +15,9 @@
 // limitations under the License.
 // =============================================================================
 
-#include "mlir/IR/FunctionSupport.h"
+#include "mlir/IR/FunctionImplementation.h"
 #include "mlir/IR/Builders.h"
-#include "mlir/IR/OpImplementation.h"
+#include "mlir/IR/FunctionSupport.h"
 #include "mlir/IR/SymbolTable.h"
 
 using namespace mlir;
@@ -71,7 +71,8 @@ parseArgumentList(OpAsmParser &parser, bool allowVariadic,
   };
 
   // Parse the function arguments.
-  if (parser.parseOptionalRParen()) {
+  isVariadic = false;
+  if (failed(parser.parseOptionalRParen())) {
     do {
       unsigned numTypedArguments = argTypes.size();
       if (parseArgument())

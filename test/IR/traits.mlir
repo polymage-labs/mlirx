@@ -218,6 +218,17 @@ func @foo() {
 
 // -----
 
+// Test that operation with the SymbolTable Trait fails with  too many blocks.
+// expected-error@+1 {{Operations with a 'SymbolTable' must have exactly one block}}
+"test.symbol_scope"() ({
+  ^entry:
+    "test.finish" () : () -> ()
+  ^other:
+    "test.finish" () : () -> ()
+}) : () -> ()
+
+// -----
+
 func @failedMissingOperandSizeAttr(%arg: i32) {
   // expected-error @+1 {{requires 1D vector attribute 'operand_segment_sizes'}}
   "test.attr_sized_operands"(%arg, %arg, %arg, %arg) : (i32, i32, i32, i32) -> ()
@@ -254,7 +265,7 @@ func @failedOperandSizeAttrWrongTotalSize(%arg: i32) {
 // -----
 
 func @failedOperandSizeAttrWrongCount(%arg: i32) {
-  // expected-error @+1 {{'operand_segment_sizes' attribute for specifiying operand segments must have 4 elements}}
+  // expected-error @+1 {{'operand_segment_sizes' attribute for specifying operand segments must have 4 elements}}
   "test.attr_sized_operands"(%arg, %arg, %arg, %arg) {operand_segment_sizes = dense<[2, 1, 1]>: vector<3xi32>} : (i32, i32, i32, i32) -> ()
 }
 
@@ -304,7 +315,7 @@ func @failedResultSizeAttrWrongTotalSize() {
 // -----
 
 func @failedResultSizeAttrWrongCount() {
-  // expected-error @+1 {{'result_segment_sizes' attribute for specifiying result segments must have 4 elements}}
+  // expected-error @+1 {{'result_segment_sizes' attribute for specifying result segments must have 4 elements}}
   %0:4 = "test.attr_sized_results"() {result_segment_sizes = dense<[2, 1, 1]>: vector<3xi32>} : () -> (i32, i32, i32, i32)
 }
 

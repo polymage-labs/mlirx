@@ -1,4 +1,5 @@
 // RUN: mlir-opt -convert-std-to-llvm %s | FileCheck %s
+// RUN: mlir-opt -convert-std-to-llvm -convert-std-to-llvm-use-alloca=1 %s | FileCheck %s --check-prefix=ALLOCA
 
 // CHECK-LABEL: func @check_arguments(%arg0: !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }*">, %arg1: !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }*">, %arg2: !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }*">)
 func @check_arguments(%static: memref<10x20xf32>, %dynamic : memref<?x?xf32>, %mixed : memref<10x?xf32>) {
@@ -20,6 +21,7 @@ func @check_static_return(%static : memref<32x18xf32>) -> memref<32x18xf32> {
 }
 
 // CHECK-LABEL: func @zero_d_alloc() -> !llvm<"{ float*, float*, i64 }"> {
+// ALLOCA-LABEL: func @zero_d_alloc() -> !llvm<"{ float*, float*, i64 }"> {
 func @zero_d_alloc() -> memref<f32> {
 // CHECK-NEXT:  llvm.mlir.constant(1 : index) : !llvm.i64
 // CHECK-NEXT:  %[[null:.*]] = llvm.mlir.null : !llvm<"float*">
@@ -34,6 +36,10 @@ func @zero_d_alloc() -> memref<f32> {
 // CHECK-NEXT:  llvm.insertvalue %[[ptr]], %{{.*}}[1] : !llvm<"{ float*, float*, i64 }">
 // CHECK-NEXT:  %[[c0:.*]] = llvm.mlir.constant(0 : index) : !llvm.i64
 // CHECK-NEXT:  llvm.insertvalue %[[c0]], %{{.*}}[2] : !llvm<"{ float*, float*, i64 }">
+
+// ALLOCA-NOT: malloc
+//     ALLOCA: alloca
+// ALLOCA-NOT: malloc
   %0 = alloc() : memref<f32>
   return %0 : memref<f32>
 }
@@ -384,6 +390,31 @@ func @memref_shape_cast(%M : memref<42x16xf32>) -> memref<42xvector<16xf32>> {
 // CHECK-NEXT:   llvm.return %13 : !llvm<"{ <16 x float>*, <16 x float>*, i64, [1 x i64], [1 x i64] }">
   %MV = memref_shape_cast %M : memref<42x16xf32> to memref<42xvector<16xf32>>
   return %MV : memref<42xvector<16xf32>>
+}
+
+// CHECK-LABEL: func @memref_cast_ranked_to_unranked
+func @memref_cast_ranked_to_unranked(%arg : memref<42x2x?xf32>) {
+// CHECK-NEXT: %[[ld:.*]] = llvm.load %{{.*}} : !llvm<"{ float*, float*, i64, [3 x i64], [3 x i64] }*">
+// CHECK-DAG:  %[[c:.*]] = llvm.mlir.constant(1 : index) : !llvm.i64
+// CHECK-DAG:  %[[p:.*]] = llvm.alloca %[[c]] x !llvm<"{ float*, float*, i64, [3 x i64], [3 x i64] }"> : (!llvm.i64) -> !llvm<"{ float*, float*, i64, [3 x i64], [3 x i64] }*">
+// CHECK-DAG:  llvm.store %[[ld]], %[[p]] : !llvm<"{ float*, float*, i64, [3 x i64], [3 x i64] }*">
+// CHECK-DAG:  %[[p2:.*]] = llvm.bitcast %2 : !llvm<"{ float*, float*, i64, [3 x i64], [3 x i64] }*"> to !llvm<"i8*">
+// CHECK-DAG:  %[[r:.*]] = llvm.mlir.constant(3 : i64) : !llvm.i64
+// CHECK    :  llvm.mlir.undef : !llvm<"{ i64, i8* }">
+// CHECK-DAG:  llvm.insertvalue %[[r]], %{{.*}}[0] : !llvm<"{ i64, i8* }">
+// CHECK-DAG:  llvm.insertvalue %[[p2]], %{{.*}}[1] : !llvm<"{ i64, i8* }">
+  %0 = memref_cast %arg : memref<42x2x?xf32> to memref<*xf32>
+  return
+}
+
+// CHECK-LABEL: func @memref_cast_unranked_to_ranked
+func @memref_cast_unranked_to_ranked(%arg : memref<*xf32>) {
+// CHECK: %[[ld:.*]] = llvm.load %{{.*}} : !llvm<"{ i64, i8* }*">
+// CHECK-NEXT: %[[p:.*]] = llvm.extractvalue %[[ld]][1] : !llvm<"{ i64, i8* }">
+// CHECK-NEXT: llvm.bitcast %[[p]] : !llvm<"i8*"> to !llvm<"{ float*, float*, i64, [4 x i64], [4 x i64] }*">
+  %0 = memref_cast %arg : memref<*xf32> to memref<?x?x10x2xf32>
+  return
+>>>>>>> origin/master
 }
 
 // CHECK-LABEL: func @mixed_memref_dim(%arg0: !llvm<"{ float*, float*, i64, [5 x i64], [5 x i64] }*">) {
