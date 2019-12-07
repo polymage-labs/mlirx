@@ -459,6 +459,73 @@ void AllocOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
 }
 
 //===----------------------------------------------------------------------===//
+// AllocaOp
+//===----------------------------------------------------------------------===//
+
+static void print(OpAsmPrinter &p, AllocaOp op) {
+  p << "alloca";
+
+  // Print dynamic dimension operands.
+  MemRefType type = op.getType();
+  printDimAndSymbolList(op.operand_begin(), op.operand_end(),
+                        type.getNumDynamicDims(), p);
+  p.printOptionalAttrDict(op.getAttrs(), /*elidedAttrs=*/{"map"});
+  p << " : " << type;
+}
+
+static ParseResult parseAllocaOp(OpAsmParser &parser, OperationState &result) {
+  MemRefType type;
+
+  // Parse the dimension operands and optional symbol operands, followed by a
+  // memref type.
+  unsigned numDimOperands;
+  if (parseDimAndSymbolList(parser, result.operands, numDimOperands) ||
+      parser.parseOptionalAttrDict(result.attributes) ||
+      parser.parseColonType(type))
+    return failure();
+
+  // Check numDynamicDims against number of question marks in memref type.
+  // Note: this check remains here (instead of in verify()), because the
+  // partition between dim operands and symbol operands is lost after parsing.
+  // Verification still checks that the total number of operands matches
+  // the number of symbols in the affine map, plus the number of dynamic
+  // dimensions in the memref.
+  if (numDimOperands != type.getNumDynamicDims())
+    return parser.emitError(parser.getNameLoc())
+           << "dimension operand count does not equal memref dynamic dimension "
+              "count";
+  result.types.push_back(type);
+  return success();
+}
+
+static LogicalResult verify(AllocaOp op) {
+  auto memRefType = op.getResult()->getType().dyn_cast<MemRefType>();
+  if (!memRefType)
+    return op.emitOpError("result must be a memref");
+
+  unsigned numSymbols = 0;
+  if (!memRefType.getAffineMaps().empty()) {
+    // Store number of symbols used in affine map (used in subsequent check).
+    AffineMap affineMap = memRefType.getAffineMaps()[0];
+    numSymbols = affineMap.getNumSymbols();
+  }
+
+  // Check that the total number of operands matches the number of symbols in
+  // the affine map, plus the number of dynamic dimensions specified in the
+  // memref type.
+  unsigned numDynamicDims = memRefType.getNumDynamicDims();
+  if (op.getNumOperands() != numDynamicDims + numSymbols)
+    return op.emitOpError(
+        "operand count does not equal dimension plus symbol operand count");
+
+  // Verify that all operands are of type Index.
+  for (auto operandType : op.getOperandTypes())
+    if (!operandType.isIndex())
+      return op.emitOpError("requires operands to be of type Index");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // BranchOp
 //===----------------------------------------------------------------------===//
 
