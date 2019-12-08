@@ -1945,7 +1945,8 @@ uint64_t mlir::affineDataCopyGenerate(Block::iterator begin,
 
     // Compute the MemRefRegion accessed.
     auto region = std::make_unique<MemRefRegion>(opInst->getLoc());
-    if (failed(region->compute(opInst, copyDepth))) {
+    if (failed(region->compute(opInst, copyDepth, /*sliceState=*/nullptr,
+                               /*addMemRefDimBounds=*/false))) {
       LLVM_DEBUG(llvm::dbgs()
                  << "Error obtaining memory region: semi-affine maps?\n");
       LLVM_DEBUG(llvm::dbgs() << "over-approximating to the entire memref\n");
