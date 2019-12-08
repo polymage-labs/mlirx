@@ -1,4 +1,4 @@
-//===- MemRefDataFlowOpt.cpp - MemRef DataFlow Optimization pass ------ -*-===//
+//===- AffineScalarReplacement.cpp - Scalar Replacement pass ---------- -*-===//
 //
 // Copyright 2019 The MLIR Authors.
 //
@@ -15,8 +15,10 @@
 // limitations under the License.
 // =============================================================================
 //
-// This file implements a pass to forward memref stores to loads, thereby
-// potentially getting rid of intermediate memref's entirely.
+// This file implements a pass to replace affine memref accesses with scalars.
+// This subsumes store to load forwarding, hoisting invariant load's and stores
+// out of loops, and eliminating redundant load's. As a result, in some cases,
+// intermediate memref's can be completely be eliminated.
 // TODO(mlir-team): In the future, similar techniques could be used to eliminate
 // dead memref store's and perform more complex forwarding when support for
 // SSA scalars live out of 'affine.for'/'affine.if' statements is available.
@@ -28,11 +30,12 @@
 #include "mlir/Dialect/AffineOps/AffineOps.h"
 #include "mlir/Dialect/StandardOps/Ops.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/LoopUtils.h"
 #include "mlir/Transforms/Passes.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include <algorithm>
 
-#define DEBUG_TYPE "memref-dataflow-opt"
+#define DEBUG_TYPE "affine-scalrep"
 
 using namespace mlir;
 
@@ -70,9 +73,10 @@ namespace {
 // currently only eliminates the stores only if no other loads/uses (other
 // than dealloc) remain.
 //
-struct MemRefDataFlowOpt : public FunctionPass<MemRefDataFlowOpt> {
+struct AffineScalarReplacement : public FunctionPass<AffineScalarReplacement> {
   void runOnFunction() override;
 
+  bool forwardStoreToLoad(FuncOp f);
   void forwardStoreToLoad(AffineLoadOp loadOp);
 
   // A list of memref's that are potentially dead / could be eliminated.
@@ -88,13 +92,13 @@ struct MemRefDataFlowOpt : public FunctionPass<MemRefDataFlowOpt> {
 
 /// Creates a pass to perform optimizations relying on memref dataflow such as
 /// store to load forwarding, elimination of dead stores, and dead allocs.
-std::unique_ptr<OpPassBase<FuncOp>> mlir::createMemRefDataFlowOptPass() {
-  return std::make_unique<MemRefDataFlowOpt>();
+std::unique_ptr<OpPassBase<FuncOp>> mlir::createAffineScalarReplacementPass() {
+  return std::make_unique<AffineScalarReplacement>();
 }
 
 // This is a straightforward implementation not optimized for speed. Optimize
 // if needed.
-void MemRefDataFlowOpt::forwardStoreToLoad(AffineLoadOp loadOp) {
+void AffineScalarReplacement::forwardStoreToLoad(AffineLoadOp loadOp) {
   Operation *loadOpInst = loadOp.getOperation();
 
   // First pass over the use list to get minimum number of surrounding
@@ -188,14 +192,8 @@ void MemRefDataFlowOpt::forwardStoreToLoad(AffineLoadOp loadOp) {
   loadOpsToErase.push_back(loadOpInst);
 }
 
-void MemRefDataFlowOpt::runOnFunction() {
-  // Only supports single block functions at the moment.
-  FuncOp f = getFunction();
-  if (f.getBlocks().size() != 1) {
-    markAllAnalysesPreserved();
-    return;
-  }
-
+/// Returns true if any forwarding happened.
+bool AffineScalarReplacement::forwardStoreToLoad(FuncOp f) {
   domInfo = &getAnalysis<DominanceInfo>();
   postDomInfo = &getAnalysis<PostDominanceInfo>();
 
@@ -230,7 +228,26 @@ void MemRefDataFlowOpt::runOnFunction() {
       user->erase();
     defInst->erase();
   }
+
+  return loadOpsToErase.size() > 0;
 }
 
-static PassRegistration<MemRefDataFlowOpt>
-    pass("memref-dataflow-opt", "Perform store/load forwarding for memrefs");
+void AffineScalarReplacement::runOnFunction() {
+  // Only supports single block functions at the moment.
+  FuncOp f = getFunction();
+  if (f.getBlocks().size() != 1) {
+    markAllAnalysesPreserved();
+    return;
+  }
+
+  // Replace accesses to invariant load/store's and multiple redundant loads
+  // by scalars.
+  f.walk([&](AffineForOp forOp) { scalarReplace(forOp); });
+
+  // Store to load forwarding
+  forwardStoreToLoad(f);
+}
+
+static PassRegistration<AffineScalarReplacement>
+    pass("affine-scalrep",
+         "Perform scalar replacement of affine memrefs accesses");

@@ -126,8 +126,9 @@ std::unique_ptr<OpPassBase<FuncOp>> createAffineDataCopyGenerationPass(
     uint64_t fastMemCapacityBytes = std::numeric_limits<uint64_t>::max());
 
 /// Creates a pass to perform optimizations relying on memref dataflow such as
-/// store to load forwarding, elimination of dead stores, and dead allocs.
-std::unique_ptr<OpPassBase<FuncOp>> createMemRefDataFlowOptPass();
+/// store to load forwarding, scalar replacement of memref accesses, elimination
+/// of dead stores, and dead allocs.
+std::unique_ptr<OpPassBase<FuncOp>> createAffineScalarReplacementPass();
 
 /// Creates a pass to strip debug information from a function.
 std::unique_ptr<OpPassBase<FuncOp>> createStripDebugInfoPass();

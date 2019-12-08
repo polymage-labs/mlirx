@@ -1116,6 +1116,265 @@ void mlir::mapLoopToProcessorIds(loop::ForOp forOp,
   forOp.setStep(step);
 }
 
+/// Returns true if the load/store associated with `acc' can be hoisted out of
+/// `forOp' (without considering hoisting of the op creating the memref.
+static bool isHoistableLoadStore(const MemRefAccess &acc, AffineForOp forOp) {
+  Value *memref = acc.memref;
+
+  // If the memref is defined in the same for op, can't hoist.
+  if (memref->getDefiningOp() &&
+      memref->getDefiningOp()->getBlock() == forOp.getBody())
+    return false;
+
+  AffineValueMap vmap;
+  acc.getAccessMap(&vmap);
+  // Check if the access is invariant with respect to this forOp.
+  return llvm::find(vmap.getOperands(), forOp.getInductionVar()) ==
+         vmap.getOperands().end();
+}
+
+/// Returns true if no other affine for op's are nested within.
+static bool isInnermostAffineForOp(AffineForOp forOp) {
+  // Only for the innermost affine.for op's.
+  bool isInnermost = true;
+  forOp.walk([&](AffineForOp thisForOp) {
+    isInnermost = (thisForOp == forOp);
+    return WalkResult::interrupt();
+  });
+  return isInnermost;
+}
+
+/// Returns true if the two memref access provided can't be determined to be
+/// either equivalent to and can't be determined to be distinct from each other
+/// at compile time; false otherwise. Note that accesses are compared post full
+/// composition - so all information up until provenance is captured.
+//  Ex: %A[%i][%j], %A[%i][%j] will return true.
+//      %A[%i][%j], %A[%i + 1][%j] will return true (since it's known they are
+//                                                  different)
+//      %A[symbol(%M)], %A[symbol(%M)] will return true.
+//      %A[%i][%j], %A[%j][%i] will return false.
+//      %A[%M], %A[%N] will return false.
+static bool mayBeEqual(const MemRefAccess &A, const MemRefAccess &B) {
+  if (A.memref != B.memref)
+    return false;
+
+  AffineValueMap diff, AMap, BMap;
+  A.getAccessMap(&AMap);
+  B.getAccessMap(&BMap);
+
+  AffineValueMap::difference(AMap, BMap, &diff);
+  // return !diff.getAffineMap().getResult(0).isa<AffineConstantExpr>();
+  return llvm::any_of(diff.getAffineMap().getResults(), [](AffineExpr e) {
+    return !e.isa<AffineConstantExpr>();
+  });
+}
+
+// TODO: only works on innermost loops.
+// TODO: does not check for escaping memrefs.
+// TODO: only hoists one loop up when it does.
+void mlir::scalarReplace(AffineForOp forOp) {
+  FuncOp f = forOp.getOperation()->getParentOfType<FuncOp>();
+  // Only innermost loops for now.
+  if (!isInnermostAffineForOp(forOp))
+    return;
+
+  // Constant zero index to avoid duplicates.
+  OpBuilder topBuilder(f.getBody());
+  Value *zeroIndex = topBuilder.create<ConstantIndexOp>(f.getLoc(), 0);
+
+  // Create groups of affine accesses such that each group of affine accesses
+  // all refers to the same memref location. It is not feasible to construct a
+  // key, but one can check if two affine references access the same element
+  // (for a given value of all outer IVs and parameters).
+  // TODO: this can be optimized using a disjoint set data structure (union
+  // find) if needed.
+  std::vector<SmallVector<MemRefAccess, 4>> accessSets;
+
+  LLVM_DEBUG(llvm::dbgs() << "COLLECTING ACCESS SETS\n";);
+  // Process all affine load and store ops.
+  forOp.walk([&](Operation *op) {
+    if (!isa<AffineLoadOp>(op) && !isa<AffineStoreOp>(op))
+      return;
+
+    MemRefAccess acc(op);
+
+    // Check if a group of equivalent accesses already exists.
+    const auto &en =
+        std::find_if(accessSets.begin(), accessSets.end(),
+                     [&](const SmallVector<MemRefAccess, 4> &accList) {
+                       assert(!accList.empty() && "expected non-empty");
+                       return (accList.front() == acc);
+                     });
+    if (en != accessSets.end()) {
+      // If the reference exists, add operation to that group.
+      en->push_back(acc);
+    } else {
+      // Create a new group otherwise.
+      accessSets.emplace_back(SmallVector<MemRefAccess, 4>{acc});
+    }
+  });
+
+  LLVM_DEBUG(llvm::dbgs() << accessSets.size()
+                          << " ACCESS SETS TO ITERATE THROUGH\n");
+
+  // Determine which groups are replacable by scalars. Iterate through the
+  // disjoint sets of memory accesses.
+  std::vector<bool> isScalarReplacable(accessSets.size(), false);
+  for (auto &en : llvm::enumerate(accessSets)) {
+    const auto &eqAccesses = en.value();
+    unsigned i = en.index();
+
+    // Find the first appearing op - the one that dominates everything else in
+    // the group: this is the part that needs to be extended to handle
+    // non-innermost loops since isBeforeInBlock can longer be used (instead,
+    // srcAppearsBeforeDstInCommonBlock is needed).
+    assert(!eqAccesses.empty() && "equivalence class can't be empty");
+    auto sampleMemOp = eqAccesses.front();
+
+    MemRefAccess acc(sampleMemOp);
+
+    bool containsStore = llvm::any_of(eqAccesses, [](const MemRefAccess &acc) {
+      return isa<AffineStoreOp>(acc.opInst);
+    });
+
+    if (!containsStore) {
+      // All subsequent loads can be replaced with the result of the first
+      // load, if stores in all other groups are provably distinct.
+      // Check if any of the other groups have a may conflict store.
+      if (llvm::any_of(
+              accessSets, [&](const SmallVector<MemRefAccess, 4> &accSet) {
+                if (llvm::all_of(accSet, [](const MemRefAccess &thisAcc) {
+                      return !isa<AffineStoreOp>(thisAcc.opInst);
+                    }))
+                  // None of them is a store op.
+                  return false;
+                return mayBeEqual(accSet.front(), acc);
+              })) {
+        continue;
+      }
+      isScalarReplacable[i] = true;
+      continue;
+    }
+
+    // One of the ops is a store.
+    // A replacement can only be performed if the memory op's in other group
+    // are known to be distinct from this.
+    if (llvm::any_of(accessSets,
+                     [&](const SmallVector<MemRefAccess, 4> &accList) {
+                       return mayBeEqual(acc, accList.front());
+                     })) {
+      continue;
+    }
+
+    // If one of the op's is a store, we will only do the replacement if the
+    // accesses are hoistable, and the replacement will be performed using a
+    // single element memref.
+
+    // We don't care about the case that's not hoistable for now, as
+    // forwardStoreToLoad already handles this.
+    if (isHoistableLoadStore(acc, forOp))
+      isScalarReplacable[i] = true;
+  }
+
+  LLVM_DEBUG(llvm::dbgs() << accessSets.size() << " ITERATING 1st PHASE END\n");
+
+  // Iterate through the disjoint sets of memory accesses.
+  for (auto &en : llvm::enumerate(accessSets)) {
+    if (!isScalarReplacable[en.index()])
+      continue;
+
+    const auto &eqAccesses = en.value();
+
+    // Find the first appearing op - the one that dominates everything else in
+    // the group: this is the part that needs to be extended to handle
+    // non-innermost loops since isBeforeInBlock can longer be used (instead,
+    // srcAppearsBeforeDstInCommonBlock is needed).
+    auto *firstMemOp =
+        std::min_element(eqAccesses.begin(), eqAccesses.end(),
+                         [](const MemRefAccess &a, const MemRefAccess &b) {
+                           return a.opInst->isBeforeInBlock(b.opInst);
+                         })
+            ->opInst;
+
+    MemRefAccess acc(firstMemOp);
+    AffineValueMap vMap;
+    acc.getAccessMap(&vMap);
+
+    MemRefType origMemrefType = acc.memref->getType().cast<MemRefType>();
+
+    bool containsStore = llvm::any_of(eqAccesses, [](const MemRefAccess &acc) {
+      return isa<AffineStoreOp>(acc.opInst);
+    });
+
+    if (!containsStore) {
+      // All ops in this equivalence class are loads.
+      Value *scalar;
+      bool hoistable = isHoistableLoadStore(acc, forOp);
+      if (hoistable) {
+        // Hoist the load; create the new load.
+        SmallVector<Value *, 4> operands;
+        operands.reserve(1 + vMap.getNumOperands());
+        operands.push_back(acc.memref);
+        operands.append(vMap.getOperands().begin(), vMap.getOperands().end());
+        // Insert right before the for op.
+        OpBuilder b(forOp.getOperation());
+        scalar = b.create<AffineLoadOp>(forOp.getLoc(), vMap.getAffineMap(),
+                                        operands);
+      } else {
+        scalar = cast<AffineLoadOp>(firstMemOp).getResult();
+      }
+      // Erase and replace all uses of existing load op's with the scalar.
+      for (auto it = hoistable ? eqAccesses.begin()
+                               : std::next(eqAccesses.begin());
+           it != eqAccesses.end();) {
+        auto loadOp = cast<AffineLoadOp>((*it++).opInst);
+        loadOp.getResult()->replaceAllUsesWith(scalar);
+        loadOp.erase();
+      }
+      continue;
+    }
+
+    // At least one of the ops is a store.
+    // Hoistable - create a single element memref.
+    OpBuilder b(forOp.getOperation());
+    auto singleEltMemRef = b.create<AllocaOp>(
+        forOp.getLoc(),
+        MemRefType::get(/*shape=*/{1}, origMemrefType.getElementType()));
+
+    // Load from the memref and store to the scalar (one element memref).
+    // %singleEltMemref[0] = %A[...];
+    SmallVector<Value *, 4> mapOperands(vMap.getOperands().begin(),
+                                        vMap.getOperands().end());
+    Value *scalar = b.create<AffineLoadOp>(forOp.getLoc(), acc.memref,
+                                           vMap.getAffineMap(), mapOperands);
+    SmallVector<Value *, 1> zeroOperand = {zeroIndex};
+    b.create<AffineStoreOp>(forOp.getLoc(), scalar, singleEltMemRef,
+                            zeroOperand);
+
+    // Replace all load/stores of original memref with %singleEltMemref[0].
+    SmallVector<AffineExpr, 1> resultExprs = {b.getAffineConstantExpr(0)};
+    for (auto &acc : eqAccesses) {
+      if (failed(replaceAllMemRefUsesWith(
+              acc.memref, singleEltMemRef, acc.opInst, {},
+              AffineMap::get(origMemrefType.getRank(), 0, resultExprs), {})))
+        assert(false && "unimplemented escaping uses");
+    }
+
+    // Create the epilogue that stores from the single elt memref back to
+    // the original, and dealloc the former.
+    // %A[...] = %singleEltMemRef[0]
+    b.setInsertionPoint(forOp.getOperation()->getBlock(),
+                        std::next(Block::iterator(forOp.getOperation())));
+    scalar =
+        b.create<AffineLoadOp>(forOp.getLoc(), singleEltMemRef, zeroOperand);
+    b.create<AffineStoreOp>(forOp.getLoc(), scalar, acc.memref,
+                            vMap.getAffineMap(), mapOperands);
+    // No need of a dealloc since we are using an alloca.
+  }
+
+  LLVM_DEBUG(llvm::dbgs() << "SCAL REP END\n");
+}
+
 /// Given a memref region, determine the lowest depth at which transfers can be
 /// placed for it, and return the corresponding block, start and end positions
 /// in the block for placing incoming (read) and outgoing (write) copies
