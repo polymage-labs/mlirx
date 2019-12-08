@@ -24,6 +24,7 @@
 #ifndef MLIR_TRANSFORMS_LOOP_UTILS_H
 #define MLIR_TRANSFORMS_LOOP_UTILS_H
 
+#include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Block.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
@@ -178,6 +179,11 @@ struct AffineCopyOptions {
   unsigned tagMemorySpace;
   // Capacity of the fast memory space in bytes.
   uint64_t fastMemCapacityBytes;
+  // Fast buffer data layout remap (for pointwise copying only, i.e., with
+  // generateDma = false). If specified, indices are remapped using it to
+  // generate new indices, effectively enforcing a new layout; row major
+  // layout is unsed if left unspecified.
+  AffineMap fastBufferLayout;
 };
 
 /// Performs explicit copying for the contiguous sequence of operations in the
@@ -192,7 +198,9 @@ struct AffineCopyOptions {
 /// processing this block range.
 uint64_t affineDataCopyGenerate(Block::iterator begin, Block::iterator end,
                                 const AffineCopyOptions &copyOptions,
-                                DenseSet<Operation *> &copyNests);
+                                Optional<Value *> filterMemRef,
+                                DenseSet<Operation *> &copyNests,
+                                SmallVectorImpl<Value *> *fastBufs = nullptr);
 
 /// Tile a nest of standard for loops rooted at `rootForOp` by finding such
 /// parametric tile sizes that the outer loops have a fixed number of iterations

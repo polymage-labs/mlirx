@@ -145,6 +145,23 @@ Optional<int64_t> MemRefRegion::getConstantBoundingSizeAndShape(
   return numElements;
 }
 
+void MemRefRegion::getLowerAndUpperBound(unsigned pos, AffineMap *lbMap,
+                                         AffineMap *ubMap) const {
+  auto memRefType = memref->getType().cast<MemRefType>();
+  unsigned rank = memRefType.getRank();
+
+  assert(rank == cst.getNumDimIds() && "inconsistent memref region");
+
+  auto boundPairs = cst.getLowerAndUpperBound(
+      pos, 0, rank, cst.getNumDimAndSymbolIds(), {}, memRefType.getContext());
+  *lbMap = boundPairs.first;
+  *ubMap = boundPairs.second;
+  assert(*lbMap && "lower bound for a region must exist");
+  assert(*ubMap && "upper bound for a region must exist");
+  assert(lbMap->getNumInputs() == cst.getNumDimAndSymbolIds() - rank);
+  assert(ubMap->getNumInputs() == cst.getNumDimAndSymbolIds() - rank);
+}
+
 LogicalResult MemRefRegion::unionBoundingBox(const MemRefRegion &other) {
   assert(memref == other.memref);
   return cst.unionBoundingBox(*other.getConstraints());
