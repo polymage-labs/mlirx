@@ -125,6 +125,9 @@ std::unique_ptr<OpPassBase<FuncOp>> createAffineDataCopyGenerationPass(
     unsigned tagMemorySpace = 0, int minDmaTransferSize = 1024,
     uint64_t fastMemCapacityBytes = std::numeric_limits<uint64_t>::max());
 
+/// Creates a pass that performs high order polyhedral optimization.
+std::unique_ptr<OpPassBase<FuncOp>> createHigherOrderPolyhedralOptPass();
+
 /// Creates a pass to perform optimizations relying on memref dataflow such as
 /// store to load forwarding, scalar replacement of memref accesses, elimination
 /// of dead stores, and dead allocs.
