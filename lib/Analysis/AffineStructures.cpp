@@ -1389,6 +1389,13 @@ static void getLowerAndUpperBoundIndices(const FlatAffineConstraints &cst,
   // canonical form c_1*x_1 + c_2*x_2 + ... + c_0 >= 0, a constraint is a lower
   // bound for x_i if c_i >= 1, and an upper bound if c_i <= -1.
   for (unsigned r = 0, e = cst.getNumInequalities(); r < e; r++) {
+    // The bounds are to be independent of [offset, offset + num) columns.
+    unsigned c, f;
+    for (c = offset, f = offset + num; c < f; ++c) {
+      if (c == pos) continue;
+      if (cst.atIneq(r, c) != 0) break;
+    }
+    if (c < f) continue;
     if (cst.atIneq(r, pos) >= 1) {
       // Lower bound.
       lbIndices->push_back(r);
@@ -1396,6 +1403,18 @@ static void getLowerAndUpperBoundIndices(const FlatAffineConstraints &cst,
       // Upper bound.
       ubIndices->push_back(r);
     }
+  }
+
+  if (!eqIndices) return;
+  for (unsigned r = 0, e = cst.getNumEqualities(); r < e; r++) {
+    if (cst.atEq(r, pos) == 0) continue;
+    unsigned c, f;
+    for (c = offset, f = offset + num; c < f; ++c) {
+      if (c == pos) continue;
+      if (cst.atEq(r, c) != 0) break;
+    }
+    if (c < f) continue;
+    eqIndices->push_back(r);
   }
 }
 
@@ -2776,6 +2795,20 @@ static BoundCmpResult compareBounds(ArrayRef<int64_t> a, ArrayRef<int64_t> b) {
 }
 } // namespace
 
+static void getCommonConstraints(const FlatAffineConstraints &A,
+                                 const FlatAffineConstraints &B,
+                                 FlatAffineConstraints *C) {
+  C->reset(A.getNumDimIds(), A.getNumSymbolIds(), A.getNumLocalIds());
+  for (unsigned r = 0, e = A.getNumInequalities(); r < e; ++r) {
+    for (unsigned s = 0, f = B.getNumInequalities(); s < f; ++s) {
+      if (A.getInequality(r) == B.getInequality(s)) {
+        C->addInequality(A.getInequality(r));
+        break;
+      }
+    }
+  }
+}
+
 // Computes the bounding box with respect to 'other' by finding the min of the
 // lower bounds and the max of the upper bounds along each of the dimensions.
 LogicalResult
@@ -2794,7 +2827,10 @@ FlatAffineConstraints::unionBoundingBox(const FlatAffineConstraints &otherCst) {
     mergeAndAlignIds(/*offset=*/numDims, this, &otherCopy.getValue());
   }
 
-  const auto &other = otherCopy ? *otherCopy : otherCst;
+  const auto &otherAligned = otherCopy ? *otherCopy : otherCst;
+
+  FlatAffineConstraints commonCst;
+  getCommonConstraints(*this, otherAligned, &commonCst);
 
   std::vector<SmallVector<int64_t, 8>> boundingLbs;
   std::vector<SmallVector<int64_t, 8>> boundingUbs;
@@ -2817,7 +2853,7 @@ FlatAffineConstraints::unionBoundingBox(const FlatAffineConstraints &otherCst) {
       // TODO(bondhugula): handle union if a dimension is unbounded.
       return failure();
 
-    auto otherExtent = other.getConstantBoundOnDimSize(
+    auto otherExtent = otherAligned.getConstantBoundOnDimSize(
         d, &otherLb, &otherLbFloorDivisor, &otherUb);
     if (!otherExtent.hasValue() || lbFloorDivisor != otherLbFloorDivisor)
       // TODO(bondhugula): symbolic extents when necessary.
@@ -2839,7 +2875,7 @@ FlatAffineConstraints::unionBoundingBox(const FlatAffineConstraints &otherCst) {
     } else {
       // Uncomparable - check for constant lower/upper bounds.
       auto constLb = getConstantLowerBound(d);
-      auto constOtherLb = other.getConstantLowerBound(d);
+      auto constOtherLb = otherAligned.getConstantLowerBound(d);
       if (!constLb.hasValue() || !constOtherLb.hasValue())
         return failure();
       std::fill(minLb.begin(), minLb.end(), 0);
@@ -2855,7 +2891,7 @@ FlatAffineConstraints::unionBoundingBox(const FlatAffineConstraints &otherCst) {
     } else {
       // Uncomparable - check for constant lower/upper bounds.
       auto constUb = getConstantUpperBound(d);
-      auto constOtherUb = other.getConstantUpperBound(d);
+      auto constOtherUb = otherAligned.getConstantUpperBound(d);
       if (!constUb.hasValue() || !constOtherUb.hasValue())
         return failure();
       std::fill(maxUb.begin(), maxUb.end(), 0);
@@ -2885,9 +2921,12 @@ FlatAffineConstraints::unionBoundingBox(const FlatAffineConstraints &otherCst) {
     addInequality(boundingLbs[d]);
     addInequality(boundingUbs[d]);
   }
+
   // TODO(mlir-team): copy over pure symbolic constraints from this and 'other'
   // over to the union (since the above are just the union along dimensions); we
   // shouldn't be discarding any other constraints on the symbols.
+  append(commonCst);
+  removeTrivialRedundancy();
 
   return success();
 }

@@ -110,6 +110,19 @@ Optional<int64_t> MemRefRegion::getConstantBoundingSizeAndShape(
 
   assert(rank == cst.getNumDimIds() && "inconsistent memref region");
 
+  FlatAffineConstraints cstWithShapeBounds(cst);
+
+  // Add upper/lower bounds for each memref dimension with static size
+  // to guard against potential over-approximation from projection.
+  // TODO(andydavis) Support dynamic memref dimensions.
+  for (unsigned r = 0; r < rank; r++) {
+    cstWithShapeBounds.addConstantLowerBound(r, 0);
+    int64_t dimSize = memRefType.getDimSize(r);
+    if (ShapedType::isDynamic(dimSize))
+      continue;
+    cstWithShapeBounds.addConstantUpperBound(r, dimSize - 1);
+  }
+
   // Find a constant upper bound on the extent of this memref region along each
   // dimension.
   int64_t numElements = 1;
@@ -117,7 +130,7 @@ Optional<int64_t> MemRefRegion::getConstantBoundingSizeAndShape(
   int64_t lbDivisor;
   for (unsigned d = 0; d < rank; d++) {
     SmallVector<int64_t, 4> lb;
-    Optional<int64_t> diff = cst.getConstantBoundOnDimSize(d, &lb, &lbDivisor);
+    Optional<int64_t> diff = cstWithShapeBounds.getConstantBoundOnDimSize(d, &lb, &lbDivisor);
     if (diff.hasValue()) {
       diffConstant = diff.getValue();
       assert(lbDivisor > 0);
@@ -129,7 +142,7 @@ Optional<int64_t> MemRefRegion::getConstantBoundingSizeAndShape(
         return None;
       diffConstant = dimSize;
       // Lower bound becomes 0.
-      lb.resize(cst.getNumSymbolIds() + 1, 0);
+      lb.resize(cstWithShapeBounds.getNumSymbolIds() + 1, 0);
       lbDivisor = 1;
     }
     numElements *= diffConstant;
@@ -328,6 +341,7 @@ LogicalResult MemRefRegion::compute(Operation *op, unsigned loopDepth,
       cst.addConstantUpperBound(r, dimSize - 1);
     }
   }
+  cst.removeTrivialRedundancy();
 
   LLVM_DEBUG(llvm::dbgs() << "Memory region:\n");
   LLVM_DEBUG(cst.dump());
