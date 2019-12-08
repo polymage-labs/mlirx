@@ -399,7 +399,7 @@ void mlir::createAffineComputationSlice(
 }
 
 // TODO: Currently works for static memrefs with a single layout map.
-LogicalResult mlir::normalizeMemRef(AllocOp allocOp) {
+LogicalResult mlir::normalizeMemRef(AllocOp allocOp, Value **normalizedMemRef) {
   MemRefType memrefType = allocOp.getType();
   unsigned rank = memrefType.getRank();
   if (rank == 0)
@@ -457,9 +457,12 @@ LogicalResult mlir::normalizeMemRef(AllocOp allocOp) {
   auto *oldMemRef = allocOp.getResult();
   SmallVector<Value *, 4> symbolOperands(allocOp.getSymbolicOperands());
 
+  // Create the replacement alloc op.
   auto newMemRefType = MemRefType::get(newShape, memrefType.getElementType(),
                                        b.getMultiDimIdentityMap(newRank));
-  auto newAlloc = b.create<AllocOp>(allocOp.getLoc(), newMemRefType);
+  auto newAlloc = b.create<AllocOp>(
+      allocOp.getLoc(), newMemRefType, llvm::None,
+      allocOp.getAttrOfType<IntegerAttr>(AllocOp::getAlignmentAttrName()));
 
   // Replace all uses of the old memref.
   if (failed(replaceAllMemRefUsesWith(oldMemRef, /*newMemRef=*/newAlloc,
@@ -477,5 +480,7 @@ LogicalResult mlir::normalizeMemRef(AllocOp allocOp) {
                      [](Operation *op) { return isa<DeallocOp>(op); }));
   oldMemRef->replaceAllUsesWith(newAlloc);
   allocOp.erase();
+  if (normalizedMemRef)
+    *normalizedMemRef = newAlloc;
   return success();
 }
