@@ -1430,8 +1430,11 @@ like to generalize this approach beyond the domain considered here.
 A good part of this tutorial can be reproduced with [MLIR
 trunk](https://github.com/tensorflow/mlir).  There are some major features that
 are pending upstream integration (memref_shape_cast op, alloca op, scalar
-replacement, and support for a few packing options), but they will soon be
-available at least at https://github.com/bondhugula/mlir.
+replacement, a new vectorization pass/utility, and support for a few packing
+options), but these are available in the *hop* branch at
+https://github.com/bondhugula/mlir.  Please see this
+[README](https://github.com/bondhugula/mlir/blob/hop/benchmark/README.md) there
+to run most of the experiments reported herein.
 
 Software versions and setup: Fedora Linux 30 running kernel
 5.3.6-200.fc30.x86_64, MLIR used with LLVM git 52bfa73af84 from Oct 2019, BLIS
