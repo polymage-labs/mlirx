@@ -83,7 +83,8 @@ struct HigherOrderPolyhedralOpt
 } // end anonymous namespace
 
 const llvm::DenseMap<StringRef, unsigned> HigherOrderPolyhedralOpt::optConf = {
-    {"M_C", 64}, {"N_C", 128}, {"K_C", 512}, {"M_R", 4}, {"N_R", 4}, {"K_U", 4}};
+    {"M_C", 64}, {"N_C", 128}, {"K_C", 512},
+    {"M_R", 4},  {"N_R", 4},   {"K_U", 4}};
 
 const char *HigherOrderPolyhedralOpt::kPolyCodeGenAttrName =
     "poly_codegen_name";
