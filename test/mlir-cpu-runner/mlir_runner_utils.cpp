@@ -23,6 +23,7 @@
 #include "include/mlir_runner_utils.h"
 #include <assert.h>
 #include <iostream>
+#include <sys/time.h>
 
 template <int... Dims> struct StaticSizeMult {
   static constexpr int value = 1;
@@ -196,3 +197,21 @@ extern "C" void print_memref_3d_f32(StridedMemRefType<float, 3> *M) {
 extern "C" void print_memref_4d_f32(StridedMemRefType<float, 4> *M) {
   printMemRef(*M);
 }
+
+extern "C" void print_memref_2d_f64(StridedMemRefType<double, 2> *M) {
+  printMemRef(*M);
+}
+
+extern "C" void print_flops(double flops) {
+  std::cerr << flops/1.0E9 << " GFLOPS" << std::endl;
+}
+
+extern "C" double rtclock() {
+  struct timeval Tp;
+  int stat = gettimeofday(&Tp, NULL);
+  if (stat != 0)
+    printf("Error return from gettimeofday: %d", stat);
+  return (Tp.tv_sec + Tp.tv_usec * 1.0e-6);
+}
+
+
