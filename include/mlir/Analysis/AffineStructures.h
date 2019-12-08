@@ -655,7 +655,7 @@ public:
   Optional<int64_t> getConstantUpperBound(unsigned pos) const;
 
   /// Gets the lower and upper bound of the pos^th identifier treating
-  /// [0, offset) U [offset + num, symbStartPos) as dimensions and
+  /// [0, offset) U [offset + num, symStartPos) as dimensions and
   /// [symStartPos, getNumDimAndSymbolIds) as symbols. The returned
   /// multi-dimensional maps in the pair represent the max and min of
   /// potentially multiple affine expressions. The upper bound is exclusive.
@@ -664,7 +664,7 @@ public:
   std::pair<AffineMap, AffineMap>
   getLowerAndUpperBound(unsigned pos, unsigned offset, unsigned num,
                         unsigned symStartPos, ArrayRef<AffineExpr> localExprs,
-                        MLIRContext *context);
+                        MLIRContext *context) const;
 
   /// Returns true if the set can be trivially detected as being
   /// hyper-rectangular on the specified contiguous set of identifiers.
