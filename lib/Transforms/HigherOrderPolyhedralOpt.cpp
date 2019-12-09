@@ -200,12 +200,9 @@ void HigherOrderPolyhedralOpt::optimizeMatmul(AffineForOp rootMatmulNest,
                                      AffineMap()};
 
     // For the LHS matrix (pack into L2).
-    // When using BLIS, we need to use a packed layout of M_C/M_R x K_C x M_R.
     auto d0 = builder.getAffineDimExpr(0);
     auto d1 = builder.getAffineDimExpr(1);
     SmallVector<AffineExpr, 4> bufRemapExprs = {d0.floorDiv(M_R), d1, d0 % M_R};
-    // Permute M_R chunk on the LHS memref to the innermost dimension if we are
-    // mapping to BLIS.
     copyOptions.fastBufferLayout = AffineMap();
     SmallVector<Value *, 1> fastBuf;
     DenseSet<Operation *> copyNests;
@@ -233,10 +230,9 @@ void HigherOrderPolyhedralOpt::optimizeMatmul(AffineForOp rootMatmulNest,
                            /*filterMemRef=*/rhsL3Buf, copyNests, &fastBuf);
     rhsL1Buf = fastBuf[0];
 
-    // Set alignment to 256-bit boundaries for LHS and RHS buffers. Output
-    // alignment isn't necessary for BLIS.
+    // Set alignment to 256-bit boundaries for LHS and RHS buffers.
     // FIXME: you don't need to set alignment if these are already vector
-    // memrefs, but only when under hopt-blis, when they aren't vector memrefs.
+    // memrefs.
     lhsBuf->getDefiningOp()->setAttr("alignment",
                                      builder.getI64IntegerAttr(32));
     // The rhsL3buf could sometimes just be the original memref / func arg.
