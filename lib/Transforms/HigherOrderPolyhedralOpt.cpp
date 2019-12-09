@@ -233,13 +233,16 @@ void HigherOrderPolyhedralOpt::optimizeMatmul(AffineForOp rootMatmulNest,
     // Set alignment to 256-bit boundaries for LHS and RHS buffers.
     // FIXME: you don't need to set alignment if these are already vector
     // memrefs.
-    lhsBuf->getDefiningOp()->setAttr("alignment",
-                                     builder.getI64IntegerAttr(32));
+    cast<AllocOp>(lhsBuf->getDefiningOp())
+        .setAttr(AllocOp::getAlignmentAttrName(),
+                 builder.getI64IntegerAttr(32));
     // The rhsL3buf could sometimes just be the original memref / func arg.
     if (auto rhsAllocOp = rhsL3Buf->getDefiningOp())
-      rhsAllocOp->setAttr("alignment", builder.getI64IntegerAttr(32));
-    rhsL1Buf->getDefiningOp()->setAttr("alignment",
-                                       builder.getI64IntegerAttr(32));
+      rhsAllocOp->setAttr(AllocOp::getAlignmentAttrName(),
+                          builder.getI64IntegerAttr(32));
+    cast<AllocOp>(rhsL1Buf->getDefiningOp())
+        .setAttr(AllocOp::getAlignmentAttrName(),
+                 builder.getI64IntegerAttr(32));
   }
 
   if (clUnroll) {
