@@ -513,7 +513,7 @@ affine.for %arg3 = 0 to 8 {
 
 ```shell
 # With tiling and packing.
-$ mlir-opt -hopt -hopt-copy=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
+$ mlir-opt -hopt -hopt-copy -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.0506358s
 2.38624 GFLOPS
 ```
@@ -550,7 +550,7 @@ up as the innermost loop post all register tiling). So, we have:
 
 ```shell
 # With tiling, packing, and unroll-and-jam/unroll.
-$ mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
+$ mlir-opt -hopt -hopt-copy -hopt-unroll -hopt-scalrep -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.11306s
 23.2737 GFLOPS
 ```
@@ -565,7 +565,7 @@ Let us go back a step and check what would happen if we disabled packing while
 performing unroll-and-jam.
 ```shell
 # With tiling, unroll-and-jam/unroll, but no packing
-$ mlir-opt -hopt -hopt-copy=false -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
+$ mlir-opt -hopt -hopt-copy=false -hopt-unroll -hopt-scalrep -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.0568249s
 11.5595 GFLOPS
 ```
@@ -573,7 +573,7 @@ We lose over 2x of the performance if we don't perform packing here! And if
 we hadn't performed the innermost loop unrolling (i.e., set K_U = 1), we get:
 ```shell
 # With tiling, packing, and unroll-and-jam/unroll, but K_U = 1.
-$ mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
+$ mlir-opt -hopt -hopt-copy -hopt-unroll -hopt-scalrep -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.0881901s
 20.249 GFLOPS
 ```
@@ -592,7 +592,7 @@ output remarks, we'll just look at the generated assembly. The
 '-dump-object-file -object-filename' options of mlir-cpu-runner are useful for
 this purpose.
 ```shell
-$ mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so -dump-object-file -object-filename=hopt.o > /dev/null
+$ mlir-opt -hopt -hopt-copy -hopt-unroll -hopt-scalrep -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so -dump-object-file -object-filename=hopt.o > /dev/null
 $ llvm-objdump -d hopt.o | less
     ...
     14e5:       c4 e2 a9 b9 e2  vfmadd231sd     %xmm2, %xmm10, %xmm4
@@ -659,17 +659,25 @@ opportunity.
 
 MLIR supports vector types and vector types as element types for memrefs. Unlike
 in LLVM, vector types in MLIR can be multi-dimensional. However, we only need
-1-d vector types here. Vectorization in MLIR would thus lead to IR that turns
-memrefs of f64 into memrefs of vector of f64 besides transforming loops/loop
-bodies.  In addition, there is a [splat
-op](https://github.com/tensorflow/mlir/blob/master/g3doc/Dialects/Standard.md#splat-operation).
+1-d vector types here. Loop vectorization in MLIR would just lead to IR that
+turns memrefs of f64 into memrefs of vector of f64 besides transforming
+loops/loop bodies.  A casting op that changes the elemental type of a memref,
+and the [splat
+op](https://github.com/tensorflow/mlir/blob/master/g3doc/Dialects/Standard.md#splat-operation)
+are also needed here. In more complex cases, the view/subview ops are also
+needed. But for this benchmark, the vectorization needed is quite
+straightforward, and is a simple outer loop vectorization along the j loop.
 
-The vectorization needed here is quite straightforward at a higher level, and is
-a simple loop vectorization along the j loop.  Here's how the vectorized MLIR
-looks like if we started with the naive matmul nest.
+The existing "super vectorizer" in MLIR is really not functional or complete.
+For this article, we build and use a new loop vectorizer (enabled by -hopt-vect
+or via -affine-vectorize when running separately). We introduce a new
+[*memref_shape_cast* op](https://github.com/bondhugula/mlir/commit/6a9822933b28aabced2c6ceef593f35c9665d1fe#diff-862f92fedaa626e6221ac920c18a6b8a) which is needed to change the elemental type on a memref.
+Here's how the vectorized MLIR looks like if we started with the naive matmul
+nest.
 
 ```mlir
-func @matmul_vector(%A: memref<2048x2048xf64>, %B: memref<2048x2048xf64>, %C: memref<2048x2048xf64>) {
+// mlir-opt -hopt-vect
+func @matmul(%A: memref<2048x2048xf64>, %B: memref<2048x2048xf64>, %C: memref<2048x2048xf64>) {
   %0 = memref_shape_cast %B : memref<2048x2048xf64> to memref<2048x512xvector<4xf64>>
   %1 = memref_shape_cast %C : memref<2048x2048xf64> to memref<2048x512xvector<4xf64>>
   affine.for %arg3 = 0 to 2048 {
@@ -693,9 +701,9 @@ loop as opposed to a reduction dimension). The *memref_shape_cast* op casts a
 memref to one of another shape as long as the product of the dimension sizes
 all the way up to any aggregate elemental types remain the same.
 (*memref_shape_cast* actually doesn't exist in MLIR trunk. It was added here
-because the [*std.view* op is yet to be
+because [a similar abstraction is yet to be
 implemented](https://groups.google.com/a/tensorflow.org/forum/#!searchin/mlir/std.view%7Csort:date/mlir/-wKHANzDNTg/4K6nUAp8AAAJ).
-*std.view* when available will subsume memref_shape_cast. Also, we do not
+Also, we do not
 discuss the case of trip counts not being a multiple of vector size here since
 some of the infra around it in MLIR is still being built. Let's look at the
 performance with vectorization and with nothing else enabled.
@@ -724,12 +732,12 @@ gets us nowhere. We've now broken that barrier, and can go further here.
 
 ```shell
 # Vectorization, tiling, and packing/copying
-$ mlir-opt -hopt -hopt-copy=true -lower-to-llvm hopt.mlir   | mlir-cpu-runner -O3 -e main -entry-point-result=void -reps=5  -shared-libs=lib/libmlir_runner_utils.so,/usr/local/lib/libblis.so  > /dev/null
+$ mlir-opt -hopt -hopt-vect -hopt-copy -lower-to-llvm hopt.mlir   | mlir-cpu-runner -O3 -e main -entry-point-result=void -reps=5  -shared-libs=lib/libmlir_runner_utils.so,/usr/local/lib/libblis.so  > /dev/null
 Compilation time: 0.0409529s
 11.2309 GFLOPS
 
 # Vectorization, tiling, packing, and unroll-and-jam, unrolling with MLIR scalar replacement
-$ mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=5 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so  > /dev/null
+$ mlir-opt -hopt -hopt-vect -hopt-copy -hopt-unroll -hopt-scalrep -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=5 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so  > /dev/null
 Compilation time: 0.0383081s
 49.8336 GFLOPS
 ```
@@ -991,7 +999,7 @@ the two dimensions and how big the L1 resident buffer for the RHS is. Let's
 executre the M_R = 3, N_R = 16 configuration.
 ```shell
 # M_C = 180 : i32, K_C = 480 : i32, M_R = 3, N_R = 16 : i32, K_U = 4 : i32
-$ mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=3 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
+$ mlir-opt -hopt -hopt-vect -hopt-copy -hopt-unroll -hopt-scalrep -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=3 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.039474s
 61.939 GFLOPS
 ```
@@ -1007,16 +1015,16 @@ found.
 ```shell
 # Let's see the impact of just the M_R, N_R values.
 # M_C = 72 : i32, K_C = 256 : i32, M_R = 4, N_R = 8 : i32, K_U = 4 : i32
-$ mlir-opt -hopt  -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=3 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
+$ mlir-opt -hopt -hopt-vect  -hopt-copy -hopt-unroll -hopt-scalrep -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=3 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.04356s
 49.7282 GFLOPS
 # M_R = 6, N_R = 8 (this is what BLIS' micro kernel uses for Haswell)
-$ mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=3 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
+$ mlir-opt -hopt -hopt-vect -hopt-copy -hopt-unroll -hopt-scalrep -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=3 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.0479391s
 40.4135 GFLOPS
 # The best conf so far.
 # M_C = 180 : i32, K_C = 480 : i32, M_R = 3, N_R = 16 : i32, K_U = 4 : i32
-$ mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=3 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
+$ mlir-opt -hopt -hopt-vect -hopt-copy -hopt-unroll -hopt-scalrep -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=3 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.039474s
 61.843 GFLOPS
 ```
@@ -1070,22 +1078,22 @@ the RHS is being moved in via aligned vector loads.
 
 ```shell
 # Let's look at the benefit of packing in isolation on the best code we have:
-% mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=3 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
+% mlir-opt -hopt -hopt-vect -hopt-copy -hopt-unroll -hopt-scalrep -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=3 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.039474s
 61.843 GFLOPS
 # Without packing
-$ mlir-opt -hopt -hopt-copy=false -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm /tmp/hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=../../../build/lib/libmlir_runner_utils.so,/usr/local/lib/libblis.so
+$ mlir-opt -hopt -hopt-vect -hopt-copy=false -hopt-unroll -hopt-scalrep -lower-to-llvm /tmp/hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=../../../build/lib/libmlir_runner_utils.so,/usr/local/lib/libblis.so
 Compilation time: 0.030535s
 22.5257 GFLOPS
 # A 3x drop in performance just due to the lack of packing, while it was just
 # 1.5x on a code that was not fully optimized.
 #
 # Without unroll-and-jam (but with packing)
-$ mlir-opt -hopt -hopt-copy=true -hopt-unroll=false -hopt-scalrep=true -linalg-lower-to-loops -linalg-convert-to-llvm -lower-to-llvm /tmp/hopt.mlir | mlir-cpu-runner -O3 -reps=5 -e main -entry-point-result=void -shared-libs=../../../build/lib/libmlir_runner_utils.so,/usr/local/lib/libblis.so
+$ mlir-opt -hopt -hopt-vect -hopt-copy -hopt-unroll=false -hopt-scalrep -linalg-lower-to-loops -linalg-convert-to-llvm -lower-to-llvm /tmp/hopt.mlir | mlir-cpu-runner -O3 -reps=5 -e main -entry-point-result=void -shared-libs=../../../build/lib/libmlir_runner_utils.so,/usr/local/lib/libblis.so
 Compilation time: 0.0424139s
 15.5651 GFLOPS
 # Without packing and without unroll-and-jam
-$ mlir-opt -hopt -hopt-copy=false -hopt-unroll=false -hopt-scalrep=true -linalg-lower-to-loops -linalg-convert-to-llvm -lower-to-llvm /tmp/hopt.mlir | mlir-cpu-runner -O3 -reps=5 -e main -entry-point-result=void -shared-libs=../../../build/lib/libmlir_runner_utils.so,/usr/local/lib/libblis.so
+$ mlir-opt -hopt -hopt-vect -hopt-copy=false -hopt-unroll=false -hopt-scalrep -linalg-lower-to-loops -linalg-convert-to-llvm -lower-to-llvm /tmp/hopt.mlir | mlir-cpu-runner -O3 -reps=5 -e main -entry-point-result=void -shared-libs=../../../build/lib/libmlir_runner_utils.so,/usr/local/lib/libblis.so
 Compilation time: 0.0228369s
 10.785 GFLOPS
 ```
@@ -1129,7 +1137,7 @@ replacement but enabled unroll-and-jam, sort of leaving it to LLVM to perform
 the replacement.
 
 ```shell
-$ mlir-opt -hopt -hopt-scalrep=false -lower-to-llvm hopt.mlir -lower-to-llvm | mlir-cpu-runner -O3 -e main -entry-point-result=void -reps=5 -shared-libs=/home/uday/llvm-project/build.release/lib/libmlir_runner_utils.so,/usr/local/lib/libblis.so > /dev/null
+$ mlir-opt -hopt -hopt-vect -hopt-scalrep=false -lower-to-llvm hopt.mlir -lower-to-llvm | mlir-cpu-runner -O3 -e main -entry-point-result=void -reps=5 -shared-libs=/home/uday/llvm-project/build.release/lib/libmlir_runner_utils.so,/usr/local/lib/libblis.so > /dev/null
 Compilation time: 0.038455s
 10.7969 GFLOPS
 ```
@@ -1291,7 +1299,7 @@ $ mlir-opt -hopt  -lower-to-llvm hopt.mlir | mlir-cpu-runner  -O3 -e main -reps=
 Compilation time: 0.0415299s
 50.7075 GFLOPS
 # Recall with M_R = 3, N_R = 16
-$ mlir-opt -hopt -hopt-copy=true -hopt-unroll=true -hopt-scalrep=true -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=3 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
+$ mlir-opt -hopt -hopt-copy -hopt-unroll -hopt-scalrep -lower-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=3 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.039474s
 61.939 GFLOPS
 ```

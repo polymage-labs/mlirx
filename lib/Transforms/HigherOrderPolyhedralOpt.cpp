@@ -263,6 +263,10 @@ void HigherOrderPolyhedralOpt::optimizeMatmul(AffineForOp rootMatmulNest,
 void HigherOrderPolyhedralOpt::runOnBlock(Block *block) {
   for (auto &op : *block) {
     if (auto forOp = dyn_cast<AffineForOp>(op)) {
+      // We start with a nest which has already been tiled and with the
+      // optimization parameters tagged as attributes on the outermost loop of
+      // the nest. Starting with a hop.matmul and expanding it out, and tiling
+      // it via mlir::tile is left as an exercise!
       StringAttr polyClass =
           forOp.getOperation()->getAttrOfType<StringAttr>("class");
       if (!polyClass || !polyClass.getValue().equals("matmul"))
