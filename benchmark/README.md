@@ -10,7 +10,7 @@ See the benchmark/ directory in mlir/.
 To execute the included benchmark:
 
 ```
-$ mlir-opt -hopt -hopt-vect -hopt-unroll -hopt-copy -hopt-scalrep benchmark/dgemm-tiled-benchmark.mlir  -convert-linalg-to-loops   -convert-linalg-to-llvm -convert-std-to-llvm  -canonicalize  | mlir-cpu-runner  -O3  -e main -time -reps=5   -entry-point-result=void    -shared-libs=lib/libmlir_runner_utils.so > /dev/null
+$ mlir-opt -hopt -hopt-vect -hopt-unroll -hopt-copy -hopt-scalrep benchmark/dgemm-tiled-benchmark.mlir -convert-linalg-to-loops -lower-affine -convert-std-to-llvm  -canonicalize  | mlir-cpu-runner  -O3  -e main -time -reps=5   -entry-point-result=void    -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 ```
 
 The generated MLIR can be inspected by running the following while

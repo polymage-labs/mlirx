@@ -1,4 +1,4 @@
-// RUN: mlir-opt -hopt -convert-linalg-to-loops -convert-linalg-to-llvm -convert-std-to-llvm %s | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=%mlir_runner_utils_dir/libmlir_runner_utils%shlibext | FileCheck %s
+// RUN: mlir-opt -hopt -convert-linalg-to-loops -lower-affine -convert-std-to-llvm %s | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=%mlir_runner_utils_dir/libmlir_runner_utils%shlibext | FileCheck %s
 
 func @main() {
   %A = alloc() : memref<2088x2048xf64>
