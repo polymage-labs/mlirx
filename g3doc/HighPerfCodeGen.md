@@ -83,12 +83,12 @@ use -ffast-math along with -O3 to be fair given the other things we are going
 to compare this with soon.)
 
 ```shell
-₹ clang -v
+$ clang -v
 clang version 8.0.0 (Fedora 8.0.0-3.fc30)
 Target: x86_64-unknown-linux-gnu
 
 $ clang -O3 -ffast-math  -DTIME matmul.c -o matmul.clang -lm
-[uday@ukr-xps ~/git/pluto/examples/matmul]₹ ./matmul.clang
+$ ./matmul.clang
 36.484855s
 0.47 GFLOPS
 
@@ -124,9 +124,9 @@ setup in
 experimenting with OpenBLAS, BLIS, or MKL quickly.
 
 ```shell
-₹ make mkl blis openblas
+$ make mkl blis openblas
 
-₹ ./blis
+$ ./blis
 63.29 GFLOPS
 
 $ ./openblas
