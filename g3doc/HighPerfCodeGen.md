@@ -403,13 +403,13 @@ func @matmul(%A: memref<2088x2048xf64>, %B: memref<2048x2048xf64>, %C: memref<20
             %6 = mulf %3, %4 : f64
             %7 = addf %5, %6 : f64
             affine.store %7, %0[0] : memref<1xf64>
-          } {poly_codegen_name = "c4"}
+          }
           %2 = affine.load %0[%c0] : memref<1xf64>
           affine.store %2, %C[%arg6, %arg5] : memref<2088x2048xf64>
-        } {poly_codegen_name = "c3"}
-      } {poly_codegen_name = "c2"}
-    } {poly_codegen_name = "c1"}
-  } {poly_codegen_name = "c0"}
+        }
+      }
+    }
+  }
   return
 }
 ```
@@ -836,7 +836,7 @@ affine.for %arg3 = 0 to 8 {
           %60 = affine.load %18[0] : memref<1xvector<4xf64>>
           %61 = addf %59, %60 : vector<4xf64>
           affine.store %61, %18[0] : memref<1xvector<4xf64>>
-        } {poly_codegen_name = "c4"}
+        }
         %20 = affine.load %18[0] : memref<1xvector<4xf64>>
         affine.store %20, %1[%arg6 * 4 + 3, %arg5 * 2 + 1] : memref<2088x512xvector<4xf64>>
         %21 = affine.load %16[0] : memref<1xvector<4xf64>>
@@ -853,12 +853,12 @@ affine.for %arg3 = 0 to 8 {
         affine.store %26, %1[%arg6 * 4 + 1, %arg5 * 2] : memref<2088x512xvector<4xf64>>
         %27 = affine.load %4[0] : memref<1xvector<4xf64>>
         affine.store %27, %1[%arg6 * 4, %arg5 * 2] : memref<2088x512xvector<4xf64>>
-      } {poly_codegen_name = "c3"}
+      }
       dealloc %3 : memref<256x2xvector<4xf64>>
-    } {poly_codegen_name = "c2"}
+    }
     dealloc %2 : memref<64x256xf64>
-  } {poly_codegen_name = "c1"}
-} {poly_codegen_name = "c0"}
+  }
+}
 ```
 
 The memref<1 x f64> values (single element memrefs) that we see below are a
