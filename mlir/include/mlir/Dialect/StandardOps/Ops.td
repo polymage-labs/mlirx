@@ -1096,17 +1096,22 @@ def UnsignedRemIOp : IntArithmeticOp<"remi_unsigned"> {
   let hasFolder = 1;
 }
 
-def ReturnOp : Std_Op<"return", [Terminator, HasParent<"FuncOp">]> {
+def ReturnOp : Std_Op<"return", [Terminator]> {
   let summary = "return operation";
   let description = [{
-    The "return" operation represents a return operation within a function.
-    The operation takes variable number of operands and produces no results.
-    The operand number and types must match the signature of the function
-    that contains the operation. For example:
+    The `return` terminator operation, when enclosed immediately by a function,
+    represents the completion of that function and produces its result values.
+    The count and types of the operands must match the result types of the
+    enclosing function. It is valid for multiple blocks in a single function to
+    return. In the case that the `return` op's parent is not a function op, the
+    `return` represents a transfer of control to its parent, whose semantics
+    determine where control flows next, and whose result values match the values
+    returned.
 
-      func @foo() : (i32, f8) {
-      ...
-      return %0, %1 : i32, f8
+      func @foo() : () -> (i32, f32) {
+        ...
+        return %0, %1 : i32, f32
+      }
   }];
 
   let arguments = (ins Variadic<AnyType>:$operands);
