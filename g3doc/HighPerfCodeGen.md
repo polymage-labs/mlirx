@@ -102,7 +102,7 @@ $ ./matmul.gcc
 4.53 GFLOPS
 ```
 
-Disappointingly, clang and GCC are at 0.6% and 2% of the machine peak
+Disappointingly, clang and GCC are at 0.6% and 6% of the machine peak
 respectively! :-( But general-purpose compilers aren't expected or meant to get
 anywhere to the peak. Programmers instead typically use highly tuned libraries.
 We'll get to that shortly, but while on this let's also see what a polyhedral
