@@ -212,9 +212,9 @@ Depending on its layout map, it could refer to a potentially non-contiguous
 sub-region of the underlying buffer. All memrefs in the above snippet have the
 default identity layout map (d0, d1) -> (d0, d1), which corresponds to a row
 major layout in memory.  2088 x 2048 is the shape of memref where each of its
-element is an f64 (double). There is other information such as an affine layout
+elements is an f64 (double). There is other information such as an affine layout
 map (a mapping for its logical coordinate space to physical memory) that is
-elided when these are an identity map (the default). We will look at an example
+elided when these are identity maps (the default). We will look at an example
 of this a little [later](#a-quick-detour-into-affine-map-layouts). The only way
 to access the elements of a memref is through load and store operations.
 
@@ -250,10 +250,10 @@ hop.matmul above is an operation that operates on three memrefs, %A, %B, and %C,
 which are the LHS, the RHS, and the output corresponding to a matrix-matrix
 multiplication. This op has zero results: since these are memrefs, the
 underlying memory can be updated, but the memref itself is an SSA value and thus
-can be defined only once. In this case, %C will be both read and written by this
-heavy op.  *some_attr* is an attribute of the op, which like in LLVM is meant to
-be a constant of one of the numerous types available including some polyhedral
-types like [affine
+can be defined only once. In this case, %C will be both read and written by
+this heavy op.  *some_attr* is an attribute of the op, which like with LLVM
+metadata is meant to be a constant of one of the numerous types available
+including some polyhedral types like [affine
 maps](https://github.com/tensorflow/mlir/blob/master/g3doc/Dialects/Affine.md)
 and [integer
 sets](https://github.com/tensorflow/mlir/blob/master/g3doc/Dialects/Affine.md#integer-sets).
@@ -285,7 +285,7 @@ used architectures. We are going to use the same cache tiling strategy used in
 OpenBLAS and BLIS. [This scheme](https://dl.acm.org/citation.cfm?id=13560531)
 is a very clever one that carefully tiles for multiple levels of the cache in a
 way that exploits reuse for each of the matrices involved at one level or
-another: the objective is to make sure vector FMA/add mul pipeline remains full
+another: the objective is to make sure the vector FMA/add mul pipeline remains full
 and one doesn't wait for loads. It does not blindly tile the nest multiple times
 to exploit reuse for all matrices at L1, L2, and L3, as would most polyhedral
 tools do.
@@ -423,7 +423,7 @@ Compilation time: 0.0443082s
 1.6012 GFLOPS
 ```
 
-This is nearly a 3x improvement in performance, but still no where close to the
+This is nearly a 3x improvement in performance, but still nowhere close to the
 machine peak or the performance of MKL, OpenBLAS or BLIS!
 
 ### Explicit Copying or Packing
@@ -583,7 +583,7 @@ all finally not enough at all on an absolute scale --- we are still at about
 34% of the peak even after having reproduced a good part of the OpenBLAS/BLIS
 recipe!  Clearly, there is something orthogonal that all of this is missing. It
 looks like we completely missed vectorization! The highly tuned library kernels
-that we've set as a target often used a careful selection and schedule of
+that we've set as a target use a careful selection and schedule of
 vector instructions in inline assembly.
 
 Let's see whether our code is even being vectorized reasonably under the hood by
@@ -595,44 +595,43 @@ this purpose.
 $ mlir-opt -hopt -hopt-copy -hopt-unroll -hopt-scalrep -convert-linalg-to-loops -lower-affine -convert-std-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so -dump-object-file -object-filename=hopt.o > /dev/null
 $ llvm-objdump -d hopt.o | less
     ...
-    14e5:       c4 e2 a9 b9 e2  vfmadd231sd     %xmm2, %xmm10, %xmm4
-
-    1856:       c4 42 e5 a8 f8  vfmadd213pd     %ymm8, %ymm3, %ymm15
+    14e5:       c4 e2 a9 b9 e2                  vfmadd231sd     %xmm2, %xmm10, %xmm4
+    1856:       c4 42 e5 a8 f8                  vfmadd213pd     %ymm8, %ymm3, %ymm15
     185b:       c4 e3 79 05 a9 30 ff ff ff 01   vpermilpd       $1, -208(%rcx), %xmm5
-    1865:       c4 41 7d 28 e6  vmovapd %ymm14, %ymm12
-    186a:       c4 63 fd 01 f5 55       vpermpd $85, %ymm5, %ymm14
-    1870:       c4 62 7d 19 c5  vbroadcastsd    %xmm5, %ymm8
-    1875:       c4 62 e5 a8 c2  vfmadd213pd     %ymm2, %ymm3, %ymm8
-    187a:       c4 42 e5 a8 f5  vfmadd213pd     %ymm13, %ymm3, %ymm14
+    1865:       c4 41 7d 28 e6                  vmovapd %ymm14, %ymm12
+    186a:       c4 63 fd 01 f5 55               vpermpd $85, %ymm5, %ymm14
+    1870:       c4 62 7d 19 c5                  vbroadcastsd    %xmm5, %ymm8
+    1875:       c4 62 e5 a8 c2                  vfmadd213pd     %ymm2, %ymm3, %ymm8
+    187a:       c4 42 e5 a8 f5                  vfmadd213pd     %ymm13, %ymm3, %ymm14
     187f:       c5 fd 10 b9 40 ff ff ff         vmovupd -192(%rcx), %ymm7
     1887:       c4 e2 7d 19 b1 40 ff ff ff      vbroadcastsd    -192(%rcx), %ymm6
-    1890:       c4 e3 fd 01 d7 ff       vpermpd $255, %ymm7, %ymm2
-    1896:       c4 e2 e5 a8 d0  vfmadd213pd     %ymm0, %ymm3, %ymm2
+    1890:       c4 e3 fd 01 d7 ff               vpermpd $255, %ymm7, %ymm2
+    1896:       c4 e2 e5 a8 d0                  vfmadd213pd     %ymm0, %ymm3, %ymm2
     189b:       c5 fd 29 93 00 01 00 00         vmovapd %ymm2, 256(%rbx)
-    18a3:       c4 e3 fd 01 ef 55       vpermpd $85, %ymm7, %ymm5
-    18a9:       c4 63 fd 01 ef aa       vpermpd $170, %ymm7, %ymm13
+    18a3:       c4 e3 fd 01 ef 55               vpermpd $85, %ymm7, %ymm5
+    18a9:       c4 63 fd 01 ef aa               vpermpd $170, %ymm7, %ymm13
     18af:       c4 62 e5 a8 ab 80 03 00 00      vfmadd213pd     896(%rbx), %ymm3, %ymm13
-    18b8:       c4 e2 e5 a8 e9  vfmadd213pd     %ymm1, %ymm3, %ymm5
-    18bd:       c4 c2 e5 a8 f4  vfmadd213pd     %ymm12, %ymm3, %ymm6
+    18b8:       c4 e2 e5 a8 e9                  vfmadd213pd     %ymm1, %ymm3, %ymm5
+    18bd:       c4 c2 e5 a8 f4                  vfmadd213pd     %ymm12, %ymm3, %ymm6
     18c2:       c5 fb 10 99 60 ff ff ff         vmovsd  -160(%rcx), %xmm3
     18ca:       c5 f9 28 93 20 01 00 00         vmovapd 288(%rbx), %xmm2
-    18d2:       c4 62 e9 b9 cb  vfmadd231sd     %xmm3, %xmm2, %xmm9
+    18d2:       c4 62 e9 b9 cb                  vfmadd231sd     %xmm3, %xmm2, %xmm9
     18d7:       c4 c1 7b 10 bc f7 f0 ef ff ff   vmovsd  -4112(%r15,%rsi,8), %xmm7
-    18e1:       c4 62 e1 b9 df  vfmadd231sd     %xmm7, %xmm3, %xmm11
+    18e1:       c4 62 e1 b9 df                  vfmadd231sd     %xmm7, %xmm3, %xmm11
     18e6:       c4 c1 7b 10 84 f7 f0 f7 ff ff   vmovsd  -2064(%r15,%rsi,8), %xmm0
-    18f0:       c4 62 e1 b9 d0  vfmadd231sd     %xmm0, %xmm3, %xmm10
-    18f5:       c4 c1 7b 10 4c f7 f0    vmovsd  -16(%r15,%rsi,8), %xmm1
-    18fc:       c4 e2 f1 a9 dc  vfmadd213sd     %xmm4, %xmm1, %xmm3
-    1901:       c5 c1 14 e2     vunpcklpd       %xmm2, %xmm7, %xmm4
-    1905:       c5 f1 14 c0     vunpcklpd       %xmm0, %xmm1, %xmm0
-    1909:       c4 e3 7d 18 cc 01       vinsertf128     $1, %xmm4, %ymm0, %ymm1
+    18f0:       c4 62 e1 b9 d0                  vfmadd231sd     %xmm0, %xmm3, %xmm10
+    18f5:       c4 c1 7b 10 4c f7 f0            vmovsd  -16(%r15,%rsi,8), %xmm1
+    18fc:       c4 e2 f1 a9 dc                  vfmadd213sd     %xmm4, %xmm1, %xmm3
+    1901:       c5 c1 14 e2                     vunpcklpd       %xmm2, %xmm7, %xmm4
+    1905:       c5 f1 14 c0                     vunpcklpd       %xmm0, %xmm1, %xmm0
+    1909:       c4 e3 7d 18 cc 01               vinsertf128     $1, %xmm4, %ymm0, %ymm1
     190f:       c4 62 7d 19 a1 68 ff ff ff      vbroadcastsd    -152(%rcx), %ymm12
-    1918:       c4 42 f5 a8 e7  vfmadd213pd     %ymm15, %ymm1, %ymm12
+    1918:       c4 42 f5 a8 e7                  vfmadd213pd     %ymm15, %ymm1, %ymm12
     191d:       c4 e3 79 05 a1 70 ff ff ff 01   vpermilpd       $1, -144(%rcx), %xmm4
-    1927:       c4 e3 fd 01 c4 55       vpermpd $85, %ymm4, %ymm0
-    192d:       c4 e2 7d 19 fc  vbroadcastsd    %xmm4, %ymm7
-    1932:       c4 c2 f5 a8 c6  vfmadd213pd     %ymm14, %ymm1, %ymm0
-    1937:       c4 c2 f5 a8 f8  vfmadd213pd     %ymm8, %ymm1, %ymm7
+    1927:       c4 e3 fd 01 c4 55               vpermpd $85, %ymm4, %ymm0
+    192d:       c4 e2 7d 19 fc                  vbroadcastsd    %xmm4, %ymm7
+    1932:       c4 c2 f5 a8 c6                  vfmadd213pd     %ymm14, %ymm1, %ymm0
+    1937:       c4 c2 f5 a8 f8                  vfmadd213pd     %ymm8, %ymm1, %ymm7
     ...
 ```
 
@@ -870,8 +869,8 @@ iterating. LLVM's passes later turn these into virtual registers.
 Both BLIS and OpenBLAS use inline assembly microkernels and other hand written
 components that are composed in a modular/reusable way. OTOH, we've been trying
 to generate all our code all the way down, including using LLVM's instruction
-selection, scheduling, and register allocation.  Note that we've got here with
-the following values of M_C, K_C, M_R, N_R, K_U through hop.matmul as indicated
+selection, scheduling, and register allocation.  Note that we've got here
+through the hop.matmul with the values of M_C, K_C, M_R, N_R, K_U indicated
 below:
 
 ```mlir
@@ -1036,39 +1035,39 @@ have a continuous sequence of VFMA instructions on 256-bit AVX registers which
 are named %ymm[0-15].
 
 ```
-     e1d:       c4 62 7d 19 7c c5 f8    vbroadcastsd    -8(%rbp,%rax,8), %ymm15
-     e24:       c4 42 85 a8 f3  vfmadd213pd     %ymm11, %ymm15, %ymm14
+     e1d:       c4 62 7d 19 7c c5 f8            vbroadcastsd    -8(%rbp,%rax,8), %ymm15
+     e24:       c4 42 85 a8 f3                  vfmadd213pd     %ymm11, %ymm15, %ymm14
      e29:       c4 41 7d 28 98 40 ff ff ff      vmovapd -192(%r8), %ymm11
-     e32:       c4 c2 9d b8 d3  vfmadd231pd     %ymm11, %ymm12, %ymm2
-     e37:       c4 c2 95 b8 db  vfmadd231pd     %ymm11, %ymm13, %ymm3
-     e3c:       c4 c2 85 b8 e3  vfmadd231pd     %ymm11, %ymm15, %ymm4
+     e32:       c4 c2 9d b8 d3                  vfmadd231pd     %ymm11, %ymm12, %ymm2
+     e37:       c4 c2 95 b8 db                  vfmadd231pd     %ymm11, %ymm13, %ymm3
+     e3c:       c4 c2 85 b8 e3                  vfmadd231pd     %ymm11, %ymm15, %ymm4
      e41:       c4 41 7d 28 98 60 ff ff ff      vmovapd -160(%r8), %ymm11
-     e4a:       c4 c2 9d b8 eb  vfmadd231pd     %ymm11, %ymm12, %ymm5
-     e4f:       c4 c2 95 b8 f3  vfmadd231pd     %ymm11, %ymm13, %ymm6
-     e54:       c4 c2 85 b8 fb  vfmadd231pd     %ymm11, %ymm15, %ymm7
-     e59:       c4 41 7d 28 58 80       vmovapd -128(%r8), %ymm11
-     e5f:       c4 42 a5 a8 e1  vfmadd213pd     %ymm9, %ymm11, %ymm12
-     e64:       c4 42 a5 a8 ea  vfmadd213pd     %ymm10, %ymm11, %ymm13
-     e69:       c4 42 85 b8 c3  vfmadd231pd     %ymm11, %ymm15, %ymm8
+     e4a:       c4 c2 9d b8 eb                  vfmadd231pd     %ymm11, %ymm12, %ymm5
+     e4f:       c4 c2 95 b8 f3                  vfmadd231pd     %ymm11, %ymm13, %ymm6
+     e54:       c4 c2 85 b8 fb                  vfmadd231pd     %ymm11, %ymm15, %ymm7
+     e59:       c4 41 7d 28 58 80               vmovapd -128(%r8), %ymm11
+     e5f:       c4 42 a5 a8 e1                  vfmadd213pd     %ymm9, %ymm11, %ymm12
+     e64:       c4 42 a5 a8 ea                  vfmadd213pd     %ymm10, %ymm11, %ymm13
+     e69:       c4 42 85 b8 c3                  vfmadd231pd     %ymm11, %ymm15, %ymm8
      e6e:       c4 62 7d 19 94 c5 00 e2 ff ff   vbroadcastsd    -7680(%rbp,%rax,8), %ymm10
-     e78:       c4 41 7d 28 48 a0       vmovapd -96(%r8), %ymm9
-     e7e:       c4 c2 b5 b8 c2  vfmadd231pd     %ymm10, %ymm9, %ymm0
+     e78:       c4 41 7d 28 48 a0               vmovapd -96(%r8), %ymm9
+     e7e:       c4 c2 b5 b8 c2                  vfmadd231pd     %ymm10, %ymm9, %ymm0
      e83:       c4 62 7d 19 9c c5 00 f1 ff ff   vbroadcastsd    -3840(%rbp,%rax,8), %ymm11
-     e8d:       c4 c2 b5 b8 cb  vfmadd231pd     %ymm11, %ymm9, %ymm1
-     e92:       c4 62 7d 19 7c c5 00    vbroadcastsd    (%rbp,%rax,8), %ymm15
-     e99:       c4 42 85 a8 ce  vfmadd213pd     %ymm14, %ymm15, %ymm9
-     e9e:       c4 41 7d 28 70 c0       vmovapd -64(%r8), %ymm14
-     ea4:       c4 c2 ad b8 d6  vfmadd231pd     %ymm14, %ymm10, %ymm2
-     ea9:       c4 c2 a5 b8 de  vfmadd231pd     %ymm14, %ymm11, %ymm3
-     eae:       c4 c2 85 b8 e6  vfmadd231pd     %ymm14, %ymm15, %ymm4
-     eb3:       c4 41 7d 28 70 e0       vmovapd -32(%r8), %ymm14
-     eb9:       c4 c2 ad b8 ee  vfmadd231pd     %ymm14, %ymm10, %ymm5
-     ebe:       c4 c2 a5 b8 f6  vfmadd231pd     %ymm14, %ymm11, %ymm6
-     ec3:       c4 c2 85 b8 fe  vfmadd231pd     %ymm14, %ymm15, %ymm7
-     ec8:       c4 41 7d 28 30  vmovapd (%r8), %ymm14
-     ecd:       c4 42 8d a8 d4  vfmadd213pd     %ymm12, %ymm14, %ymm10
-     ed2:       c4 42 8d a8 dd  vfmadd213pd     %ymm13, %ymm14, %ymm11
-     ed7:       c4 42 85 b8 c6  vfmadd231pd     %ymm14, %ymm15, %ymm8
+     e8d:       c4 c2 b5 b8 cb                  vfmadd231pd     %ymm11, %ymm9, %ymm1
+     e92:       c4 62 7d 19 7c c5 00            vbroadcastsd    (%rbp,%rax,8), %ymm15
+     e99:       c4 42 85 a8 ce                  vfmadd213pd     %ymm14, %ymm15, %ymm9
+     e9e:       c4 41 7d 28 70 c0               vmovapd -64(%r8), %ymm14
+     ea4:       c4 c2 ad b8 d6                  vfmadd231pd     %ymm14, %ymm10, %ymm2
+     ea9:       c4 c2 a5 b8 de                  vfmadd231pd     %ymm14, %ymm11, %ymm3
+     eae:       c4 c2 85 b8 e6                  vfmadd231pd     %ymm14, %ymm15, %ymm4
+     eb3:       c4 41 7d 28 70 e0               vmovapd -32(%r8), %ymm14
+     eb9:       c4 c2 ad b8 ee                  vfmadd231pd     %ymm14, %ymm10, %ymm5
+     ebe:       c4 c2 a5 b8 f6                  vfmadd231pd     %ymm14, %ymm11, %ymm6
+     ec3:       c4 c2 85 b8 fe                  vfmadd231pd     %ymm14, %ymm15, %ymm7
+     ec8:       c4 41 7d 28 30                  vmovapd (%r8), %ymm14
+     ecd:       c4 42 8d a8 d4                  vfmadd213pd     %ymm12, %ymm14, %ymm10
+     ed2:       c4 42 8d a8 dd                  vfmadd213pd     %ymm13, %ymm14, %ymm11
+     ed7:       c4 42 85 b8 c6                  vfmadd231pd     %ymm14, %ymm15, %ymm8
 ```
 
 This looks as good as we may expect. The output matrix values are always in
@@ -1315,18 +1314,18 @@ performance than the tighter M_R = 6, M_R = 8, indicating the cliff associated
 with spilling.
 
 ```
-c4 62 95 b8 f0  vfmadd231pd     %ymm0, %ymm13, %ymm14
+c4 62 95 b8 f0                              vfmadd231pd     %ymm0, %ymm13, %ymm14
 1360:       c4 a2 7d 19 84 ef e8 c3 ff ff   vbroadcastsd    -15384(%rdi,%r13,8), %ymm0
 136a:       c5 fd 11 84 24 80 01 00 00      vmovupd %ymm0, 384(%rsp)
-1373:       c4 e2 95 b8 c8  vfmadd231pd     %ymm0, %ymm13, %ymm1
+1373:       c4 e2 95 b8 c8                  vfmadd231pd     %ymm0, %ymm13, %ymm1
 1378:       c4 a2 7d 19 84 ef e8 d2 ff ff   vbroadcastsd    -11544(%rdi,%r13,8), %ymm0
 1382:       c5 fd 11 84 24 a0 01 00 00      vmovupd %ymm0, 416(%rsp)
-138b:       c4 e2 95 b8 d0  vfmadd231pd     %ymm0, %ymm13, %ymm2
+138b:       c4 e2 95 b8 d0                  vfmadd231pd     %ymm0, %ymm13, %ymm2
 1390:       c4 a2 7d 19 84 ef e8 e1 ff ff   vbroadcastsd    -7704(%rdi,%r13,8), %ymm0
-139a:       c4 e2 95 b8 d8  vfmadd231pd     %ymm0, %ymm13, %ymm3
+139a:       c4 e2 95 b8 d8                  vfmadd231pd     %ymm0, %ymm13, %ymm3
 139f:       c4 22 7d 19 a4 ef e8 f0 ff ff   vbroadcastsd    -3864(%rdi,%r13,8), %ymm12
 13a9:       c5 7d 11 a4 24 e0 01 00 00      vmovupd %ymm12, 480(%rsp) 13b2:
-c4 c2 95 b8 e4  vfmadd231pd     %ymm12, %ymm13, %ymm4
+            c4 c2 95 b8 e4                  vfmadd231pd     %ymm12, %ymm13, %ymm4
 ```
 
 Overall, we conclude here that the kind of code we could get automatically
