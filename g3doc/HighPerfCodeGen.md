@@ -87,7 +87,7 @@ $ clang -v
 clang version 8.0.0 (Fedora 8.0.0-3.fc30)
 Target: x86_64-unknown-linux-gnu
 
-$ clang -O3 -ffast-math  -DTIME matmul.c -o matmul.clang -lm
+$ clang -O3 -ffast-math -DTIME matmul.c -o matmul.clang -lm
 $ ./matmul.clang
 36.484855s
 0.47 GFLOPS
@@ -105,8 +105,14 @@ $ ./matmul.gcc
 Disappointingly, clang and GCC are at 0.6% and 6% of the machine peak
 respectively! :-( But general-purpose compilers aren't expected or meant to get
 anywhere to the peak. Programmers instead typically use highly tuned libraries.
-We'll get to that shortly, but while on this let's also see what a polyhedral
-tool ([Pluto](https://github.com/bondhugula/pluto)), which is a source to source
+We'll get to that shortly, but a quick note on why Clang performs poorly here.
+Clang only performs innermost loop vectorization, which is really a bad choice
+here (due to poor locality) when that's the only thing being done. Even a
+textbook loop interchange here from ijk -> ikj improves Clang performance by
+about 10x (because now the right loop would be at the innermost level for both
+locality and auto-vec). Clang doesn't perform any unroll-and-jam here
+either. While on this let's also see what a polyhedral tool
+([Pluto](https://github.com/bondhugula/pluto)), which is a source to source
 translator, does on this. The below run shows it's at about 25% of the machine
 peak, which is better but also pretty unsatisfying.
 ```shell
@@ -667,9 +673,10 @@ are also needed here. In more complex cases, the view/subview ops are also
 needed. But for this benchmark, the vectorization needed is quite
 straightforward, and is a simple outer loop vectorization along the j loop.
 
-The existing "super vectorizer" in MLIR is really not functional or complete.
-For this article, we build and use a new loop vectorizer (enabled by -hopt-vect
-or via -affine-vectorize when running separately). We introduce a new
+The existing "super vectorizer" in MLIR is really not functional or complete
+for the auto-vectorization we need.  For this article, we build and use a new
+loop vectorizer (enabled by -hopt-vect or via -affine-vectorize when running
+separately). We introduce a new
 [*memref_shape_cast* op](https://github.com/bondhugula/mlir/commit/6a9822933b28aabced2c6ceef593f35c9665d1fe#diff-862f92fedaa626e6221ac920c18a6b8a) which is needed to change the elemental type on a memref.
 Here's how the vectorized MLIR looks like if we started with the naive matmul
 nest.
