@@ -1,19 +1,10 @@
 //===- StorageUniquer.h - Common Storage Class Uniquer ----------*- C++ -*-===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 
 #ifndef MLIR_SUPPORT_STORAGEUNIQUER_H
 #define MLIR_SUPPORT_STORAGEUNIQUER_H
@@ -202,7 +193,7 @@ private:
   /// Implementation for getting/creating an instance of a derived type with
   /// complex storage.
   BaseStorage *getImpl(unsigned kind, unsigned hashValue,
-                       llvm::function_ref<bool(const BaseStorage *)> isEqual,
+                       function_ref<bool(const BaseStorage *)> isEqual,
                        std::function<BaseStorage *(StorageAllocator &)> ctorFn);
 
   /// Implementation for getting/creating an instance of a derived type with
@@ -213,7 +204,7 @@ private:
   /// Implementation for erasing an instance of a derived type with complex
   /// storage.
   void eraseImpl(unsigned kind, unsigned hashValue,
-                 llvm::function_ref<bool(const BaseStorage *)> isEqual,
+                 function_ref<bool(const BaseStorage *)> isEqual,
                  std::function<void(BaseStorage *)> cleanupFn);
 
   /// The internal implementation class.
@@ -263,7 +254,7 @@ private:
       ::llvm::hash_code>::type
   getHash(unsigned kind, const DerivedKey &derivedKey) {
     return llvm::hash_combine(
-        kind, llvm::DenseMapInfo<DerivedKey>::getHashValue(derivedKey));
+        kind, DenseMapInfo<DerivedKey>::getHashValue(derivedKey));
   }
 };
 } // end namespace mlir

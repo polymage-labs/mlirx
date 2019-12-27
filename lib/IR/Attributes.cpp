@@ -1,19 +1,10 @@
 //===- Attributes.cpp - MLIR Affine Expr Classes --------------------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 
 #include "mlir/IR/Attributes.h"
 #include "AttributeDetail.h"
@@ -405,9 +396,9 @@ bool ElementsAttr::isValidIndex(ArrayRef<uint64_t> index) const {
   });
 }
 
-ElementsAttr ElementsAttr::mapValues(
-    Type newElementType,
-    llvm::function_ref<APInt(const APInt &)> mapping) const {
+ElementsAttr
+ElementsAttr::mapValues(Type newElementType,
+                        function_ref<APInt(const APInt &)> mapping) const {
   switch (getKind()) {
   case StandardAttributes::DenseElements:
     return cast<DenseElementsAttr>().mapValues(newElementType, mapping);
@@ -416,9 +407,9 @@ ElementsAttr ElementsAttr::mapValues(
   }
 }
 
-ElementsAttr ElementsAttr::mapValues(
-    Type newElementType,
-    llvm::function_ref<APInt(const APFloat &)> mapping) const {
+ElementsAttr
+ElementsAttr::mapValues(Type newElementType,
+                        function_ref<APInt(const APFloat &)> mapping) const {
   switch (getKind()) {
   case StandardAttributes::DenseElements:
     return cast<DenseElementsAttr>().mapValues(newElementType, mapping);
@@ -527,7 +518,7 @@ DenseElementsAttr::AttributeElementIterator::AttributeElementIterator(
 
 /// Accesses the Attribute value at this iterator position.
 Attribute DenseElementsAttr::AttributeElementIterator::operator*() const {
-  auto owner = getFromOpaquePointer(object).cast<DenseElementsAttr>();
+  auto owner = getFromOpaquePointer(base).cast<DenseElementsAttr>();
   Type eltTy = owner.getType().getElementType();
   if (auto intEltTy = eltTy.dyn_cast<IntegerType>()) {
     if (intEltTy.getWidth() == 1)
@@ -798,15 +789,14 @@ DenseElementsAttr DenseElementsAttr::reshape(ShapedType newType) {
   return getRaw(newType, getRawData(), isSplat());
 }
 
-DenseElementsAttr DenseElementsAttr::mapValues(
-    Type newElementType,
-    llvm::function_ref<APInt(const APInt &)> mapping) const {
+DenseElementsAttr
+DenseElementsAttr::mapValues(Type newElementType,
+                             function_ref<APInt(const APInt &)> mapping) const {
   return cast<DenseIntElementsAttr>().mapValues(newElementType, mapping);
 }
 
 DenseElementsAttr DenseElementsAttr::mapValues(
-    Type newElementType,
-    llvm::function_ref<APInt(const APFloat &)> mapping) const {
+    Type newElementType, function_ref<APInt(const APFloat &)> mapping) const {
   return cast<DenseFPElementsAttr>().mapValues(newElementType, mapping);
 }
 
@@ -855,8 +845,7 @@ static ShapedType mappingHelper(Fn mapping, Attr &attr, ShapedType inType,
 }
 
 DenseElementsAttr DenseFPElementsAttr::mapValues(
-    Type newElementType,
-    llvm::function_ref<APInt(const APFloat &)> mapping) const {
+    Type newElementType, function_ref<APInt(const APFloat &)> mapping) const {
   llvm::SmallVector<char, 8> elementData;
   auto newArrayType =
       mappingHelper(mapping, *this, getType(), newElementType, elementData);
@@ -875,8 +864,7 @@ bool DenseFPElementsAttr::classof(Attribute attr) {
 //===----------------------------------------------------------------------===//
 
 DenseElementsAttr DenseIntElementsAttr::mapValues(
-    Type newElementType,
-    llvm::function_ref<APInt(const APInt &)> mapping) const {
+    Type newElementType, function_ref<APInt(const APInt &)> mapping) const {
   llvm::SmallVector<char, 8> elementData;
   auto newArrayType =
       mappingHelper(mapping, *this, getType(), newElementType, elementData);

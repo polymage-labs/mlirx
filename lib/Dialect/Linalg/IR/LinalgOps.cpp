@@ -1,19 +1,10 @@
 //===- LinalgOps.cpp - Implementation of the linalg operations ------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This file implements a the Linalg operations.
 //
@@ -60,18 +51,16 @@ static void printGenericOp(OpAsmPrinter &p, GenericOpType op) {
   llvm::StringSet<> linalgTraitAttrsSet;
   linalgTraitAttrsSet.insert(attrNames.begin(), attrNames.end());
   SmallVector<NamedAttribute, 8> attrs;
-  for (auto attr : op.getAttrs()) {
+  for (auto attr : op.getAttrs())
     if (linalgTraitAttrsSet.count(attr.first.strref()) > 0)
       attrs.push_back(attr);
-  }
+
   auto dictAttr = DictionaryAttr::get(attrs, op.getContext());
-  p << op.getOperationName() << " " << dictAttr << " ";
-  p.printOperands(op.getOperands());
+  p << op.getOperationName() << " " << dictAttr << " " << op.getOperands();
   if (!op.region().empty())
     p.printRegion(op.region());
   p.printOptionalAttrDict(op.getAttrs(), attrNames);
-  p << ": ";
-  interleaveComma(op.getOperandTypes(), p);
+  p << ": " << op.getOperandTypes();
 }
 
 static void print(OpAsmPrinter &p, GenericOp op) { printGenericOp(p, op); }
@@ -96,8 +85,8 @@ static ParseResult parseGenericOp(OpAsmParser &parser, OperationState &result) {
   Region &region = *result.addRegion();
   SmallVector<Type, 8> operandTypes, regionTypes;
   // Optional attributes may be added.
-  // Either Optional "fun" attribute or region must be specified.
-  if (!dictAttr.get("fun") &&
+  // Either Optional getFunAttrName() attribute or region must be specified.
+  if (!dictAttr.get(getFunAttrName()) &&
       parser.parseOptionalRegion(region, regionOperandsInfo, regionTypes))
     return failure();
   if (parser.parseOptionalAttrDict(result.attributes) ||
@@ -320,7 +309,7 @@ static ParseResult parseRangeOp(OpAsmParser &parser, OperationState &result) {
 // SliceOp
 //===----------------------------------------------------------------------===//
 void mlir::linalg::SliceOp::build(Builder *b, OperationState &result,
-                                  Value *base, ValueRange indexings) {
+                                  Value base, ValueRange indexings) {
   result.addOperands(base);
   result.addOperands(indexings);
 
@@ -342,14 +331,13 @@ void mlir::linalg::SliceOp::build(Builder *b, OperationState &result,
 }
 
 static void print(OpAsmPrinter &p, SliceOp op) {
-  p << SliceOp::getOperationName() << " " << *op.view() << "[";
-  p.printOperands(op.indexings());
-  p << "] ";
+  auto indexings = op.indexings();
+  p << SliceOp::getOperationName() << " " << *op.view() << "[" << indexings
+    << "] ";
   p.printOptionalAttrDict(op.getAttrs());
   p << " : " << op.getBaseViewType();
-  for (auto indexing : op.indexings()) {
-    p << ", " << indexing->getType();
-  }
+  if (!indexings.empty())
+    p << ", " << op.indexings().getTypes();
   p << ", " << op.getType();
 }
 
@@ -397,7 +385,7 @@ static LogicalResult verify(SliceOp op) {
 // TransposeOp
 //===----------------------------------------------------------------------===//
 void mlir::linalg::TransposeOp::build(Builder *b, OperationState &result,
-                                      Value *view, AffineMapAttr permutation,
+                                      Value view, AffineMapAttr permutation,
                                       ArrayRef<NamedAttribute> attrs) {
   auto permutationMap = permutation.getValue();
   assert(permutationMap);
@@ -455,16 +443,11 @@ static ParseResult parseTransposeOp(OpAsmParser &parser,
 
 static void print(OpAsmPrinter &p, YieldOp op) {
   p << op.getOperationName();
-  if (op.getNumOperands() > 0) {
-    p << ' ';
-    p.printOperands(op.operand_begin(), op.operand_end());
-  }
+  if (op.getNumOperands() > 0)
+    p << ' ' << op.getOperands();
   p.printOptionalAttrDict(op.getAttrs());
-  if (op.getNumOperands() > 0) {
-    p << " : ";
-    interleaveComma(op.getOperands(), p,
-                    [&](Value *e) { p.printType(e->getType()); });
-  }
+  if (op.getNumOperands() > 0)
+    p << " : " << op.getOperandTypes();
 }
 
 static ParseResult parseYieldOp(OpAsmParser &parser, OperationState &result) {
@@ -515,12 +498,12 @@ static LogicalResult verify(YieldOp op) {
 
 /////// Operations corresponding to library calls defined with Tablegen ////////
 // For such operations correspond to library calls (i.e. defined in
-// LinalgLibraryOps.td), we define an overloaded `print` function and a
+// LinalgStructuredOps.td), we define an overloaded `print` function and a
 // parse`className` function.
 
-// A LinalgLibraryOp prints as:
+// A LinalgStructuredOp prints as:
 //
-// ```{.mlir}
+// ```mlir
 //   concrete_op_name (ssa-inputs, ssa-outputs) : view-types
 // ```
 //
@@ -534,18 +517,15 @@ static LogicalResult verify(YieldOp op) {
 // ```
 //
 // Where %0, %1 and %2 are ssa-values of type MemRefType with strides.
-static void printLinalgLibraryOp(OpAsmPrinter &p, Operation *op) {
+static void printLinalgStructuredOp(OpAsmPrinter &p, Operation *op) {
   assert(op->getAbstractOperation() && "unregistered operation");
-  p << op->getName().getStringRef() << "(";
-  interleaveComma(op->getOperands(), p, [&](Value *v) { p << *v; });
-  p << ")";
+  p << op->getName().getStringRef() << "(" << op->getOperands() << ")";
   p.printOptionalAttrDict(op->getAttrs());
-  p << " : ";
-  interleaveComma(op->getOperands(), p, [&](Value *v) { p << v->getType(); });
+  p << " : " << op->getOperandTypes();
 }
 
-static ParseResult parseLinalgLibraryOp(OpAsmParser &parser,
-                                        OperationState &result) {
+static ParseResult parseLinalgStructuredOp(OpAsmParser &parser,
+                                           OperationState &result) {
   SmallVector<OpAsmParser::OperandType, 3> ops;
   SmallVector<Type, 3> types;
   return failure(
@@ -557,7 +537,7 @@ static ParseResult parseLinalgLibraryOp(OpAsmParser &parser,
 
 static LogicalResult verify(FillOp op) {
   auto viewType = op.getOutputViewType(0);
-  auto fillType = op.getValue()->getType();
+  auto fillType = op.value()->getType();
   if (viewType.getElementType() != fillType)
     return op.emitOpError("expects fill type to match view elemental type");
   return success();
@@ -632,18 +612,18 @@ static LogicalResult verify(ConvOp op) {
 namespace mlir {
 namespace linalg {
 
-#include "mlir/Dialect/Linalg/IR/LinalgLibraryOpInterfaces.cpp.inc"
+#include "mlir/Dialect/Linalg/IR/LinalgStructuredOpsInterfaces.cpp.inc"
 
 #define GET_OP_CLASSES
 #include "mlir/Dialect/Linalg/IR/LinalgOps.cpp.inc"
 
 #define GET_OP_CLASSES
-#include "mlir/Dialect/Linalg/IR/LinalgLibraryOps.cpp.inc"
+#include "mlir/Dialect/Linalg/IR/LinalgStructuredOps.cpp.inc"
 
 } // namespace linalg
 } // namespace mlir
 
-static AffineMap extractOrIdentityMap(llvm::Optional<AffineMap> maybeMap,
+static AffineMap extractOrIdentityMap(Optional<AffineMap> maybeMap,
                                       unsigned rank, MLIRContext *context) {
   if (maybeMap)
     return maybeMap.getValue();
@@ -812,4 +792,31 @@ std::string mlir::linalg::generateLibraryCallName(Operation *op) {
       types.begin(), types.end(), [&](Type t) { appendMangledType(ss, t); },
       [&]() { ss << "_"; });
   return ss.str();
+}
+
+static ArrayAttr getIndexingMaps(Operation *op) {
+  LinalgOp linalgOp = cast<LinalgOp>(op);
+  SmallVector<Attribute, 4> maps;
+  maps.reserve(linalgOp.getNumInputsAndOutputs());
+  for (AffineMap map : loopToOperandRangesMaps(op))
+    maps.push_back(AffineMapAttr::get(map));
+  return ArrayAttr::get(maps, op->getContext());
+}
+ArrayAttr mlir::linalg::ConvOp::indexing_maps() {
+  return getIndexingMaps(getOperation());
+}
+ArrayAttr mlir::linalg::CopyOp::indexing_maps() {
+  return getIndexingMaps(getOperation());
+}
+ArrayAttr mlir::linalg::DotOp::indexing_maps() {
+  return getIndexingMaps(getOperation());
+}
+ArrayAttr mlir::linalg::FillOp::indexing_maps() {
+  return getIndexingMaps(getOperation());
+}
+ArrayAttr mlir::linalg::MatmulOp::indexing_maps() {
+  return getIndexingMaps(getOperation());
+}
+ArrayAttr mlir::linalg::MatvecOp::indexing_maps() {
+  return getIndexingMaps(getOperation());
 }

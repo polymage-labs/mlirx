@@ -1,19 +1,10 @@
 //===- StandardTypes.cpp - MLIR Standard Type Classes ---------------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 
 #include "mlir/IR/StandardTypes.h"
 #include "TypeDetail.h"
@@ -197,6 +188,10 @@ bool ShapedType::hasStaticShape() const {
   return hasRank() && llvm::none_of(getShape(), isDynamic);
 }
 
+bool ShapedType::hasStaticShape(ArrayRef<int64_t> shape) const {
+  return hasStaticShape() && getShape() == shape;
+}
+
 //===----------------------------------------------------------------------===//
 // VectorType
 //===----------------------------------------------------------------------===//
@@ -371,7 +366,7 @@ MemRefType MemRefType::getImpl(ArrayRef<int64_t> shape, Type elementType,
   // Drop identity maps from the composition.
   // This may lead to the composition becoming empty, which is interpreted as an
   // implicit identity.
-  llvm::SmallVector<AffineMap, 2> cleanedAffineMapComposition;
+  SmallVector<AffineMap, 2> cleanedAffineMapComposition;
   for (const auto &map : affineMapComposition) {
     if (map.isIdentity())
       continue;
@@ -413,7 +408,7 @@ unsigned UnrankedMemRefType::getMemorySpace() const {
 }
 
 LogicalResult UnrankedMemRefType::verifyConstructionInvariants(
-    llvm::Optional<Location> loc, MLIRContext *context, Type elementType,
+    Optional<Location> loc, MLIRContext *context, Type elementType,
     unsigned memorySpace) {
   // Check that memref is formed from allowed types.
   if (!elementType.isIntOrFloat() && !elementType.isa<VectorType>())
@@ -643,8 +638,9 @@ ComplexType ComplexType::getChecked(Type elementType, Location location) {
 }
 
 /// Verify the construction of an integer type.
-LogicalResult ComplexType::verifyConstructionInvariants(
-    llvm::Optional<Location> loc, MLIRContext *context, Type elementType) {
+LogicalResult ComplexType::verifyConstructionInvariants(Optional<Location> loc,
+                                                        MLIRContext *context,
+                                                        Type elementType) {
   if (!elementType.isa<FloatType>() && !elementType.isa<IntegerType>())
     return emitOptionalError(loc, "invalid element type for complex");
   return success();

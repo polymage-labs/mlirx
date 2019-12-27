@@ -1,19 +1,10 @@
 //===- AnalysisManager.h - Analysis Management Infrastructure ---*- C++ -*-===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 
 #ifndef MLIR_PASS_ANALYSISMANAGER_H
 #define MLIR_PASS_ANALYSISMANAGER_H
@@ -128,10 +119,10 @@ template <typename AnalysisT> struct AnalysisModel : public AnalysisConcept {
 class AnalysisMap {
   /// A mapping between an analysis id and an existing analysis instance.
   using ConceptMap =
-      llvm::DenseMap<const AnalysisID *, std::unique_ptr<AnalysisConcept>>;
+      DenseMap<const AnalysisID *, std::unique_ptr<AnalysisConcept>>;
 
   /// Utility to return the name of the given analysis class.
-  template <typename AnalysisT> static llvm::StringRef getAnalysisName() {
+  template <typename AnalysisT> static StringRef getAnalysisName() {
     StringRef name = llvm::getTypeName<AnalysisT>();
     if (!name.consume_front("mlir::"))
       name.consume_front("(anonymous namespace)::");
@@ -165,7 +156,7 @@ public:
 
   /// Get a cached analysis instance if one exists, otherwise return null.
   template <typename AnalysisT>
-  llvm::Optional<std::reference_wrapper<AnalysisT>> getCachedAnalysis() const {
+  Optional<std::reference_wrapper<AnalysisT>> getCachedAnalysis() const {
     auto res = analyses.find(AnalysisID::getID<AnalysisT>());
     if (res == analyses.end())
       return llvm::None;
@@ -206,7 +197,7 @@ struct NestedAnalysisMap {
   void invalidate(const PreservedAnalyses &pa);
 
   /// The cached analyses for nested operations.
-  llvm::DenseMap<Operation *, std::unique_ptr<NestedAnalysisMap>> childAnalyses;
+  DenseMap<Operation *, std::unique_ptr<NestedAnalysisMap>> childAnalyses;
 
   /// The analyses for the owning module.
   detail::AnalysisMap analyses;
@@ -224,8 +215,8 @@ class ModuleAnalysisManager;
 /// accessible via 'slice'. This class is intended to be passed around by value,
 /// and cannot be constructed directly.
 class AnalysisManager {
-  using ParentPointerT = llvm::PointerUnion<const ModuleAnalysisManager *,
-                                            const AnalysisManager *>;
+  using ParentPointerT =
+      PointerUnion<const ModuleAnalysisManager *, const AnalysisManager *>;
 
 public:
   using PreservedAnalyses = detail::PreservedAnalyses;
@@ -233,7 +224,7 @@ public:
   // Query for a cached analysis on the given parent operation. The analysis may
   // not exist and if it does it may be out-of-date.
   template <typename AnalysisT>
-  llvm::Optional<std::reference_wrapper<AnalysisT>>
+  Optional<std::reference_wrapper<AnalysisT>>
   getCachedParentAnalysis(Operation *parentOp) const {
     ParentPointerT curParent = parent;
     while (auto *parentAM = curParent.dyn_cast<const AnalysisManager *>()) {
@@ -251,7 +242,7 @@ public:
 
   // Query for a cached entry of the given analysis on the current operation.
   template <typename AnalysisT>
-  llvm::Optional<std::reference_wrapper<AnalysisT>> getCachedAnalysis() const {
+  Optional<std::reference_wrapper<AnalysisT>> getCachedAnalysis() const {
     return impl->analyses.getCachedAnalysis<AnalysisT>();
   }
 
@@ -262,7 +253,7 @@ public:
 
   /// Query for a cached analysis of a child operation, or return null.
   template <typename AnalysisT>
-  llvm::Optional<std::reference_wrapper<AnalysisT>>
+  Optional<std::reference_wrapper<AnalysisT>>
   getCachedChildAnalysis(Operation *op) const {
     assert(op->getParentOp() == impl->getOperation());
     auto it = impl->childAnalyses.find(op);
@@ -297,8 +288,7 @@ private:
 
   /// A reference to the parent analysis manager, or the top-level module
   /// analysis manager.
-  llvm::PointerUnion<const ModuleAnalysisManager *, const AnalysisManager *>
-      parent;
+  ParentPointerT parent;
 
   /// A reference to the impl analysis map within the parent analysis manager.
   detail::NestedAnalysisMap *impl;

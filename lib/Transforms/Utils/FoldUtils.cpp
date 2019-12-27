@@ -1,19 +1,10 @@
 //===- FoldUtils.cpp ---- Fold Utilities ----------------------------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This file defines various operation fold utilities. These utilities are
 // intended to be used by passes to unify and simply their logic.
@@ -82,16 +73,15 @@ static Operation *materializeConstant(Dialect *dialect, OpBuilder &builder,
 //===----------------------------------------------------------------------===//
 
 LogicalResult OperationFolder::tryToFold(
-    Operation *op,
-    llvm::function_ref<void(Operation *)> processGeneratedConstants,
-    llvm::function_ref<void(Operation *)> preReplaceAction) {
+    Operation *op, function_ref<void(Operation *)> processGeneratedConstants,
+    function_ref<void(Operation *)> preReplaceAction) {
   // If this is a unique'd constant, return failure as we know that it has
   // already been folded.
   if (referencedDialects.count(op))
     return failure();
 
   // Try to fold the operation.
-  SmallVector<Value *, 8> results;
+  SmallVector<Value, 8> results;
   if (failed(tryToFold(op, results, processGeneratedConstants)))
     return failure();
 
@@ -139,8 +129,8 @@ void OperationFolder::notifyRemoval(Operation *op) {
 /// Tries to perform folding on the given `op`. If successful, populates
 /// `results` with the results of the folding.
 LogicalResult OperationFolder::tryToFold(
-    Operation *op, SmallVectorImpl<Value *> &results,
-    llvm::function_ref<void(Operation *)> processGeneratedConstants) {
+    Operation *op, SmallVectorImpl<Value> &results,
+    function_ref<void(Operation *)> processGeneratedConstants) {
   SmallVector<Attribute, 8> operandConstants;
   SmallVector<OpFoldResult, 8> foldResults;
 
@@ -182,13 +172,13 @@ LogicalResult OperationFolder::tryToFold(
     assert(!foldResults[i].isNull() && "expected valid OpFoldResult");
 
     // Check if the result was an SSA value.
-    if (auto *repl = foldResults[i].dyn_cast<Value *>()) {
+    if (auto repl = foldResults[i].dyn_cast<Value>()) {
       results.emplace_back(repl);
       continue;
     }
 
     // Check to see if there is a canonicalized version of this constant.
-    auto *res = op->getResult(i);
+    auto res = op->getResult(i);
     Attribute attrRepl = foldResults[i].get<Attribute>();
     if (auto *constOp =
             tryGetOrCreateConstant(uniquedConstants, dialect, builder, attrRepl,

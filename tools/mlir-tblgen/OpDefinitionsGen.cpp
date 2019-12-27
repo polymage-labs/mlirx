@@ -1,19 +1,10 @@
 //===- OpDefinitionsGen.cpp - MLIR op definitions generator ---------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // OpDefinitionsGen uses the description of operations to generate C++
 // definitions for ops.
@@ -464,8 +455,7 @@ void OpClass::writeDeclTo(raw_ostream &os) const {
     os << extraClassDeclaration << "\n";
 
   if (hasPrivateMethod) {
-    os << '\n';
-    os << "private:\n";
+    os << "\nprivate:\n";
     for (const auto &method : methods) {
       if (method.isPrivate()) {
         method.writeDeclTo(os);
@@ -515,21 +505,9 @@ private:
   // Generates builder methods for the operation.
   void genBuilder();
 
-  // Generates the build() method that takes each result-type/operand/attribute
-  // as a stand-alone parameter. Attributes will take wrapped mlir::Attribute
-  // values. The generated build() method also requires specifying result types
-  // for all results.
-  void genSeparateParamWrappedAttrBuilder();
-
-  // Generates the build() method that takes each result-type/operand/attribute
-  // as a stand-alone parameter. Attributes will take raw values without
-  // mlir::Attribute wrapper. The generated build() method also requires
-  // specifying result types for all results.
-  void genSeparateParamUnwrappedAttrBuilder();
-
-  // Generates the build() method that takes a single parameter for all the
-  // result types and a separate parameter for each operand/attribute.
-  void genCollectiveTypeParamBuilder();
+  // Generates the build() method that takes each operand/attribute
+  // as a stand-alone parameter.
+  void genSeparateArgParamBuilder();
 
   // Generates the build() method that takes each operand/attribute as a
   // stand-alone parameter. The generated build() method uses first operand's
@@ -668,29 +646,19 @@ void OpEmitter::emitDef(raw_ostream &os) { opClass.writeDefTo(os); }
 void OpEmitter::genAttrGetters() {
   FmtContext fctx;
   fctx.withBuilder("mlir::Builder(this->getContext())");
-  for (auto &namedAttr : op.getAttributes()) {
-    const auto &name = namedAttr.name;
-    const auto &attr = namedAttr.attr;
 
+  // Emit the derived attribute body.
+  auto emitDerivedAttr = [&](StringRef name, Attribute attr) {
     auto &method = opClass.newMethod(attr.getReturnType(), name);
     auto &body = method.body();
+    body << "  " << attr.getDerivedCodeBody() << "\n";
+  };
 
-    // Emit the derived attribute body.
-    if (attr.isDerivedAttr()) {
-      body << "  " << attr.getDerivedCodeBody() << "\n";
-      continue;
-    }
-
-    // Emit normal emitter.
-
-    // Return the queried attribute with the correct return type.
-    auto attrVal =
-        (attr.hasDefaultValue() || attr.isOptional())
-            ? formatv("this->getAttr(\"{0}\").dyn_cast_or_null<{1}>()", name,
-                      attr.getStorageType())
-            : formatv("this->getAttr(\"{0}\").cast<{1}>()", name,
-                      attr.getStorageType());
-    body << "  auto attr = " << attrVal << ";\n";
+  // Emit with return type specified.
+  auto emitAttrWithReturnType = [&](StringRef name, Attribute attr) {
+    auto &method = opClass.newMethod(attr.getReturnType(), name);
+    auto &body = method.body();
+    body << "  auto attr = " << name << "Attr();\n";
     if (attr.hasDefaultValue()) {
       // Returns the default value if not set.
       // TODO: this is inefficient, we are recreating the attribute for every
@@ -705,16 +673,43 @@ void OpEmitter::genAttrGetters() {
     body << "  return "
          << tgfmt(attr.getConvertFromStorageCall(), &fctx.withSelf("attr"))
          << ";\n";
+  };
+
+  // Generate raw named accessor type. This is a wrapper class that allows
+  // referring to the attributes via accessors instead of having to use
+  // the string interface for better compile time verification.
+  auto emitAttrWithStorageType = [&](StringRef name, Attribute attr) {
+    auto &method =
+        opClass.newMethod(attr.getStorageType(), (name + "Attr").str());
+    auto &body = method.body();
+    body << "  return this->getAttr(\"" << name << "\").";
+    if (attr.isOptional() || attr.hasDefaultValue())
+      body << "dyn_cast_or_null<";
+    else
+      body << "cast<";
+    body << attr.getStorageType() << ">();";
+  };
+
+  for (auto &namedAttr : op.getAttributes()) {
+    const auto &name = namedAttr.name;
+    const auto &attr = namedAttr.attr;
+    if (attr.isDerivedAttr()) {
+      emitDerivedAttr(name, attr);
+    } else {
+      emitAttrWithStorageType(name, attr);
+      emitAttrWithReturnType(name, attr);
+    }
   }
 }
 
 // Generates the named operand getter methods for the given Operator `op` and
 // puts them in `opClass`.  Uses `rangeType` as the return type of getters that
-// return a range of operands (individual operands are `Value *` and each
-// element in the range must also be `Value *`); use `rangeBeginCall` to get an
-// iterator to the beginning of the operand range; use `rangeSizeCall` to obtain
-// the number of operands. `getOperandCallPattern` contains the code necessary
-// to obtain a single operand whose position will be substituted instead of
+// return a range of operands (individual operands are `Value ` and each
+// element in the range must also be `Value `); use `rangeBeginCall` to get
+// an iterator to the beginning of the operand range; use `rangeSizeCall` to
+// obtain the number of operands. `getOperandCallPattern` contains the code
+// necessary to obtain a single operand whose position will be substituted
+// instead of
 // "{0}" marker in the pattern.  Note that the pattern should work for any kind
 // of ops, in particular for one-operand ops that may not have the
 // `getOperand(unsigned)` method.
@@ -787,7 +782,7 @@ static void generateNamedOperandGetters(const Operator &op, Class &opClass,
       auto &m = opClass.newMethod(rangeType, operand.name);
       m.body() << "  return getODSOperands(" << i << ");";
     } else {
-      auto &m = opClass.newMethod("Value *", operand.name);
+      auto &m = opClass.newMethod("Value ", operand.name);
       m.body() << "  return *getODSOperands(" << i << ").begin();";
     }
   }
@@ -865,7 +860,7 @@ void OpEmitter::genNamedResultGetters() {
       auto &m = opClass.newMethod("Operation::result_range", result.name);
       m.body() << "  return getODSResults(" << i << ");";
     } else {
-      auto &m = opClass.newMethod("Value *", result.name);
+      auto &m = opClass.newMethod("Value ", result.name);
       m.body() << "  return *getODSResults(" << i << ").begin();";
     }
   }
@@ -882,26 +877,11 @@ void OpEmitter::genNamedRegionGetters() {
   }
 }
 
-void OpEmitter::genSeparateParamWrappedAttrBuilder() {
-  std::string paramList;
-  llvm::SmallVector<std::string, 4> resultNames;
-  buildParamList(paramList, resultNames, TypeParamKind::Separate);
-
-  auto &m = opClass.newMethod("void", "build", paramList, OpMethod::MP_Static);
-  genCodeForAddingArgAndRegionForBuilder(m.body());
-
-  // Push all result types to the operation state
-  for (int i = 0, e = op.getNumResults(); i < e; ++i) {
-    m.body() << "  " << builderOpState << ".addTypes(" << resultNames[i]
-             << ");\n";
-  }
-}
-
-void OpEmitter::genSeparateParamUnwrappedAttrBuilder() {
+static bool canGenerateUnwrappedBuilder(Operator &op) {
   // If this op does not have native attributes at all, return directly to avoid
   // redefining builders.
   if (op.getNumNativeAttributes() == 0)
-    return;
+    return false;
 
   bool canGenerate = false;
   // We are generating builders that take raw values for attributes. We need to
@@ -915,47 +895,75 @@ void OpEmitter::genSeparateParamUnwrappedAttrBuilder() {
       break;
     }
   }
-  if (!canGenerate)
-    return;
-
-  std::string paramList;
-  llvm::SmallVector<std::string, 4> resultNames;
-  buildParamList(paramList, resultNames, TypeParamKind::Separate,
-                 AttrParamKind::UnwrappedValue);
-
-  auto &m = opClass.newMethod("void", "build", paramList, OpMethod::MP_Static);
-  genCodeForAddingArgAndRegionForBuilder(m.body(), /*isRawValueAttr=*/true);
-
-  // Push all result types to the operation state.
-  for (int i = 0, e = op.getNumResults(); i < e; ++i) {
-    m.body() << "  " << builderOpState << ".addTypes(" << resultNames[i]
-             << ");\n";
-  }
+  return canGenerate;
 }
 
-void OpEmitter::genCollectiveTypeParamBuilder() {
-  auto numResults = op.getNumResults();
+void OpEmitter::genSeparateArgParamBuilder() {
+  SmallVector<AttrParamKind, 2> attrBuilderType;
+  attrBuilderType.push_back(AttrParamKind::WrappedAttr);
+  if (canGenerateUnwrappedBuilder(op))
+    attrBuilderType.push_back(AttrParamKind::UnwrappedValue);
 
-  // If this op has no results, then just skip generating this builder.
-  // Otherwise we are generating the same signature as the separate-parameter
-  // builder.
-  if (numResults == 0)
-    return;
+  // Emit with separate builders with or without unwrapped attributes and/or
+  // inferring result type.
+  auto emit = [&](AttrParamKind attrType, TypeParamKind paramKind,
+                  bool inferType) {
+    std::string paramList;
+    llvm::SmallVector<std::string, 4> resultNames;
+    buildParamList(paramList, resultNames, paramKind, attrType);
 
-  // Similarly for ops with one single variadic result, which will also have one
-  // `ArrayRef<Type>` parameter for the result type.
-  if (numResults == 1 && op.getResult(0).isVariadic())
-    return;
+    auto &m =
+        opClass.newMethod("void", "build", paramList, OpMethod::MP_Static);
+    auto &body = m.body();
+    genCodeForAddingArgAndRegionForBuilder(
+        body, /*isRawValueAttr=*/attrType == AttrParamKind::UnwrappedValue);
 
-  std::string paramList;
-  llvm::SmallVector<std::string, 4> resultNames;
-  buildParamList(paramList, resultNames, TypeParamKind::Collective);
+    // Push all result types to the operation state
 
-  auto &m = opClass.newMethod("void", "build", paramList, OpMethod::MP_Static);
-  genCodeForAddingArgAndRegionForBuilder(m.body());
+    if (inferType) {
+      // Generate builder that infers type too.
+      // TODO(jpienaar): Subsume this with general checking if type can be
+      // infered automatically.
+      // TODO(jpienaar): Expand to handle regions.
+      body << formatv(R"(
+        SmallVector<Type, 2> inferedReturnTypes;
+        if (succeeded({0}::inferReturnTypes({1}.location, {1}.operands,
+                      {1}.attributes, /*regions=*/{{}, inferedReturnTypes)))
+          {1}.addTypes(inferedReturnTypes);
+        else
+          llvm::report_fatal_error("Failed to infer result type(s).");)",
+                      opClass.getClassName(), builderOpState);
+      return;
+    }
 
-  // Push all result types to the operation state
-  m.body() << formatv("  {0}.addTypes(resultTypes);\n", builderOpState);
+    switch (paramKind) {
+    case TypeParamKind::None:
+      return;
+    case TypeParamKind::Separate:
+      for (int i = 0, e = op.getNumResults(); i < e; ++i) {
+        body << "  " << builderOpState << ".addTypes(" << resultNames[i]
+             << ");\n";
+      }
+      return;
+    case TypeParamKind::Collective:
+      body << "  " << builderOpState << ".addTypes(resultTypes);\n";
+      return;
+    };
+    llvm_unreachable("unhandled TypeParamKind");
+  };
+
+  bool canInferType =
+      op.getTrait("InferTypeOpInterface::Trait") && op.getNumRegions() == 0;
+  for (auto attrType : attrBuilderType) {
+    emit(attrType, TypeParamKind::Separate, /*inferType=*/false);
+    if (canInferType)
+      emit(attrType, TypeParamKind::None, /*inferType=*/true);
+    // Emit separate arg build with collective type, unless there is only one
+    // variadic result, in which case the above would have already generated
+    // the same build method.
+    if (!(op.getNumResults() == 1 && op.getResult(0).isVariadic()))
+      emit(attrType, TypeParamKind::Collective, /*inferType=*/false);
+  }
 }
 
 void OpEmitter::genUseOperandAsResultTypeCollectiveParamBuilder() {
@@ -1006,8 +1014,7 @@ void OpEmitter::genInferedTypeCollectiveParamBuilder() {
                   /*regions=*/{{}, inferedReturnTypes)))
       build(builder, tblgen_state, inferedReturnTypes, operands, attributes);
     else
-      llvm::report_fatal_error("Failed to infer result type(s).");
-  )",
+      llvm::report_fatal_error("Failed to infer result type(s).");)",
                   opClass.getClassName(), builderOpState);
 }
 
@@ -1096,18 +1103,13 @@ void OpEmitter::genBuilder() {
   // Generate default builders that requires all result type, operands, and
   // attributes as parameters.
 
-  // We generate three builders here:
-  // 1. one having a stand-alone parameter for each result type / operand /
-  //    attribute, and
-  genSeparateParamWrappedAttrBuilder();
-  genSeparateParamUnwrappedAttrBuilder();
-  // 2. one having a stand-alone parameter for each operand / attribute and
-  //    an aggregated parameter for all result types, and
-  genCollectiveTypeParamBuilder();
-  // 3. one having an aggregated parameter for all result types / operands /
+  // We generate three classes of builders here:
+  // 1. one having a stand-alone parameter for each operand / attribute, and
+  genSeparateArgParamBuilder();
+  // 2. one having an aggregated parameter for all result types / operands /
   //    attributes, and
   genCollectiveParamBuilder();
-  // 4. one having a stand-alone parameter for each operand and attribute,
+  // 3. one having a stand-alone parameter for each operand and attribute,
   //    use the first operand or attribute's type as all result types
   //    to facilitate different call patterns.
   if (op.getNumVariadicResults() == 0) {
@@ -1118,11 +1120,6 @@ void OpEmitter::genBuilder() {
     if (op.getTrait("OpTrait::FirstAttrDerivedResultType"))
       genUseAttrAsResultTypeBuilder();
   }
-  // TODO(jpienaar): Subsume this with general checking if type can be infered
-  // automatically.
-  // TODO(jpienaar): Expand to handle regions.
-  if (op.getTrait("InferTypeOpInterface::Trait") && op.getNumRegions() == 0)
-    genInferedTypeCollectiveParamBuilder();
 }
 
 void OpEmitter::genCollectiveParamBuilder() {
@@ -1141,13 +1138,6 @@ void OpEmitter::genCollectiveParamBuilder() {
   auto &m = opClass.newMethod("void", "build", params, OpMethod::MP_Static);
   auto &body = m.body();
 
-  // Result types
-  if (numVariadicResults == 0 || numNonVariadicResults != 0)
-    body << "  assert(resultTypes.size()"
-         << (numVariadicResults != 0 ? " >= " : " == ") << numNonVariadicResults
-         << "u && \"mismatched number of return types\");\n";
-  body << "  " << builderOpState << ".addTypes(resultTypes);\n";
-
   // Operands
   if (numVariadicOperands == 0 || numNonVariadicOperands != 0)
     body << "  assert(operands.size()"
@@ -1164,6 +1154,20 @@ void OpEmitter::genCollectiveParamBuilder() {
     for (int i = 0; i < numRegions; ++i)
       m.body() << "  (void)" << builderOpState << ".addRegion();\n";
   }
+
+  // Result types
+  if (numVariadicResults == 0 || numNonVariadicResults != 0)
+    body << "  assert(resultTypes.size()"
+         << (numVariadicResults != 0 ? " >= " : " == ") << numNonVariadicResults
+         << "u && \"mismatched number of return types\");\n";
+  body << "  " << builderOpState << ".addTypes(resultTypes);\n";
+
+  // Generate builder that infers type too.
+  // TODO(jpienaar): Subsume this with general checking if type can be infered
+  // automatically.
+  // TODO(jpienaar): Expand to handle regions.
+  if (op.getTrait("InferTypeOpInterface::Trait") && op.getNumRegions() == 0)
+    genInferedTypeCollectiveParamBuilder();
 }
 
 void OpEmitter::buildParamList(std::string &paramList,
@@ -1234,7 +1238,7 @@ void OpEmitter::buildParamList(std::string &paramList,
     auto argument = op.getArg(i);
     if (argument.is<tblgen::NamedTypeConstraint *>()) {
       const auto &operand = op.getOperand(numOperands);
-      paramList.append(operand.isVariadic() ? ", ValueRange " : ", Value *");
+      paramList.append(operand.isVariadic() ? ", ValueRange " : ", Value ");
       paramList.append(getArgumentName(op, numOperands));
       ++numOperands;
     } else {
@@ -1523,7 +1527,7 @@ void OpEmitter::genOperandResultVerifier(OpMethodBody &body,
       continue;
 
     // Emit a loop to check all the dynamic values in the pack.
-    body << formatv("    for (Value *v : getODS{0}{1}s({2})) {{\n",
+    body << formatv("    for (Value v : getODS{0}{1}s({2})) {{\n",
                     // Capitalize the first letter to match the function name
                     valueKind.substr(0, 1).upper(), valueKind.substr(1),
                     staticValue.index());
@@ -1678,7 +1682,7 @@ void OpEmitter::genOpAsmInterface() {
 
 namespace {
 // Helper class to emit Op operand adaptors to an output stream.  Operand
-// adaptors are wrappers around ArrayRef<Value *> that provide named operand
+// adaptors are wrappers around ArrayRef<Value> that provide named operand
 // getters identical to those defined in the Op.
 class OpOperandAdaptorEmitter {
 public:
@@ -1694,12 +1698,12 @@ private:
 
 OpOperandAdaptorEmitter::OpOperandAdaptorEmitter(const Operator &op)
     : adapterClass(op.getCppClassName().str() + "OperandAdaptor") {
-  adapterClass.newField("ArrayRef<Value *>", "tblgen_operands");
-  auto &constructor = adapterClass.newConstructor("ArrayRef<Value *> values");
+  adapterClass.newField("ArrayRef<Value>", "tblgen_operands");
+  auto &constructor = adapterClass.newConstructor("ArrayRef<Value> values");
   constructor.body() << "  tblgen_operands = values;\n";
 
   generateNamedOperandGetters(op, adapterClass,
-                              /*rangeType=*/"ArrayRef<Value *>",
+                              /*rangeType=*/"ArrayRef<Value>",
                               /*rangeBeginCall=*/"tblgen_operands.begin()",
                               /*rangeSizeCall=*/"tblgen_operands.size()",
                               /*getOperandCallPattern=*/"tblgen_operands[{0}]");

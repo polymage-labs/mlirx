@@ -1,19 +1,10 @@
 //===-- SPIRVCompositeOps.td - MLIR SPIR-V Composite Ops ---*- tablegen -*-===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This file contains composite ops for SPIR-V dialect. It corresponds
 // to "3.32.12. Composite Instructions" of the SPIR-V spec.
@@ -24,6 +15,58 @@
 #define SPIRV_COMPOSITE_OPS
 
 include "mlir/Dialect/SPIRV/SPIRVBase.td"
+
+// -----
+
+def SPV_CompositeConstructOp : SPV_Op<"CompositeConstruct", [NoSideEffect]> {
+  let summary = [{
+    Construct a new composite object from a set of constituent objects that
+    will fully form it.
+  }];
+
+  let description = [{
+    Result Type must be a composite type, whose top-level
+    members/elements/components/columns have the same type as the types of
+    the operands, with one exception. The exception is that for constructing
+    a vector, the operands may also be vectors with the same component type
+    as the Result Type component type. When constructing a vector, the total
+    number of components in all the operands must equal the number of
+    components in Result Type.
+
+    Constituents will become members of a structure, or elements of an
+    array, or components of a vector, or columns of a matrix. There must be
+    exactly one Constituent for each top-level
+    member/element/component/column of the result, with one exception. The
+    exception is that for constructing a vector, a contiguous subset of the
+    scalars consumed can be represented by a vector operand instead. The
+    Constituents must appear in the order needed by the definition of the
+    type of the result. When constructing a vector, there must be at least
+    two Constituent operands.
+
+    ### Custom assembly form
+
+    ```
+    composite-construct-op ::= ssa-id `=` `spv.CompositeConstruct`
+                               (ssa-use (`,` ssa-use)* )? `:` composite-type
+    ```
+
+    For example:
+
+    ```
+    %0 = spv.CompositeConstruct %1, %2, %3 : vector<3xf32>
+    ```
+  }];
+
+  let arguments = (ins
+    Variadic<SPV_Type>:$constituents
+  );
+
+  let results = (outs
+    SPV_Composite:$result
+  );
+}
+
+// -----
 
 def SPV_CompositeExtractOp : SPV_Op<"CompositeExtract", [NoSideEffect]> {
   let summary = "Extract a part of a composite object.";
@@ -41,7 +84,7 @@ def SPV_CompositeExtractOp : SPV_Op<"CompositeExtract", [NoSideEffect]> {
 
     ### Custom assembly form
 
-    ``` {.ebnf}
+    ```
     composite-extract-op ::= ssa-id `=` `spv.CompositeExtract` ssa-use
                              `[` integer-literal (',' integer-literal)* `]`
                              `:` composite-type
@@ -65,6 +108,11 @@ def SPV_CompositeExtractOp : SPV_Op<"CompositeExtract", [NoSideEffect]> {
   let results = (outs
     SPV_Type:$component
   );
+
+  let builders = [
+    OpBuilder<[{Builder *builder, OperationState &state,
+                Value composite, ArrayRef<int32_t> indices}]>
+  ];
 
   let hasFolder = 1;
 }
@@ -91,7 +139,7 @@ def SPV_CompositeInsertOp : SPV_Op<"CompositeInsert", [NoSideEffect]> {
 
     ### Custom assembly form
 
-    ``` {.ebnf}
+    ```
     composite-insert-op ::= ssa-id `=` `spv.CompositeInsert` ssa-use, ssa-use
                             `[` integer-literal (',' integer-literal)* `]`
                             `:` object-type `into` composite-type

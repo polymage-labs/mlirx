@@ -1,19 +1,10 @@
 //===- Function.cpp - MLIR Function Classes -------------------------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 
 #include "mlir/IR/Function.h"
 #include "mlir/IR/BlockAndValueMapping.h"
@@ -40,10 +31,10 @@ FuncOp FuncOp::create(Location location, StringRef name, FunctionType type,
   OperationState state(location, "func");
   Builder builder(location->getContext());
   FuncOp::build(&builder, state, name, type, attrs);
-  return llvm::cast<FuncOp>(Operation::create(state));
+  return cast<FuncOp>(Operation::create(state));
 }
 FuncOp FuncOp::create(Location location, StringRef name, FunctionType type,
-                      llvm::iterator_range<dialect_attr_iterator> attrs) {
+                      iterator_range<dialect_attr_iterator> attrs) {
   SmallVector<NamedAttribute, 8> attrRef(attrs);
   return create(location, name, type, llvm::makeArrayRef(attrRef));
 }
@@ -204,7 +195,7 @@ FuncOp FuncOp::clone(BlockAndValueMapping &mapper) {
   }
 
   // Create the new function.
-  FuncOp newFunc = llvm::cast<FuncOp>(getOperation()->cloneWithoutRegions());
+  FuncOp newFunc = cast<FuncOp>(getOperation()->cloneWithoutRegions());
   newFunc.setType(newType);
 
   /// Set the argument attributes for arguments that aren't being replaced.

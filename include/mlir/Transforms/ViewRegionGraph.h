@@ -1,19 +1,10 @@
 //===- ViewRegionGraph.h - View/write graphviz graphs -----------*- C++ -*-===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // Defines interface to produce Graphviz outputs of MLIR Regions.
 //
@@ -37,13 +28,13 @@ void viewGraph(Region &region, const Twine &name, bool shortNames = false,
                const Twine &title = "",
                llvm::GraphProgram::Name program = llvm::GraphProgram::DOT);
 
-llvm::raw_ostream &writeGraph(llvm::raw_ostream &os, Region &region,
-                              bool shortNames = false, const Twine &title = "");
+raw_ostream &writeGraph(raw_ostream &os, Region &region,
+                        bool shortNames = false, const Twine &title = "");
 
 /// Creates a pass to print CFG graphs.
 std::unique_ptr<mlir::OpPassBase<mlir::FuncOp>>
-createPrintCFGGraphPass(llvm::raw_ostream &os = llvm::errs(),
-                        bool shortNames = false, const llvm::Twine &title = "");
+createPrintCFGGraphPass(raw_ostream &os = llvm::errs(), bool shortNames = false,
+                        const Twine &title = "");
 
 } // end namespace mlir
 

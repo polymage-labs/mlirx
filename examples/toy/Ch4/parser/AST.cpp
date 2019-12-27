@@ -1,19 +1,10 @@
 //===- AST.cpp - Helper for printing out the Toy AST ----------------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This file implements the AST dump for the Toy language.
 //
@@ -21,6 +12,7 @@
 
 #include "toy/AST.h"
 
+#include "mlir/ADT/TypeSwitch.h"
 #include "mlir/Support/STLExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/raw_ostream.h"
@@ -84,20 +76,15 @@ template <typename T> static std::string loc(T *node) {
 
 /// Dispatch to a generic expressions to the appropriate subclass using RTTI
 void ASTDumper::dump(ExprAST *expr) {
-#define dispatch(CLASS)                                                        \
-  if (CLASS *node = llvm::dyn_cast<CLASS>(expr))                               \
-    return dump(node);
-  dispatch(VarDeclExprAST);
-  dispatch(LiteralExprAST);
-  dispatch(NumberExprAST);
-  dispatch(VariableExprAST);
-  dispatch(ReturnExprAST);
-  dispatch(BinaryExprAST);
-  dispatch(CallExprAST);
-  dispatch(PrintExprAST);
-  // No match, fallback to a generic message
-  INDENT();
-  llvm::errs() << "<unknown Expr, kind " << expr->getKind() << ">\n";
+  mlir::TypeSwitch<ExprAST *>(expr)
+      .Case<BinaryExprAST, CallExprAST, LiteralExprAST, NumberExprAST,
+            PrintExprAST, ReturnExprAST, VarDeclExprAST, VariableExprAST>(
+          [&](auto *node) { this->dump(node); })
+      .Default([&](ExprAST *) {
+        // No match, fallback to a generic message
+        INDENT();
+        llvm::errs() << "<unknown Expr, kind " << expr->getKind() << ">\n";
+      });
 }
 
 /// A variable declaration is printing the variable name, the type, and then

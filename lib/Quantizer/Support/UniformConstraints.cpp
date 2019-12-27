@@ -1,19 +1,10 @@
 //===- UniformConstraints.cpp - Constraints for uniform quant -------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 
 #include "mlir/Quantizer/Support/UniformConstraints.h"
 
@@ -118,7 +109,7 @@ public:
   }
 
 private:
-  void printLabel(llvm::raw_ostream &os) const override {
+  void printLabel(raw_ostream &os) const override {
     os << "PropagateExplicitScale";
   }
   void propagate(SolverContext &solverContext,
@@ -127,7 +118,7 @@ private:
 
     // Get scale/zp from all parents.
     for (auto it = incoming_begin(), e = incoming_end(); it != e; ++it) {
-      auto parentAnchor = llvm::cast<CAGAnchorNode>(*it);
+      auto parentAnchor = cast<CAGAnchorNode>(*it);
       auto selectedType = parentAnchor->getUniformMetadata().selectedType;
       if (auto uqType = selectedType.dyn_cast_or_null<UniformQuantizedType>()) {
         scaleZp.assertValue(
@@ -139,7 +130,7 @@ private:
     // Propagate to children.
     if (scaleZp.hasValue()) {
       for (auto it = begin(), e = end(); it != e; ++it) {
-        auto childAnchor = llvm::cast<CAGAnchorNode>(*it);
+        auto childAnchor = cast<CAGAnchorNode>(*it);
         if (modified(childAnchor->getUniformMetadata()
                          .explicitScaleZeroPoint.mergeFrom(scaleZp))) {
           childAnchor->markDirty();
@@ -163,9 +154,7 @@ public:
   }
 
 private:
-  void printLabel(llvm::raw_ostream &os) const override {
-    os << "SolveUniform";
-  }
+  void printLabel(raw_ostream &os) const override { os << "SolveUniform"; }
 
   void propagate(SolverContext &solverContext,
                  const TargetConfiguration &config) override {
@@ -176,7 +165,7 @@ private:
     ClusteredFacts clusteredFacts;
     Type originalElementType;
     for (auto it = incoming_begin(), e = incoming_end(); it != e; ++it) {
-      auto parentAnchor = llvm::cast<CAGAnchorNode>(*it);
+      auto parentAnchor = cast<CAGAnchorNode>(*it);
       auto metadata = parentAnchor->getUniformMetadata();
       // TODO: Possibly use a location that fuses all involved parents.
       fusedLoc = parentAnchor->getOp()->getLoc();
@@ -226,7 +215,7 @@ private:
 
     // Apply it to all parents.
     for (auto it = incoming_begin(), e = incoming_end(); it != e; ++it) {
-      auto parentAnchor = llvm::cast<CAGAnchorNode>(*it);
+      auto parentAnchor = cast<CAGAnchorNode>(*it);
       auto &metadata = parentAnchor->getUniformMetadata();
       if (metadata.selectedType != selectedType) {
         metadata.selectedType = selectedType;

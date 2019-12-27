@@ -1,19 +1,10 @@
 //===- SDBM.cpp - MLIR SDBM implementation --------------------------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // A striped difference-bound matrix (SDBM) is a set in Z^N (or R^N) defined
 // as {(x_1, ... x_n) | f(x_1, ... x_n) >= 0} where f is an SDBM expression.
@@ -88,11 +79,11 @@ namespace {
 struct SDBMBuilderResult {
   // Positions in the matrix of the variables taken with the "+" sign in the
   // difference expression, 0 if it is a constant rather than a variable.
-  llvm::SmallVector<unsigned, 2> positivePos;
+  SmallVector<unsigned, 2> positivePos;
 
   // Positions in the matrix of the variables taken with the "-" sign in the
   // difference expression, 0 if it is a constant rather than a variable.
-  llvm::SmallVector<unsigned, 2> negativePos;
+  SmallVector<unsigned, 2> negativePos;
 
   // Constant value in the difference expression.
   int64_t value = 0;
@@ -184,13 +175,12 @@ public:
     return lhs;
   }
 
-  SDBMBuilder(llvm::DenseMap<SDBMExpr, llvm::SmallVector<unsigned, 2>>
-                  &pointExprToStripe,
-              llvm::function_ref<unsigned(SDBMInputExpr)> callback)
+  SDBMBuilder(DenseMap<SDBMExpr, SmallVector<unsigned, 2>> &pointExprToStripe,
+              function_ref<unsigned(SDBMInputExpr)> callback)
       : pointExprToStripe(pointExprToStripe), linearPosition(callback) {}
 
-  llvm::DenseMap<SDBMExpr, llvm::SmallVector<unsigned, 2>> &pointExprToStripe;
-  llvm::function_ref<unsigned(SDBMInputExpr)> linearPosition;
+  DenseMap<SDBMExpr, SmallVector<unsigned, 2>> &pointExprToStripe;
+  function_ref<unsigned(SDBMInputExpr)> linearPosition;
 };
 } // namespace
 
@@ -239,7 +229,7 @@ SDBM SDBM::get(ArrayRef<SDBMExpr> inequalities, ArrayRef<SDBMExpr> equalities) {
   // expression.  Keep track of those in pointExprToStripe.
   // There may also be multiple stripe expressions equal to the same variable.
   // Introduce a temporary variable for each of those.
-  llvm::DenseMap<SDBMExpr, llvm::SmallVector<unsigned, 2>> pointExprToStripe;
+  DenseMap<SDBMExpr, SmallVector<unsigned, 2>> pointExprToStripe;
   unsigned numTemporaries = 0;
 
   auto updateStripePointMaps = [&numTemporaries, &result, &pointExprToStripe,
@@ -512,7 +502,7 @@ void SDBM::getSDBMExpressions(SDBMDialect *dialect,
   }
 }
 
-void SDBM::print(llvm::raw_ostream &os) {
+void SDBM::print(raw_ostream &os) {
   unsigned numVariables = getNumVariables();
 
   // Helper function that prints the name of the variable given its linearized

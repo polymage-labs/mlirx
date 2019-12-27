@@ -1,19 +1,10 @@
 //===- LoopUtils.cpp ---- Misc utilities for loop transformation ----------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This file implements miscellaneous loop transformation routines.
 //
@@ -30,6 +21,7 @@
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/Function.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "mlir/Transforms/Utils.h"
 #include "llvm/ADT/DenseMap.h"
@@ -52,7 +44,7 @@ using llvm::SmallMapVector;
 /// expression.
 void mlir::getCleanupLoopLowerBound(AffineForOp forOp, unsigned unrollFactor,
                                     AffineMap *map,
-                                    SmallVectorImpl<Value *> *operands,
+                                    SmallVectorImpl<Value> *operands,
                                     OpBuilder &b) {
   auto lbMap = forOp.getLowerBoundMap();
 
@@ -63,7 +55,7 @@ void mlir::getCleanupLoopLowerBound(AffineForOp forOp, unsigned unrollFactor,
   }
 
   AffineMap tripCountMap;
-  SmallVector<Value *, 4> tripCountOperands;
+  SmallVector<Value, 4> tripCountOperands;
   buildTripCountMapAndOperands(forOp, &tripCountMap, &tripCountOperands);
 
   // Sometimes the trip count cannot be expressed as an affine expression.
@@ -82,7 +74,7 @@ void mlir::getCleanupLoopLowerBound(AffineForOp forOp, unsigned unrollFactor,
   // lb + tr1 - tr1 % ufactor, lb + tr2 - tr2 % ufactor; the results of all
   // these affine.apply's make up the cleanup loop lower bound.
   SmallVector<AffineExpr, 4> bumpExprs(tripCountMap.getNumResults());
-  SmallVector<Value *, 4> bumpValues(tripCountMap.getNumResults());
+  SmallVector<Value, 4> bumpValues(tripCountMap.getNumResults());
   for (unsigned i = 0, e = tripCountMap.getNumResults(); i < e; i++) {
     auto tripCountExpr = tripCountMap.getResult(i);
     bumpExprs[i] = (tripCountExpr - tripCountExpr % unrollFactor) * step;
@@ -105,7 +97,7 @@ void mlir::getCleanupLoopLowerBound(AffineForOp forOp, unsigned unrollFactor,
   *map = simplifyAffineMap(*map);
   canonicalizeMapAndOperands(map, operands);
   // Remove any affine.apply's that became dead from the simplification above.
-  for (auto *v : bumpValues) {
+  for (auto v : bumpValues) {
     if (v->use_empty()) {
       v->getDefiningOp()->erase();
     }
@@ -127,7 +119,7 @@ LogicalResult mlir::promoteIfSingleIteration(AffineForOp forOp) {
     return failure();
 
   // Replaces all IV uses to its single iteration value.
-  auto *iv = forOp.getInductionVar();
+  auto iv = forOp.getInductionVar();
   Operation *op = forOp.getOperation();
   if (!iv->use_empty()) {
     if (forOp.hasConstantLowerBound()) {
@@ -137,7 +129,7 @@ LogicalResult mlir::promoteIfSingleIteration(AffineForOp forOp) {
       iv->replaceAllUsesWith(constOp);
     } else {
       AffineBound lb = forOp.getLowerBound();
-      SmallVector<Value *, 4> lbOperands(lb.operand_begin(), lb.operand_end());
+      SmallVector<Value, 4> lbOperands(lb.operand_begin(), lb.operand_end());
       OpBuilder builder(op->getBlock(), Block::iterator(op));
       if (lb.getMap() == builder.getDimIdentityMap()) {
         // No need of generating an affine.apply.
@@ -178,8 +170,8 @@ generateLoop(AffineMap lbMap, AffineMap ubMap,
              const std::vector<std::pair<uint64_t, ArrayRef<Operation *>>>
                  &instGroupQueue,
              unsigned offset, AffineForOp srcForInst, OpBuilder b) {
-  SmallVector<Value *, 4> lbOperands(srcForInst.getLowerBoundOperands());
-  SmallVector<Value *, 4> ubOperands(srcForInst.getUpperBoundOperands());
+  SmallVector<Value, 4> lbOperands(srcForInst.getLowerBoundOperands());
+  SmallVector<Value, 4> ubOperands(srcForInst.getUpperBoundOperands());
 
   assert(lbMap.getNumInputs() == lbOperands.size());
   assert(ubMap.getNumInputs() == ubOperands.size());
@@ -187,8 +179,8 @@ generateLoop(AffineMap lbMap, AffineMap ubMap,
   auto loopChunk =
       b.create<AffineForOp>(srcForInst.getLoc(), lbOperands, lbMap, ubOperands,
                             ubMap, srcForInst.getStep());
-  auto *loopChunkIV = loopChunk.getInductionVar();
-  auto *srcIV = srcForInst.getInductionVar();
+  auto loopChunkIV = loopChunk.getInductionVar();
+  auto srcIV = srcForInst.getInductionVar();
 
   BlockAndValueMapping operandMap;
 
@@ -403,8 +395,8 @@ LogicalResult mlir::loopUnrollFull(AffineForOp forOp) {
   return failure();
 }
 
-/// Unrolls and jams this loop by the specified factor or by the trip count (if
-/// constant) whichever is lower.
+/// Unrolls this loop by the specified factor or by the trip count (if constant)
+/// whichever is lower.
 LogicalResult mlir::loopUnrollUpToFactor(AffineForOp forOp,
                                          uint64_t unrollFactor) {
   Optional<uint64_t> mayBeConstantTripCount = getConstantTripCount(forOp);
@@ -449,7 +441,7 @@ LogicalResult mlir::loopUnrollByFactor(AffineForOp forOp,
     OpBuilder builder(op->getBlock(), ++Block::iterator(op));
     auto cleanupForInst = cast<AffineForOp>(builder.clone(*op));
     AffineMap cleanupMap;
-    SmallVector<Value *, 4> cleanupOperands;
+    SmallVector<Value, 4> cleanupOperands;
     getCleanupLoopLowerBound(forOp, unrollFactor, &cleanupMap, &cleanupOperands,
                              builder);
     assert(cleanupMap &&
@@ -477,7 +469,7 @@ LogicalResult mlir::loopUnrollByFactor(AffineForOp forOp,
   Block::iterator srcBlockEnd = std::prev(forOp.getBody()->end(), 2);
 
   // Unroll the contents of 'forOp' (append unrollFactor-1 additional copies).
-  auto *forOpIV = forOp.getInductionVar();
+  auto forOpIV = forOp.getInductionVar();
   for (unsigned i = 1; i < unrollFactor; i++) {
     BlockAndValueMapping operandMap;
 
@@ -532,11 +524,11 @@ void mlir::interchangeLoops(AffineForOp forOpA, AffineForOp forOpB) {
 // desired loop interchange would violate dependences by making the
 // dependence component lexicographically negative.
 static bool checkLoopInterchangeDependences(
-    const std::vector<llvm::SmallVector<DependenceComponent, 2>> &depCompsVec,
+    const std::vector<SmallVector<DependenceComponent, 2>> &depCompsVec,
     ArrayRef<AffineForOp> loops, ArrayRef<unsigned> loopPermMap) {
   // Invert permutation map.
   unsigned maxLoopDepth = loops.size();
-  llvm::SmallVector<unsigned, 4> loopPermMapInv;
+  SmallVector<unsigned, 4> loopPermMapInv;
   loopPermMapInv.resize(maxLoopDepth);
   for (unsigned i = 0; i < maxLoopDepth; ++i)
     loopPermMapInv[loopPermMap[i]] = i;
@@ -547,7 +539,7 @@ static bool checkLoopInterchangeDependences(
   // Example 1: [-1, 1][0, 0]
   // Example 2: [0, 0][-1, 1]
   for (unsigned i = 0, e = depCompsVec.size(); i < e; ++i) {
-    const llvm::SmallVector<DependenceComponent, 2> &depComps = depCompsVec[i];
+    const SmallVector<DependenceComponent, 2> &depComps = depCompsVec[i];
     assert(depComps.size() >= maxLoopDepth);
     // Check if the first non-zero dependence component is positive.
     // This iterates through loops in the desired order.
@@ -572,7 +564,7 @@ bool mlir::isValidLoopInterchangePermutation(ArrayRef<AffineForOp> loops,
   // rooted at 'loops[0]', at loop depths in range [1, maxLoopDepth].
   assert(loopPermMap.size() == loops.size());
   unsigned maxLoopDepth = loops.size();
-  std::vector<llvm::SmallVector<DependenceComponent, 2>> depCompsVec;
+  std::vector<SmallVector<DependenceComponent, 2>> depCompsVec;
   getDependenceComponents(loops[0], maxLoopDepth, &depCompsVec);
   return checkLoopInterchangeDependences(depCompsVec, loops, loopPermMap);
 }
@@ -608,13 +600,13 @@ AffineForOp mlir::sinkSequentialLoops(AffineForOp forOp) {
   // Gather dependence components for dependences between all ops in loop nest
   // rooted at 'loops[0]', at loop depths in range [1, maxLoopDepth].
   unsigned maxLoopDepth = loops.size();
-  std::vector<llvm::SmallVector<DependenceComponent, 2>> depCompsVec;
+  std::vector<SmallVector<DependenceComponent, 2>> depCompsVec;
   getDependenceComponents(loops[0], maxLoopDepth, &depCompsVec);
 
   // Mark loops as either parallel or sequential.
-  llvm::SmallVector<bool, 8> isParallelLoop(maxLoopDepth, true);
+  SmallVector<bool, 8> isParallelLoop(maxLoopDepth, true);
   for (unsigned i = 0, e = depCompsVec.size(); i < e; ++i) {
-    llvm::SmallVector<DependenceComponent, 2> &depComps = depCompsVec[i];
+    SmallVector<DependenceComponent, 2> &depComps = depCompsVec[i];
     assert(depComps.size() >= maxLoopDepth);
     for (unsigned j = 0; j < maxLoopDepth; ++j) {
       DependenceComponent &depComp = depComps[j];
@@ -632,7 +624,7 @@ AffineForOp mlir::sinkSequentialLoops(AffineForOp forOp) {
 
   // Compute permutation of loops that sinks sequential loops (and thus raises
   // parallel loops) while preserving relative order.
-  llvm::SmallVector<unsigned, 4> loopPermMap(maxLoopDepth);
+  SmallVector<unsigned, 4> loopPermMap(maxLoopDepth);
   unsigned nextSequentialLoop = numParallelLoops;
   unsigned nextParallelLoop = 0;
   for (unsigned i = 0; i < maxLoopDepth; ++i) {
@@ -669,8 +661,8 @@ void mlir::sinkLoop(AffineForOp forOp, unsigned loopDepth) {
 //      ...
 //    }
 // ```
-static void augmentMapAndBounds(OpBuilder &b, Value *iv, AffineMap *map,
-                                SmallVector<Value *, 4> *operands,
+static void augmentMapAndBounds(OpBuilder &b, Value iv, AffineMap *map,
+                                SmallVector<Value, 4> *operands,
                                 int64_t offset = 0) {
   auto bounds = llvm::to_vector<4>(map->getResults());
   bounds.push_back(b.getAffineDimExpr(map->getNumDims()) + offset);
@@ -699,16 +691,16 @@ stripmineSink(AffineForOp forOp, uint64_t factor,
 
   // Lower-bound map creation.
   auto lbMap = forOp.getLowerBoundMap();
-  SmallVector<Value *, 4> lbOperands(forOp.getLowerBoundOperands());
+  SmallVector<Value, 4> lbOperands(forOp.getLowerBoundOperands());
   augmentMapAndBounds(b, forOp.getInductionVar(), &lbMap, &lbOperands);
 
   // Upper-bound map creation.
   auto ubMap = forOp.getUpperBoundMap();
-  SmallVector<Value *, 4> ubOperands(forOp.getUpperBoundOperands());
+  SmallVector<Value, 4> ubOperands(forOp.getUpperBoundOperands());
   augmentMapAndBounds(b, forOp.getInductionVar(), &ubMap, &ubOperands,
                       /*offset=*/scaledStep);
 
-  auto *iv = forOp.getInductionVar();
+  auto iv = forOp.getInductionVar();
   SmallVector<AffineForOp, 8> innerLoops;
   for (auto t : targets) {
     // Insert newForOp before the terminator of `t`.
@@ -729,10 +721,10 @@ stripmineSink(AffineForOp forOp, uint64_t factor,
   return innerLoops;
 }
 
-static Loops stripmineSink(loop::ForOp forOp, Value *factor,
+static Loops stripmineSink(loop::ForOp forOp, Value factor,
                            ArrayRef<loop::ForOp> targets) {
-  auto *originalStep = forOp.step();
-  auto *iv = forOp.getInductionVar();
+  auto originalStep = forOp.step();
+  auto iv = forOp.getInductionVar();
 
   OpBuilder b(forOp);
   forOp.setStep(b.create<MulIOp>(forOp.getLoc(), originalStep, factor));
@@ -745,10 +737,10 @@ static Loops stripmineSink(loop::ForOp forOp, Value *factor,
 
     // Insert newForOp before the terminator of `t`.
     OpBuilder b(t.getBodyBuilder());
-    Value *stepped = b.create<AddIOp>(t.getLoc(), iv, forOp.step());
-    Value *less = b.create<CmpIOp>(t.getLoc(), CmpIPredicate::slt,
-                                   forOp.upperBound(), stepped);
-    Value *ub =
+    Value stepped = b.create<AddIOp>(t.getLoc(), iv, forOp.step());
+    Value less = b.create<CmpIOp>(t.getLoc(), CmpIPredicate::slt,
+                                  forOp.upperBound(), stepped);
+    Value ub =
         b.create<SelectOp>(t.getLoc(), less, forOp.upperBound(), stepped);
 
     // Splice [begin, begin + nOps - 1) into `newForOp` and replace uses.
@@ -799,7 +791,7 @@ mlir::tile(ArrayRef<AffineForOp> forOps, ArrayRef<uint64_t> sizes,
 }
 
 SmallVector<Loops, 8> mlir::tile(ArrayRef<loop::ForOp> forOps,
-                                 ArrayRef<Value *> sizes,
+                                 ArrayRef<Value> sizes,
                                  ArrayRef<loop::ForOp> targets) {
   return tileImpl(forOps, sizes, targets);
 }
@@ -821,13 +813,12 @@ SmallVector<AffineForOp, 8> mlir::tile(ArrayRef<AffineForOp> forOps,
   return tileImpl(forOps, sizes, target);
 }
 
-Loops mlir::tile(ArrayRef<loop::ForOp> forOps, ArrayRef<Value *> sizes,
+Loops mlir::tile(ArrayRef<loop::ForOp> forOps, ArrayRef<Value> sizes,
                  loop::ForOp target) {
   return tileImpl(forOps, sizes, target);
 }
 
-Loops mlir::tilePerfectlyNested(loop::ForOp rootForOp,
-                                ArrayRef<Value *> sizes) {
+Loops mlir::tilePerfectlyNested(loop::ForOp rootForOp, ArrayRef<Value> sizes) {
   // Collect perfectly nested loops.  If more size values provided than nested
   // loops available, truncate `sizes`.
   SmallVector<loop::ForOp, 4> forOps;
@@ -842,29 +833,29 @@ Loops mlir::tilePerfectlyNested(loop::ForOp rootForOp,
 // Build the IR that performs ceil division of a positive value by a constant:
 //    ceildiv(a, B) = divis(a + (B-1), B)
 // where divis is rounding-to-zero division.
-static Value *ceilDivPositive(OpBuilder &builder, Location loc, Value *dividend,
-                              int64_t divisor) {
+static Value ceilDivPositive(OpBuilder &builder, Location loc, Value dividend,
+                             int64_t divisor) {
   assert(divisor > 0 && "expected positive divisor");
   assert(dividend->getType().isIndex() && "expected index-typed value");
 
-  Value *divisorMinusOneCst = builder.create<ConstantIndexOp>(loc, divisor - 1);
-  Value *divisorCst = builder.create<ConstantIndexOp>(loc, divisor);
-  Value *sum = builder.create<AddIOp>(loc, dividend, divisorMinusOneCst);
-  return builder.create<DivISOp>(loc, sum, divisorCst);
+  Value divisorMinusOneCst = builder.create<ConstantIndexOp>(loc, divisor - 1);
+  Value divisorCst = builder.create<ConstantIndexOp>(loc, divisor);
+  Value sum = builder.create<AddIOp>(loc, dividend, divisorMinusOneCst);
+  return builder.create<SignedDivIOp>(loc, sum, divisorCst);
 }
 
 // Build the IR that performs ceil division of a positive value by another
 // positive value:
 //    ceildiv(a, b) = divis(a + (b - 1), b)
 // where divis is rounding-to-zero division.
-static Value *ceilDivPositive(OpBuilder &builder, Location loc, Value *dividend,
-                              Value *divisor) {
+static Value ceilDivPositive(OpBuilder &builder, Location loc, Value dividend,
+                             Value divisor) {
   assert(dividend->getType().isIndex() && "expected index-typed value");
 
-  Value *cstOne = builder.create<ConstantIndexOp>(loc, 1);
-  Value *divisorMinusOne = builder.create<SubIOp>(loc, divisor, cstOne);
-  Value *sum = builder.create<AddIOp>(loc, dividend, divisorMinusOne);
-  return builder.create<DivISOp>(loc, sum, divisor);
+  Value cstOne = builder.create<ConstantIndexOp>(loc, 1);
+  Value divisorMinusOne = builder.create<SubIOp>(loc, divisor, cstOne);
+  Value sum = builder.create<AddIOp>(loc, dividend, divisorMinusOne);
+  return builder.create<SignedDivIOp>(loc, sum, divisor);
 }
 
 // Hoist the ops within `outer` that appear before `inner`.
@@ -933,7 +924,7 @@ static LogicalResult tryIsolateBands(const TileLoops &tileLoops) {
 
 TileLoops mlir::extractFixedOuterLoops(loop::ForOp rootForOp,
                                        ArrayRef<int64_t> sizes) {
-  // Collect prefectly nested loops.  If more size values provided than nested
+  // Collect perfectly nested loops.  If more size values provided than nested
   // loops available, truncate `sizes`.
   SmallVector<loop::ForOp, 4> forOps;
   forOps.reserve(sizes.size());
@@ -945,7 +936,7 @@ TileLoops mlir::extractFixedOuterLoops(loop::ForOp rootForOp,
   // iterations.  Given that the loop current executes
   //   numIterations = ceildiv((upperBound - lowerBound), step)
   // iterations, we need to tile with size ceildiv(numIterations, size[i]).
-  SmallVector<Value *, 4> tileSizes;
+  SmallVector<Value, 4> tileSizes;
   tileSizes.reserve(sizes.size());
   for (unsigned i = 0, e = sizes.size(); i < e; ++i) {
     assert(sizes[i] > 0 && "expected strictly positive size for strip-mining");
@@ -953,10 +944,10 @@ TileLoops mlir::extractFixedOuterLoops(loop::ForOp rootForOp,
     auto forOp = forOps[i];
     OpBuilder builder(forOp);
     auto loc = forOp.getLoc();
-    Value *diff =
+    Value diff =
         builder.create<SubIOp>(loc, forOp.upperBound(), forOp.lowerBound());
-    Value *numIterations = ceilDivPositive(builder, loc, diff, forOp.step());
-    Value *iterationsPerBlock =
+    Value numIterations = ceilDivPositive(builder, loc, diff, forOp.step());
+    Value iterationsPerBlock =
         ceilDivPositive(builder, loc, numIterations, sizes[i]);
     tileSizes.push_back(iterationsPerBlock);
   }
@@ -1007,30 +998,30 @@ static void normalizeLoop(loop::ForOp loop, loop::ForOp outer,
   // of the loop to go from 0 to the number of iterations, if necessary.
   // TODO(zinenko): introduce support for negative steps or emit dynamic asserts
   // on step positivity, whatever gets implemented first.
-  Value *diff =
+  Value diff =
       builder.create<SubIOp>(loc, loop.upperBound(), loop.lowerBound());
-  Value *numIterations = ceilDivPositive(builder, loc, diff, loop.step());
+  Value numIterations = ceilDivPositive(builder, loc, diff, loop.step());
   loop.setUpperBound(numIterations);
 
-  Value *lb = loop.lowerBound();
+  Value lb = loop.lowerBound();
   if (!isZeroBased) {
-    Value *cst0 = builder.create<ConstantIndexOp>(loc, 0);
+    Value cst0 = builder.create<ConstantIndexOp>(loc, 0);
     loop.setLowerBound(cst0);
   }
 
-  Value *step = loop.step();
+  Value step = loop.step();
   if (!isStepOne) {
-    Value *cst1 = builder.create<ConstantIndexOp>(loc, 1);
+    Value cst1 = builder.create<ConstantIndexOp>(loc, 1);
     loop.setStep(cst1);
   }
 
   // Insert code computing the value of the original loop induction variable
   // from the "normalized" one.
   builder.setInsertionPointToStart(inner.getBody());
-  Value *scaled =
+  Value scaled =
       isStepOne ? loop.getInductionVar()
                 : builder.create<MulIOp>(loc, loop.getInductionVar(), step);
-  Value *shifted =
+  Value shifted =
       isZeroBased ? scaled : builder.create<AddIOp>(loc, scaled, lb);
 
   SmallPtrSet<Operation *, 2> preserve{scaled->getDefiningOp(),
@@ -1054,7 +1045,7 @@ void mlir::coalesceLoops(MutableArrayRef<loop::ForOp> loops) {
   // of the number of iterations of all loops.
   OpBuilder builder(outermost);
   Location loc = outermost.getLoc();
-  Value *upperBound = outermost.upperBound();
+  Value upperBound = outermost.upperBound();
   for (auto loop : loops.drop_front())
     upperBound = builder.create<MulIOp>(loc, upperBound, loop.upperBound());
   outermost.setUpperBound(upperBound);
@@ -1069,16 +1060,16 @@ void mlir::coalesceLoops(MutableArrayRef<loop::ForOp> loops) {
   //   iv_i = floordiv(iv_linear, product-of-loop-ranges-until-i) mod range_i.
   // Compute these iteratively from the innermost loop by creating a "running
   // quotient" of division by the range.
-  Value *previous = outermost.getInductionVar();
+  Value previous = outermost.getInductionVar();
   for (unsigned i = 0, e = loops.size(); i < e; ++i) {
     unsigned idx = loops.size() - i - 1;
     if (i != 0)
-      previous =
-          builder.create<DivISOp>(loc, previous, loops[idx + 1].upperBound());
+      previous = builder.create<SignedDivIOp>(loc, previous,
+                                              loops[idx + 1].upperBound());
 
-    Value *iv = (i == e - 1) ? previous
-                             : builder.create<RemISOp>(loc, previous,
-                                                       loops[idx].upperBound());
+    Value iv = (i == e - 1) ? previous
+                            : builder.create<SignedRemIOp>(
+                                  loc, previous, loops[idx].upperBound());
     replaceAllUsesInRegionWith(loops[idx].getInductionVar(), iv,
                                loops.back().region());
   }
@@ -1093,25 +1084,24 @@ void mlir::coalesceLoops(MutableArrayRef<loop::ForOp> loops) {
   second.erase();
 }
 
-void mlir::mapLoopToProcessorIds(loop::ForOp forOp,
-                                 ArrayRef<Value *> processorId,
-                                 ArrayRef<Value *> numProcessors) {
+void mlir::mapLoopToProcessorIds(loop::ForOp forOp, ArrayRef<Value> processorId,
+                                 ArrayRef<Value> numProcessors) {
   assert(processorId.size() == numProcessors.size());
   if (processorId.empty())
     return;
 
   OpBuilder b(forOp);
   Location loc(forOp.getLoc());
-  Value *mul = processorId.front();
+  Value mul = processorId.front();
   for (unsigned i = 1, e = processorId.size(); i < e; ++i)
     mul = b.create<AddIOp>(loc, b.create<MulIOp>(loc, mul, numProcessors[i]),
                            processorId[i]);
-  Value *lb = b.create<AddIOp>(loc, forOp.lowerBound(),
-                               b.create<MulIOp>(loc, forOp.step(), mul));
+  Value lb = b.create<AddIOp>(loc, forOp.lowerBound(),
+                              b.create<MulIOp>(loc, forOp.step(), mul));
   forOp.setLowerBound(lb);
 
-  Value *step = forOp.step();
-  for (auto *numProcs : numProcessors)
+  Value step = forOp.step();
+  for (auto numProcs : numProcessors)
     step = b.create<MulIOp>(loc, step, numProcs);
   forOp.setStep(step);
 }
@@ -1119,7 +1109,7 @@ void mlir::mapLoopToProcessorIds(loop::ForOp forOp,
 /// Returns true if the load/store associated with `acc' can be hoisted out of
 /// `forOp' (without considering hoisting of the op creating the memref.
 static bool isHoistableLoadStore(const MemRefAccess &acc, AffineForOp forOp) {
-  Value *memref = acc.memref;
+  Value memref = acc.memref;
 
   // If the memref is defined in the same for op, can't hoist.
   if (memref->getDefiningOp() &&
@@ -1180,7 +1170,7 @@ void mlir::scalarReplace(AffineForOp forOp) {
 
   // Constant zero index to avoid duplicates.
   OpBuilder topBuilder(f.getBody());
-  Value *zeroIndex = topBuilder.create<ConstantIndexOp>(f.getLoc(), 0);
+  Value zeroIndex = topBuilder.create<ConstantIndexOp>(f.getLoc(), 0);
 
   // Create groups of affine accesses such that each group of affine accesses
   // all refers to the same memref location. It is not feasible to construct a
@@ -1308,11 +1298,11 @@ void mlir::scalarReplace(AffineForOp forOp) {
 
     if (!containsStore) {
       // All ops in this equivalence class are loads.
-      Value *scalar;
+      Value scalar;
       bool hoistable = isHoistableLoadStore(acc, forOp);
       if (hoistable) {
         // Hoist the load; create the new load.
-        SmallVector<Value *, 4> operands;
+        SmallVector<Value, 4> operands;
         operands.reserve(1 + vMap.getNumOperands());
         operands.push_back(acc.memref);
         operands.append(vMap.getOperands().begin(), vMap.getOperands().end());
@@ -1343,13 +1333,9 @@ void mlir::scalarReplace(AffineForOp forOp) {
 
     // Load from the memref and store to the scalar (one element memref).
     // %singleEltMemref[0] = %A[...];
-    SmallVector<Value *, 4> mapOperands(vMap.getOperands().begin(),
-                                        vMap.getOperands().end());
-    Value *scalar = b.create<AffineLoadOp>(forOp.getLoc(), acc.memref,
-                                           vMap.getAffineMap(), mapOperands);
-    SmallVector<Value *, 1> zeroOperand = {zeroIndex};
-    b.create<AffineStoreOp>(forOp.getLoc(), scalar, singleEltMemRef,
-                            zeroOperand);
+    Value scalar = b.create<AffineLoadOp>(
+        forOp.getLoc(), acc.memref, vMap.getAffineMap(), vMap.getOperands());
+    b.create<AffineStoreOp>(forOp.getLoc(), scalar, singleEltMemRef, zeroIndex);
 
     // Replace all load/stores of original memref with %singleEltMemref[0].
     SmallVector<AffineExpr, 1> resultExprs = {b.getAffineConstantExpr(0)};
@@ -1365,10 +1351,9 @@ void mlir::scalarReplace(AffineForOp forOp) {
     // %A[...] = %singleEltMemRef[0]
     b.setInsertionPoint(forOp.getOperation()->getBlock(),
                         std::next(Block::iterator(forOp.getOperation())));
-    scalar =
-        b.create<AffineLoadOp>(forOp.getLoc(), singleEltMemRef, zeroOperand);
+    scalar = b.create<AffineLoadOp>(forOp.getLoc(), singleEltMemRef, zeroIndex);
     b.create<AffineStoreOp>(forOp.getLoc(), scalar, acc.memref,
-                            vMap.getAffineMap(), mapOperands);
+                            vMap.getAffineMap(), vMap.getOperands());
     // No need of a dealloc since we are using an alloca.
   }
 
@@ -1387,7 +1372,7 @@ findHighestBlockForPlacement(const MemRefRegion &region, Block &block,
                              Block::iterator *copyInPlacementStart,
                              Block::iterator *copyOutPlacementStart) {
   const auto *cst = region.getConstraints();
-  SmallVector<Value *, 4> symbols;
+  SmallVector<Value, 4> symbols;
   cst->getIdValues(cst->getNumDimIds(), cst->getNumDimAndSymbolIds(), &symbols);
 
   SmallVector<AffineForOp, 4> enclosingFors;
@@ -1451,9 +1436,9 @@ static void getMultiLevelStrides(const MemRefRegion &region,
 /// holds the lower coordinates of the region in the original memref to copy
 /// in/out. If `copyOut' is true, generates a copy-out; otherwise a copy-in.
 static AffineForOp
-generatePointWiseCopy(Location loc, Value *memref, Value *fastMemRef,
-                      ArrayRef<AffineMap> lbMaps, ArrayRef<Value *> lbOperands,
-                      ArrayRef<AffineMap> ubMaps, ArrayRef<Value *> ubOperands,
+generatePointWiseCopy(Location loc, Value memref, Value fastMemRef,
+                      ArrayRef<AffineMap> lbMaps, ArrayRef<Value> lbOperands,
+                      ArrayRef<AffineMap> ubMaps, ArrayRef<Value> ubOperands,
                       bool isCopyOut, OpBuilder b) {
   assert(llvm::all_of(lbMaps, [&](AffineMap lbMap) {
     return lbMap.getNumInputs() == lbOperands.size();
@@ -1463,7 +1448,7 @@ generatePointWiseCopy(Location loc, Value *memref, Value *fastMemRef,
   }));
 
   unsigned rank = memref->getType().cast<MemRefType>().getRank();
-  (void) rank; // unused in opt mode
+  (void)rank; // unused in opt mode
   assert(lbMaps.size() == rank && "wrong number of lb maps");
   assert(ubMaps.size() == rank && "wrong number of ub maps");
 
@@ -1472,19 +1457,17 @@ generatePointWiseCopy(Location loc, Value *memref, Value *fastMemRef,
   //   for y = ...
   //     fast_buf[x][y] = buf[mem_x + x][mem_y + y]
 
-  SmallVector<Value *, 4> memIndices;
+  SmallVector<Value, 4> memIndices;
   SmallVector<AffineExpr, 4> fastBufExprs;
-  SmallVector<Value *, 4> fastBufMapOperands;
+  SmallVector<Value, 4> fastBufMapOperands;
   AffineForOp copyNestRoot;
   for (unsigned d = 0, e = ubMaps.size(); d < e; ++d) {
-    SmallVector<Value *, 4> thisUbOperands(ubOperands.begin(),
-                                           ubOperands.end());
+    SmallVector<Value, 4> thisUbOperands(ubOperands.begin(), ubOperands.end());
     AffineMap ubMap = ubMaps[d];
     canonicalizeMapAndOperands(&ubMap, &thisUbOperands);
 
     AffineMap lbMap = lbMaps[d];
-    SmallVector<Value *, 4> thisLbOperands(lbOperands.begin(),
-                                           lbOperands.end());
+    SmallVector<Value, 4> thisLbOperands(lbOperands.begin(), lbOperands.end());
     canonicalizeMapAndOperands(&lbMap, &thisLbOperands);
 
     auto forOp = b.create<AffineForOp>(loc, thisLbOperands, lbMap,
@@ -1495,10 +1478,10 @@ generatePointWiseCopy(Location loc, Value *memref, Value *fastMemRef,
     b = forOp.getBodyBuilder();
 
     // TODO: get rid of this affine.apply as well.
-    Value *lb = (lbMap.getNumResults() == 1 &&
-                 lbMap == b.getMultiDimIdentityMap(lbMap.getNumDims()))
-                    ? thisLbOperands[0]
-                    : b.create<AffineApplyOp>(loc, lbMap, thisLbOperands);
+    Value lb = (lbMap.getNumResults() == 1 &&
+                lbMap == b.getMultiDimIdentityMap(lbMap.getNumDims()))
+                   ? thisLbOperands[0]
+                   : b.create<AffineApplyOp>(loc, lbMap, thisLbOperands);
 
     // Construct the subscript for the fast memref being copied.
     fastBufExprs.push_back(b.getAffineDimExpr(2 * d + 1) -
@@ -1552,7 +1535,7 @@ static LogicalResult generateCopy(
     const MemRefRegion &region, Block *block, Block::iterator begin,
     Block::iterator end, Block *copyPlacementBlock,
     Block::iterator copyInPlacementStart, Block::iterator copyOutPlacementStart,
-    AffineCopyOptions copyOptions, DenseMap<Value *, Value *> &fastBufferMap,
+    AffineCopyOptions copyOptions, DenseMap<Value, Value> &fastBufferMap,
     DenseSet<Operation *> &copyNests, uint64_t *sizeInBytes,
     Block::iterator *nBegin, Block::iterator *nEnd) {
   *nBegin = begin;
@@ -1560,7 +1543,7 @@ static LogicalResult generateCopy(
 
   FuncOp f = begin->getParentOfType<FuncOp>();
   OpBuilder topBuilder(f.getBody());
-  Value *zeroIndex = topBuilder.create<ConstantIndexOp>(f.getLoc(), 0);
+  Value zeroIndex = topBuilder.create<ConstantIndexOp>(f.getLoc(), 0);
 
   if (begin == end)
     return success();
@@ -1580,7 +1563,7 @@ static LogicalResult generateCopy(
   OpBuilder top(func.getBody());
 
   auto loc = region.loc;
-  auto *memref = region.memref;
+  auto memref = region.memref;
   auto memRefType = memref->getType().cast<MemRefType>();
 
   auto layoutMaps = memRefType.getAffineMaps();
@@ -1592,9 +1575,9 @@ static LogicalResult generateCopy(
 
   // Indices to use for the copying.
   // Indices for the original memref being copied from/to.
-  SmallVector<Value *, 4> memIndices;
+  SmallVector<Value, 4> memIndices;
   // Indices for the faster buffer being copied into/from.
-  SmallVector<Value *, 4> bufIndices;
+  SmallVector<Value, 4> bufIndices;
 
   unsigned rank = memRefType.getRank();
   SmallVector<int64_t, 4> fastBufferShape;
@@ -1627,7 +1610,7 @@ static LogicalResult generateCopy(
   // 'regionSymbols' hold values that this memory region is symbolic/parametric
   // on; these typically include loop IVs surrounding the level at which the
   // copy generation is being done or other valid symbols in MLIR.
-  SmallVector<Value *, 8> regionSymbols;
+  SmallVector<Value, 8> regionSymbols;
   cst->getIdValues(rank, cst->getNumIds(), &regionSymbols);
 
   // Construct the index expressions for the fast memory buffer. The index
@@ -1675,7 +1658,7 @@ static LogicalResult generateCopy(
   }
 
   // The faster memory space buffer.
-  Value *fastMemRef;
+  Value fastMemRef;
 
   // Check if a buffer was already created.
   bool existingBuf = fastBufferMap.count(memref) > 0;
@@ -1714,8 +1697,8 @@ static LogicalResult generateCopy(
     return failure();
   }
 
-  Value *stride = nullptr;
-  Value *numEltPerStride = nullptr;
+  Value stride = nullptr;
+  Value numEltPerStride = nullptr;
   if (!strideInfos.empty()) {
     stride = top.create<ConstantIndexOp>(loc, strideInfos[0].stride);
     numEltPerStride =
@@ -1755,7 +1738,7 @@ static LogicalResult generateCopy(
                                          copyOptions.tagMemorySpace);
     auto tagMemRef = prologue.create<AllocOp>(loc, tagMemRefType);
 
-    SmallVector<Value *, 4> tagIndices({zeroIndex});
+    SmallVector<Value, 4> tagIndices({zeroIndex});
     auto tagAffineMap = b.getMultiDimIdentityMap(tagIndices.size());
     fullyComposeAffineMapAndOperands(&tagAffineMap, &tagIndices);
     if (!region.isWrite()) {
@@ -1864,7 +1847,7 @@ static bool getFullMemRefAsRegion(Operation *opInst, unsigned numParamLoopIVs,
   SmallVector<AffineForOp, 4> ivs;
   getLoopIVs(*opInst, &ivs);
   ivs.resize(numParamLoopIVs);
-  SmallVector<Value *, 4> symbols;
+  SmallVector<Value, 4> symbols;
   extractForInductionVars(ivs, &symbols);
   regionCst->reset(rank, numParamLoopIVs, 0);
   regionCst->setIdValues(rank, rank + numParamLoopIVs, symbols);
@@ -1889,9 +1872,9 @@ static bool getFullMemRefAsRegion(Operation *opInst, unsigned numParamLoopIVs,
 uint64_t mlir::affineDataCopyGenerate(Block::iterator begin,
                                       Block::iterator end,
                                       const AffineCopyOptions &copyOptions,
-                                      Optional<Value *> filterMemRef,
+                                      Optional<Value> filterMemRef,
                                       DenseSet<Operation *> &copyNests,
-                                      SmallVectorImpl<Value *> *fastBufs) {
+                                      SmallVectorImpl<Value> *fastBufs) {
   if (begin == end)
     return 0;
 
@@ -1913,12 +1896,12 @@ uint64_t mlir::affineDataCopyGenerate(Block::iterator begin,
   // List of memory regions to copy for. We need a map vector to have a
   // guaranteed iteration order to write test cases. CHECK-DAG doesn't help here
   // since the alloc's for example are identical except for the SSA id.
-  SmallMapVector<Value *, std::unique_ptr<MemRefRegion>, 4> readRegions;
-  SmallMapVector<Value *, std::unique_ptr<MemRefRegion>, 4> writeRegions;
+  SmallMapVector<Value, std::unique_ptr<MemRefRegion>, 4> readRegions;
+  SmallMapVector<Value, std::unique_ptr<MemRefRegion>, 4> writeRegions;
 
   // Map from original memref's to the fast buffers that their accesses are
   // replaced with.
-  DenseMap<Value *, Value *> fastBufferMap;
+  DenseMap<Value, Value> fastBufferMap;
 
   // To check for errors when walking the block.
   bool error = false;
@@ -1973,7 +1956,7 @@ uint64_t mlir::affineDataCopyGenerate(Block::iterator begin,
 
     // Attempts to update; returns true if 'region' exists in targetRegions.
     auto updateRegion =
-        [&](const SmallMapVector<Value *, std::unique_ptr<MemRefRegion>, 4>
+        [&](const SmallMapVector<Value, std::unique_ptr<MemRefRegion>, 4>
                 &targetRegions) {
           auto it = targetRegions.find(region->memref);
           if (it == targetRegions.end())
@@ -2025,7 +2008,7 @@ uint64_t mlir::affineDataCopyGenerate(Block::iterator begin,
   uint64_t totalCopyBuffersSizeInBytes = 0;
   bool ret = true;
   auto processRegions =
-      [&](const SmallMapVector<Value *, std::unique_ptr<MemRefRegion>, 4>
+      [&](const SmallMapVector<Value, std::unique_ptr<MemRefRegion>, 4>
               &regions) {
         for (const auto &regionEntry : regions) {
           // For each region, hoist copy in/out past all hoistable
@@ -2084,4 +2067,338 @@ uint64_t mlir::affineDataCopyGenerate(Block::iterator begin,
   }
 
   return totalCopyBuffersSizeInBytes;
+}
+
+/// Returns scalars that are live in to 'forOp'.
+static void getLiveInScalars(AffineForOp forOp,
+                             SmallVectorImpl<Value> &scalars) {
+  SmallVector<AffineForOp, 4> ivs;
+  forOp.walk([&](Operation *op) {
+    // Skip operands of affine.load/store.
+    if (isa<AffineLoadOp>(op) || isa<AffineStoreOp>(op) ||
+        isa<AffineApplyOp>(op))
+      return;
+    for (auto value : op->getOperands()) {
+      if (auto *defOp = value->getDefiningOp()) {
+        ivs.clear();
+        // Check whether the defining op is outside iv.
+        getLoopIVs(*defOp, &ivs);
+        if (llvm::find(ivs, forOp) == ivs.end())
+          scalars.push_back(value);
+      } else {
+        scalars.push_back(value);
+      }
+    }
+  });
+}
+
+/// Given an input type, provides a vector type for it of the provided width.
+static VectorType getVectorizedType(Type inputType, unsigned width) {
+  assert(width > 1 && "unexpected vector width");
+  Type baseEltType = inputType;
+  SmallVector<int64_t, 4> vecShape;
+  if (auto vecEltType = inputType.dyn_cast<VectorType>()) {
+    baseEltType = vecEltType.getElementType();
+    vecShape.reserve(vecShape.size() + vecEltType.getRank());
+    vecShape.assign(vecEltType.getShape().begin(), vecEltType.getShape().end());
+  }
+  vecShape.push_back(width);
+  return VectorType::get(vecShape, baseEltType);
+}
+
+/// Casts a given input memref, uses memref_shape_cast op to cast it to a memref
+/// with an elemental type that is `vector width` times (for eg., f32 becomes
+/// vector<8xf32>, vector<8xf32> becomes vector<8x8xf32> if `vectorWidth` were
+/// to be 8).
+static Value createVectorMemRef(Value scalMemRef, unsigned vectorWidth) {
+  auto scalMemRefType = scalMemRef->getType().cast<MemRefType>();
+  auto shape = scalMemRefType.getShape();
+  assert(shape.back() % vectorWidth == 0 && "unexpected memref shape");
+
+  OpBuilder b(scalMemRef->getContext());
+  if (auto *defOp = scalMemRef->getDefiningOp())
+    b.setInsertionPointAfter(defOp);
+  else
+    b.setInsertionPointToStart(cast<BlockArgument>(scalMemRef)->getOwner());
+
+  auto vecMemRefEltType =
+      getVectorizedType(scalMemRefType.getElementType(), vectorWidth);
+
+  SmallVector<int64_t, 4> vecMemRefShape(shape.begin(), shape.end());
+  vecMemRefShape.back() /= vectorWidth;
+
+  auto vecMemRefType = MemRefType::get(vecMemRefShape, vecMemRefEltType);
+  return b.create<MemRefShapeCastOp>(b.getUnknownLoc(), vecMemRefType,
+                                     scalMemRef);
+}
+
+/// Returns an affine map with the last result of `input' scaled down by
+/// `factor'.
+static AffineMap scaleDownLastResult(AffineMap input, int64_t factor) {
+  SmallVector<AffineExpr, 4> results(input.getResults().begin(),
+                                     input.getResults().end());
+  results.back() = results.back().floorDiv(factor);
+  return AffineMap::get(input.getNumDims(), input.getNumSymbols(), results);
+}
+
+/// Vectorize any operation other than AffineLoadOp, AffineStoreOp,
+/// and splat op. Operands of the op should have already been vectorized. The op
+/// can't have any regions.
+static Operation *vectorizeMiscLeafOp(Operation *op, unsigned width) {
+  // Sanity checks.
+  assert(!isa<AffineLoadOp>(op) &&
+         "all loads should have already been fully vectorized");
+  assert(!isa<AffineStoreOp>(op) &&
+         "all stores should have already been fully vectorized");
+
+  if (op->getNumRegions() != 0)
+    return nullptr;
+
+  SmallVector<Type, 8> vectorTypes;
+  for (auto v : op->getResults()) {
+    vectorTypes.push_back(getVectorizedType(v->getType(), width));
+  }
+  SmallVector<Value, 4> vectorOperands(op->getOperands());
+
+  // Check whether a single operand is null. If so, vectorization failed.
+  bool success = llvm::all_of(
+      vectorOperands, [](Value v) { return v->getType().isa<VectorType>(); });
+  if (!success) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "\n[affine-vect]+++++ operands shoulds have been vectorized");
+    return nullptr;
+  }
+
+  OpBuilder b(op);
+  OperationState newOp(op->getLoc(), op->getName().getStringRef(),
+                       vectorOperands, vectorTypes, op->getAttrs(),
+                       /*successors=*/{},
+                       /*regions=*/{}, op->hasResizableOperandsList());
+  return b.createOperation(newOp);
+}
+
+LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
+                                  DenseMap<Value, Value> *vecMemRefMap) {
+  // Walk and collect all memrefs that need to be turned into vector types (or
+  // to higher dimensional vector types).
+  //
+  // For vector memrefs, loads are replaced; for stores, just operands is
+  // replaced. For invariant load/stores, splat result of the loads; leave
+  // stores alone if the store value is a scalar; otherwise, write the last
+  // value.
+  // Live-in scalars are splat. All other ops' operands are automatically
+  // replaced as a result of the above. Replace such ops with new ones so that
+  // their result types are vector types.
+  //
+  DenseSet<Operation *> toVecLoadOps, toVecStoreOps;
+  SmallVector<Operation *, 4> toSplatLoadOps, writeLastEltStoreOps;
+  // Mapping from a memref to its vector counterpart.
+  DenseMap<Value, Value> toVecMemRefMap;
+  SetVector<Value> toVecMemRefs;
+
+  // Analysis phase.
+  bool error = false;
+
+  forOp.walk([&](Operation *op) {
+    auto loadOp = dyn_cast<AffineLoadOp>(op);
+    auto storeOp = dyn_cast<AffineStoreOp>(op);
+    if (!loadOp && !storeOp)
+      return WalkResult::advance();
+
+    bool isInvariant = loadOp ? isInvariantAccess(loadOp, forOp)
+                              : isInvariantAccess(storeOp, forOp);
+    if (isInvariant) {
+      if (loadOp)
+        toSplatLoadOps.push_back(loadOp);
+      else
+        writeLastEltStoreOps.push_back(storeOp);
+      return WalkResult::advance();
+    }
+
+    Value memref = loadOp ? loadOp.getMemRef() : storeOp.getMemRef();
+
+    if (loadOp)
+      toVecLoadOps.insert(loadOp);
+    else
+      toVecStoreOps.insert(storeOp);
+
+    if (toVecMemRefs.count(memref) == 0) {
+      toVecMemRefs.insert(memref);
+    }
+    return WalkResult::advance();
+  });
+
+  if (error)
+    return failure();
+
+  if (toVecMemRefs.empty()) {
+    LLVM_DEBUG(llvm::dbgs() << "No memrefs to vectorize\n");
+    return failure();
+  }
+
+  // Compute the width for vectorization.
+  int vectorWidth = -1;
+  for (auto memref : toVecMemRefs) {
+    auto memrefType = memref->getType().cast<MemRefType>();
+    auto eltType = memrefType.getElementType();
+    if (eltType.isa<VectorType>()) {
+      LLVM_DEBUG(llvm::dbgs() << "code already vectorized?\n");
+      return failure();
+    }
+
+    if (simdWidth % eltType.getIntOrFloatBitWidth() != 0) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "scalar width does not divide h/w vector width\n");
+      return failure();
+    }
+    unsigned thisVectorWidth = simdWidth / eltType.getIntOrFloatBitWidth();
+    if (vectorWidth == -1) {
+      vectorWidth = thisVectorWidth;
+    } else {
+      if (std::max<unsigned>(vectorWidth, thisVectorWidth) %
+              std::min<unsigned>(vectorWidth, thisVectorWidth) !=
+          0) {
+        LLVM_DEBUG(llvm::dbgs() << "Different memrefs require widths that "
+                                   "aren't multiples of each other\n");
+        return failure();
+      }
+      vectorWidth = std::min<unsigned>(vectorWidth, thisVectorWidth);
+    }
+  }
+
+  assert(vectorWidth > 0 && "valid vector width should have been found\n");
+  LLVM_DEBUG(llvm::dbgs() << "Using vector width: " << vectorWidth << "\n");
+
+  // TODO: Handle cleanups with view ops.
+  if (getLargestDivisorOfTripCount(forOp) % vectorWidth != 0) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "Trip count not known to be a multiple of vector width\n");
+    return failure();
+  }
+
+  // Check if all live-in scalars are of non-memref/vector/tensor type since we
+  // can't splat these.
+  SmallVector<Value, 4> liveInScalars;
+  getLiveInScalars(forOp, liveInScalars);
+  if (llvm::any_of(liveInScalars, [](Value v) {
+        auto type = v.getType();
+        return type.isa<VectorType>() || type.isa<TensorType>();
+      })) {
+    LLVM_DEBUG(llvm::dbgs() << "Non-scalar type live in - can't splat\n");
+    return failure();
+  }
+
+  // Check if memref dim size is a multiple of the width.
+  for (auto memref : toVecMemRefs) {
+    auto memrefType = memref->getType().cast<MemRefType>();
+    int64_t lastDimSize = memrefType.getDimSize(memrefType.getRank() - 1);
+    if (lastDimSize == -1 || lastDimSize % vectorWidth != 0) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "memref dimension not multiple of vector width\n");
+      LLVM_DEBUG(memrefType.dump());
+      return failure();
+    }
+  }
+
+  // Create vector memrefs for the ones that will have their load/stores
+  // vectorized.
+  for (auto vecMemRef : toVecMemRefs) {
+    toVecMemRefMap.insert(
+        {vecMemRef, createVectorMemRef(vecMemRef, vectorWidth)});
+  }
+
+  // End of analysis phase.
+
+  // Vectorize load ops with the loop being vectorized indexing the fastest
+  // varying dimension of the memref. Turn the load into a load on its vector
+  // memref cast, and scale down the last access by vector width.
+  for (auto op : toVecLoadOps) {
+    auto loadOp = cast<AffineLoadOp>(op);
+    OpBuilder rewriter(loadOp);
+    SmallVector<Value, 4> mapOperands(loadOp.getMapOperands());
+    auto vecLoadOp = rewriter.create<AffineLoadOp>(
+        loadOp.getLoc(), toVecMemRefMap[loadOp.getMemRef()],
+        scaleDownLastResult(loadOp.getAffineMap(), vectorWidth), mapOperands);
+    loadOp.getOperation()->replaceAllUsesWith(vecLoadOp);
+    loadOp.erase();
+  }
+
+  // Splat invariant load ops.
+  for (auto op : toSplatLoadOps) {
+    auto loadOp = cast<AffineLoadOp>(op);
+    OpBuilder rewriter(loadOp.getContext());
+    rewriter.setInsertionPointAfter(loadOp);
+    auto splat = rewriter.create<SplatOp>(
+        loadOp.getLoc(),
+        getVectorizedType(loadOp.getMemRefType().getElementType(), vectorWidth),
+        loadOp.getResult());
+    SmallPtrSet<Operation *, 1> exceptions = {splat};
+    replaceAllUsesExcept(loadOp, splat, exceptions);
+  }
+
+  // Vectorize store ops with the loop being vectorized indexing the fastest
+  // varying dimension of the memref. Turn the store into a store on its vector
+  // memref cast, and scale down the last access by vector width.
+  for (auto op : toVecStoreOps) {
+    auto storeOp = cast<AffineStoreOp>(op);
+    OpBuilder rewriter(storeOp);
+    SmallVector<Value, 4> mapOperands(storeOp.getMapOperands());
+    rewriter.create<AffineStoreOp>(
+        storeOp.getLoc(), storeOp.getValueToStore(),
+        toVecMemRefMap[storeOp.getMemRef()],
+        scaleDownLastResult(storeOp.getAffineMap(), vectorWidth), mapOperands);
+    storeOp.erase();
+  }
+
+  // Vectorize remaining ops.
+  forOp.walk([&](Operation *op) {
+    if (isa<AffineLoadOp>(op) || isa<AffineStoreOp>(op) ||
+        isa<AffineApplyOp>(op) || isa<SplatOp>(op) ||
+        isa<AffineTerminatorOp>(op))
+      return;
+    if (auto *vecOp = vectorizeMiscLeafOp(op, vectorWidth)) {
+      op->replaceAllUsesWith(vecOp);
+      if (op->use_empty())
+        op->erase();
+    }
+  });
+
+  // Splat live-in scalars.
+  for (auto scalar : liveInScalars) {
+    OpBuilder rewriter(scalar->getContext());
+    Location loc = rewriter.getUnknownLoc();
+    if (auto *defOp = scalar->getDefiningOp()) {
+      loc = defOp->getLoc();
+      rewriter.setInsertionPointAfter(defOp);
+    } else {
+      auto *block = cast<BlockArgument>(scalar)->getOwner();
+      loc = block->getParentOp()->getLoc();
+      rewriter.setInsertionPointToStart(block);
+    }
+    auto splat = rewriter.create<SplatOp>(
+        loc, scalar, getVectorizedType(scalar.getType(), vectorWidth));
+    replaceAllUsesInRegionWith(scalar, splat, forOp.region());
+  }
+
+  assert(writeLastEltStoreOps.empty() && "unimplemented last write store ops");
+
+  // Set the step.
+  forOp.setStep(forOp.getStep() * vectorWidth);
+
+  // TODO: an initial check should provide a guarantee that if we complete this
+  // method, everything would be vectorized.
+
+  // Compose any affine apply ops, fold ops, drop dead ops, and normalize
+  // strided loops.
+  auto *context = forOp.getContext();
+  OwningRewritePatternList patterns;
+  AffineForOp::getCanonicalizationPatterns(patterns, context);
+  AffineLoadOp::getCanonicalizationPatterns(patterns, context);
+  AffineStoreOp::getCanonicalizationPatterns(patterns, context);
+  applyPatternsGreedily(forOp.getParentOfType<FuncOp>(), std::move(patterns));
+
+  if (vecMemRefMap)
+    *vecMemRefMap = std::move(toVecMemRefMap);
+
+  return success();
 }

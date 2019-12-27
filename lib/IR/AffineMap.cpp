@@ -1,19 +1,10 @@
 //===- AffineMap.cpp - MLIR Affine Map Classes ----------------------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 
 #include "mlir/IR/AffineMap.h"
 #include "AffineMapDetail.h"
@@ -48,7 +39,7 @@ public:
   }
 
 private:
-  llvm::Optional<int64_t> constantFoldImpl(AffineExpr expr) {
+  Optional<int64_t> constantFoldImpl(AffineExpr expr) {
     switch (expr.getKind()) {
     case AffineExprKind::Add:
       return constantFoldBinExpr(
@@ -83,8 +74,8 @@ private:
   }
 
   // TODO: Change these to operate on APInts too.
-  llvm::Optional<int64_t> constantFoldBinExpr(AffineExpr expr,
-                                              int64_t (*op)(int64_t, int64_t)) {
+  Optional<int64_t> constantFoldBinExpr(AffineExpr expr,
+                                        int64_t (*op)(int64_t, int64_t)) {
     auto binOpExpr = expr.cast<AffineBinaryOpExpr>();
     if (auto lhs = constantFoldImpl(binOpExpr.getLHS()))
       if (auto rhs = constantFoldImpl(binOpExpr.getRHS()))
@@ -324,7 +315,7 @@ AffineMap mlir::concatAffineMaps(ArrayRef<AffineMap> maps) {
   for (auto m : maps)
     numResults += m ? m.getNumResults() : 0;
   unsigned numDims = 0;
-  llvm::SmallVector<AffineExpr, 8> results;
+  SmallVector<AffineExpr, 8> results;
   results.reserve(numResults);
   for (auto m : maps) {
     if (!m)

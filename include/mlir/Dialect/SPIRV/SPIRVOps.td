@@ -1,19 +1,10 @@
 //===-- SPIRVOps.td - MLIR SPIR-V Op Definitions Spec ------*- tablegen -*-===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This is the main operation definition specification file for SPIR-V
 // operations.
@@ -76,7 +67,7 @@ def SPV_AccessChainOp : SPV_Op<"AccessChain", [NoSideEffect]> {
     - must be an OpConstant when indexing into a structure.
 
     ### Custom assembly form
-    ``` {.ebnf}
+    ```
     access-chain-op ::= ssa-id `=` `spv.AccessChain` ssa-use
                         `[` ssa-use (',' ssa-use)* `]`
                         `:` pointer-type
@@ -102,7 +93,7 @@ def SPV_AccessChainOp : SPV_Op<"AccessChain", [NoSideEffect]> {
   );
 
   let builders = [OpBuilder<[{Builder *builder, OperationState &state,
-                              Value *basePtr, ValueRange indices}]>];
+                              Value basePtr, ValueRange indices}]>];
 
   let hasCanonicalizer = 1;
 }
@@ -144,7 +135,7 @@ def SPV_ControlBarrierOp : SPV_Op<"ControlBarrier", []> {
 
     ### Custom assembly form
 
-    ``` {.ebnf}
+    ```
     scope ::= `"CrossDevice"` | `"Device"` | `"Workgroup"` | ...
 
     memory-semantics ::= `"None"` | `"Acquire"` | "Release"` | ...
@@ -190,7 +181,7 @@ def SPV_ExecutionModeOp : SPV_Op<"ExecutionMode", [InModuleScope]> {
 
     ### Custom assembly form
 
-    ``` {.ebnf}
+    ```
     execution-mode ::= "Invocations" | "SpacingEqual" |
                        <and other SPIR-V execution modes...>
 
@@ -243,7 +234,7 @@ def SPV_LoadOp : SPV_Op<"Load", []> {
 
     ### Custom assembly form
 
-    ``` {.ebnf}
+    ```
     memory-access ::= `"None"` | `"Volatile"` | `"Aligned", ` integer-literal
                     | `"NonTemporal"`
 
@@ -272,7 +263,7 @@ def SPV_LoadOp : SPV_Op<"Load", []> {
   );
 
   let builders = [OpBuilder<[{Builder *builder, OperationState &state,
-                  Value *basePtr, /*optional*/IntegerAttr memory_access,
+                  Value basePtr, /*optional*/IntegerAttr memory_access,
                   /*optional*/IntegerAttr alignment}]>];
 }
 
@@ -298,7 +289,7 @@ def SPV_MemoryBarrierOp : SPV_Op<"MemoryBarrier", []> {
 
     ### Custom assembly form
 
-    ``` {.ebnf}
+    ```
     scope ::= `"CrossDevice"` | `"Device"` | `"Workgroup"` | ...
 
     memory-semantics ::= `"None"` | `"Acquire"` | `"Release"` | ...
@@ -343,7 +334,7 @@ def SPV_StoreOp : SPV_Op<"Store", []> {
 
     ### Custom assembly form
 
-    ``` {.ebnf}
+    ```
     store-op ::= `spv.Store ` storage-class ssa-use `, ` ssa-use `, `
                   (`[` memory-access `]`)? `:` spirv-element-type
     ```
@@ -367,7 +358,7 @@ def SPV_StoreOp : SPV_Op<"Store", []> {
 
   let builders = [
     OpBuilder<"Builder *builder, OperationState &state, "
-      "Value *ptr, Value *value, ArrayRef<NamedAttribute> namedAttrs", [{
+      "Value ptr, Value value, ArrayRef<NamedAttribute> namedAttrs", [{
       state.addOperands(ptr);
       state.addOperands(value);
       state.addAttributes(namedAttrs);
@@ -391,8 +382,8 @@ def SPV_UndefOp : SPV_Op<"undef", []> {
 
     ### Custom assembly form
 
-    ``` {.ebnf}
-    undef-op ::= `spv.undef` `:` sprirv-type
+    ```
+    undef-op ::= `spv.undef` `:` spirv-type
     ```
 
     For example:
@@ -439,7 +430,7 @@ def SPV_VariableOp : SPV_Op<"Variable", []> {
 
     ### Custom assembly form
 
-    ``` {.ebnf}
+    ```
     variable-op ::= ssa-id `=` `spv.Variable` (`init(` ssa-use `)`)?
                     (`bind(` integer-literal, integer-literal `)`)?
                     (`built_in(` string-literal `)`)?

@@ -1,19 +1,10 @@
 //===- Passes.h - Pass Entrypoints ------------------------------*- C++ -*-===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This header file defines prototypes that expose pass constructors in the loop
 // transformation library.
@@ -44,7 +35,7 @@ std::unique_ptr<Pass> createCSEPass();
 /// Creates a pass to vectorize loops, operations and data types using a
 /// target-independent, n-D super-vector abstraction.
 std::unique_ptr<OpPassBase<FuncOp>>
-createSuperVectorizePass(llvm::ArrayRef<int64_t> virtualVectorSize);
+createSuperVectorizePass(ArrayRef<int64_t> virtualVectorSize);
 
 /// Creates a pass to vectorize affine loops (the new one).
 std::unique_ptr<OpPassBase<FuncOp>> createAffineVectorizePass();
@@ -55,7 +46,7 @@ std::unique_ptr<OpPassBase<FuncOp>> createVectorizerTestPass();
 
 /// Creates a pass to lower super-vectors to target-dependent HW vectors.
 std::unique_ptr<OpPassBase<FuncOp>>
-createMaterializeVectorsPass(llvm::ArrayRef<int64_t> vectorSize);
+createMaterializeVectorsPass(ArrayRef<int64_t> vectorSize);
 
 /// Creates a loop unrolling pass with the provided parameters.
 /// 'getUnrollFactor' is a function callback for clients to supply a function

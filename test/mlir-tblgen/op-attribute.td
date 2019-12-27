@@ -1,5 +1,5 @@
-// RUN: mlir-tblgen -gen-op-decls -I %S/../../include %s | FileCheck %s --check-prefix=DECL
-// RUN: mlir-tblgen -gen-op-defs -I %S/../../include %s | FileCheck %s --check-prefix=DEF
+// RUN: mlir-tblgen -gen-op-decls -I %S/../../include %s | FileCheck %s --check-prefix=DECL --dump-input-on-failure
+// RUN: mlir-tblgen -gen-op-defs -I %S/../../include %s | FileCheck %s --check-prefix=DEF --dump-input-on-failure
 
 include "mlir/IR/OpBase.td"
 
@@ -32,18 +32,24 @@ def AOp : NS_Op<"a_op", []> {
 // Test getter methods
 // ---
 
+// DEF:      some-attr-kind AOp::aAttrAttr()
+// DEF-NEXT:   this->getAttr("aAttr").cast<some-attr-kind>()
 // DEF:      some-return-type AOp::aAttr() {
-// DEF-NEXT:   auto attr = this->getAttr("aAttr").cast<some-attr-kind>();
+// DEF-NEXT:   auto attr = aAttrAttr()
 // DEF-NEXT:   return attr.some-convert-from-storage();
 
+// DEF:      some-attr-kind AOp::bAttrAttr()
+// DEF-NEXT:   return this->getAttr("bAttr").dyn_cast_or_null<some-attr-kind>()
 // DEF:      some-return-type AOp::bAttr() {
-// DEF-NEXT:   auto attr = this->getAttr("bAttr").dyn_cast_or_null<some-attr-kind>();
+// DEF-NEXT:   auto attr = bAttrAttr();
 // DEF-NEXT:   if (!attr)
 // DEF-NEXT:       return some-const-builder-call(mlir::Builder(this->getContext()), 4.2).some-convert-from-storage();
 // DEF-NEXT:   return attr.some-convert-from-storage();
 
+// DEF:      some-attr-kind AOp::cAttrAttr()
+// DEF-NEXT:   return this->getAttr("cAttr").dyn_cast_or_null<some-attr-kind>()
 // DEF:      Optional<some-return-type> AOp::cAttr() {
-// DEF-NEXT:   auto attr = this->getAttr("cAttr").dyn_cast_or_null<some-attr-kind>();
+// DEF-NEXT:   auto attr = cAttrAttr()
 // DEF-NEXT:   return attr ? Optional<some-return-type>(attr.some-convert-from-storage()) : (llvm::None);
 
 // Test build methods
@@ -56,11 +62,11 @@ def AOp : NS_Op<"a_op", []> {
 // DEF-NEXT:     tblgen_state.addAttribute("cAttr", cAttr);
 
 // DEF:      void AOp::build(
-// DEF-SAME:   some-return-type aAttr, some-return-type bAttr, /*optional*/some-attr-kind cAttr
+// DEF:        some-return-type aAttr, some-return-type bAttr, /*optional*/some-attr-kind cAttr
 // DEF:        tblgen_state.addAttribute("aAttr", some-const-builder-call((*tblgen_builder), aAttr));
 
 // DEF:      void AOp::build(
-// DEF-SAME:   ArrayRef<NamedAttribute> attributes
+// DEF:        ArrayRef<NamedAttribute> attributes
 // DEF:      tblgen_state.addAttributes(attributes);
 
 // Test verify method
@@ -178,11 +184,7 @@ def DOp : NS_Op<"d_op", []> {
 }
 
 // DECL-LABEL: DOp declarations
-// DECL: static void build({{.*}}, APInt i32_attr, APFloat f64_attr,
-// DECL-SAME: StringRef str_attr, bool bool_attr, ::SomeI32Enum enum_attr,
-// DECL-SAME: APInt dv_i32_attr, APFloat dv_f64_attr,
-// DECL-SAME: StringRef dv_str_attr = "abc", bool dv_bool_attr = true,
-// DECL-SAME: ::SomeI32Enum dv_enum_attr = ::SomeI32Enum::case5)
+// DECL: static void build({{.*}}, APInt i32_attr, APFloat f64_attr, StringRef str_attr, bool bool_attr, ::SomeI32Enum enum_attr, APInt dv_i32_attr, APFloat dv_f64_attr, StringRef dv_str_attr = "abc", bool dv_bool_attr = true, ::SomeI32Enum dv_enum_attr = ::SomeI32Enum::case5)
 
 // Test that only default valued attributes at the end of the arguments
 // list get default values in the builder signature
@@ -204,11 +206,7 @@ def EOp : NS_Op<"e_op", []> {
 }
 
 // DECL-LABEL: EOp declarations
-// DECL: static void build({{.*}}, APInt i32_attr, APInt dv_i32_attr,
-// DECL-SAME: APFloat f64_attr, APFloat dv_f64_attr,
-// DECL-SAME: StringRef str_attr, StringRef dv_str_attr,
-// DECL-SAME: bool bool_attr, bool dv_bool_attr,
-// DECL-SAME: ::SomeI32Enum enum_attr, ::SomeI32Enum dv_enum_attr = ::SomeI32Enum::case5)
+// DECL: static void build({{.*}}, APInt i32_attr, APInt dv_i32_attr, APFloat f64_attr, APFloat dv_f64_attr, StringRef str_attr, StringRef dv_str_attr, bool bool_attr, bool dv_bool_attr, ::SomeI32Enum enum_attr, ::SomeI32Enum dv_enum_attr = ::SomeI32Enum::case5)
 
 // Test mixing operands and attributes in arbitrary order
 // ---
@@ -218,9 +216,9 @@ def MixOperandsAndAttrs : NS_Op<"mix_operands_and_attrs", []> {
 }
 
 // DEF-LABEL: MixOperandsAndAttrs definitions
-// DEF-DAG: Value *MixOperandsAndAttrs::operand()
-// DEF-DAG: Value *MixOperandsAndAttrs::otherArg()
-// DEF-DAG: void MixOperandsAndAttrs::build(Builder *tblgen_builder, OperationState &tblgen_state, FloatAttr attr, Value *operand, FloatAttr otherAttr, Value *otherArg)
+// DEF-DAG: Value MixOperandsAndAttrs::operand()
+// DEF-DAG: Value MixOperandsAndAttrs::otherArg()
+// DEF-DAG: void MixOperandsAndAttrs::build(Builder *tblgen_builder, OperationState &tblgen_state, FloatAttr attr, Value operand, FloatAttr otherAttr, Value otherArg)
 // DEF-DAG: APFloat MixOperandsAndAttrs::attr()
 // DEF-DAG: APFloat MixOperandsAndAttrs::otherAttr()
 

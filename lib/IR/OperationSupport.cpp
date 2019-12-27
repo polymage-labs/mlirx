@@ -1,19 +1,10 @@
 //===- OperationSupport.cpp -----------------------------------------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This file contains out-of-line implementations of the support types that
 // Operation and related classes build on top of.
@@ -36,7 +27,7 @@ OperationState::OperationState(Location location, OperationName name)
     : location(location), name(name) {}
 
 OperationState::OperationState(Location location, StringRef name,
-                               ArrayRef<Value *> operands, ArrayRef<Type> types,
+                               ValueRange operands, ArrayRef<Type> types,
                                ArrayRef<NamedAttribute> attributes,
                                ArrayRef<Block *> successors,
                                MutableArrayRef<std::unique_ptr<Region>> regions,
@@ -143,4 +134,51 @@ void detail::OperandStorage::grow(ResizableStorage &resizeUtil,
   for (auto &operand : operands)
     operand.~OpOperand();
   resizeUtil.setDynamicStorage(newStorage);
+}
+
+//===----------------------------------------------------------------------===//
+// Operation Value-Iterators
+//===----------------------------------------------------------------------===//
+
+//===----------------------------------------------------------------------===//
+// OperandRange
+
+OperandRange::OperandRange(Operation *op)
+    : OperandRange(op->getOpOperands().data(), op->getNumOperands()) {}
+
+//===----------------------------------------------------------------------===//
+// ResultRange
+
+ResultRange::ResultRange(Operation *op)
+    : ResultRange(op->getOpResults().data(), op->getNumResults()) {}
+
+//===----------------------------------------------------------------------===//
+// ValueRange
+
+ValueRange::ValueRange(ArrayRef<Value> values)
+    : ValueRange(values.data(), values.size()) {}
+ValueRange::ValueRange(OperandRange values)
+    : ValueRange(values.begin().getBase(), values.size()) {}
+ValueRange::ValueRange(ResultRange values)
+    : ValueRange(values.begin().getBase(), values.size()) {}
+
+/// See `detail::indexed_accessor_range_base` for details.
+ValueRange::OwnerT ValueRange::offset_base(const OwnerT &owner,
+                                           ptrdiff_t index) {
+  if (OpOperand *operand = owner.dyn_cast<OpOperand *>())
+    return operand + index;
+  if (OpResult *result = owner.dyn_cast<OpResult *>())
+    return result + index;
+  return owner.get<const Value *>() + index;
+}
+/// See `detail::indexed_accessor_range_base` for details.
+Value ValueRange::dereference_iterator(const OwnerT &owner, ptrdiff_t index) {
+  // Operands access the held value via 'get'.
+  if (OpOperand *operand = owner.dyn_cast<OpOperand *>())
+    return operand[index].get();
+  // An OpResult is a value, so we can return it directly.
+  if (OpResult *result = owner.dyn_cast<OpResult *>())
+    return result[index];
+  // Otherwise, this is a raw value array so just index directly.
+  return owner.get<const Value *>()[index];
 }

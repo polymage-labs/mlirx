@@ -1,19 +1,10 @@
 //===- StandardTypes.h - MLIR Standard Type Classes -------------*- C++ -*-===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 
 #ifndef MLIR_IR_STANDARDTYPES_H
 #define MLIR_IR_STANDARDTYPES_H
@@ -219,6 +210,9 @@ public:
   /// doesn't have static shape. If all dimensions have known size (>= 0), it
   /// has static shape.
   bool hasStaticShape() const;
+
+  /// If this has a static shape and the shape is equal to `shape` return true.
+  bool hasStaticShape(ArrayRef<int64_t> shape) const;
 
   /// If this is a ranked type, return the number of dimensions with dynamic
   /// size. Otherwise, abort.
@@ -461,10 +455,10 @@ public:
                                        Location location);
 
   /// Verify the construction of a unranked memref type.
-  static LogicalResult
-  verifyConstructionInvariants(llvm::Optional<Location> loc,
-                               MLIRContext *context, Type elementType,
-                               unsigned memorySpace);
+  static LogicalResult verifyConstructionInvariants(Optional<Location> loc,
+                                                    MLIRContext *context,
+                                                    Type elementType,
+                                                    unsigned memorySpace);
 
   ArrayRef<int64_t> getShape() const { return llvm::None; }
 

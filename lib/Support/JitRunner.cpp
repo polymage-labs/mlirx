@@ -1,19 +1,10 @@
 //===- jit-runner.cpp - MLIR CPU Execution Driver Library -----------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This is a library that provides a shared implementation for command line
 // utilities that execute an MLIR file on the CPU by translating MLIR to LLVM
@@ -141,14 +132,14 @@ static void initializeLLVM() {
   llvm::InitializeNativeTargetAsmPrinter();
 }
 
-static inline Error make_string_error(const llvm::Twine &message) {
+static inline Error make_string_error(const Twine &message) {
   return llvm::make_error<llvm::StringError>(message.str(),
                                              llvm::inconvertibleErrorCode());
 }
 
-static llvm::Optional<unsigned> getCommandLineOptLevel() {
-  llvm::Optional<unsigned> optLevel;
-  llvm::SmallVector<std::reference_wrapper<llvm::cl::opt<bool>>, 4> optFlags{
+static Optional<unsigned> getCommandLineOptLevel() {
+  Optional<unsigned> optLevel;
+  SmallVector<std::reference_wrapper<llvm::cl::opt<bool>>, 4> optFlags{
       optO0, optO1, optO2, optO3};
 
   // Determine if there is an optimization flag present.
@@ -255,7 +246,7 @@ static Error compileAndExecuteSingleFloatReturnFunction(
 // the MLIR module to the ExecutionEngine.
 int mlir::JitRunnerMain(
     int argc, char **argv,
-    llvm::function_ref<LogicalResult(mlir::ModuleOp)> mlirTransformer) {
+    function_ref<LogicalResult(mlir::ModuleOp)> mlirTransformer) {
   llvm::InitLLVM y(argc, argv);
 
   initializeLLVM();
@@ -263,8 +254,8 @@ int mlir::JitRunnerMain(
 
   llvm::cl::ParseCommandLineOptions(argc, argv, "MLIR CPU execution driver\n");
 
-  llvm::Optional<unsigned> optLevel = getCommandLineOptLevel();
-  llvm::SmallVector<std::reference_wrapper<llvm::cl::opt<bool>>, 4> optFlags{
+  Optional<unsigned> optLevel = getCommandLineOptLevel();
+  SmallVector<std::reference_wrapper<llvm::cl::opt<bool>>, 4> optFlags{
       optO0, optO1, optO2, optO3};
   unsigned optCLIPosition = 0;
   // Determine if there is an optimization flag present, and its CLI position
@@ -278,7 +269,7 @@ int mlir::JitRunnerMain(
   }
   // Generate vector of pass information, plus the index at which we should
   // insert any optimization passes in that vector (optPosition).
-  llvm::SmallVector<const llvm::PassInfo *, 4> passes;
+  SmallVector<const llvm::PassInfo *, 4> passes;
   unsigned optPosition = 0;
   for (unsigned i = 0, e = llvmPasses.size(); i < e; ++i) {
     passes.push_back(llvmPasses[i]);

@@ -1,19 +1,10 @@
 //===- GPUDialect.h - MLIR Dialect for GPU Kernels --------------*- C++ -*-===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This file defines the GPU kernel-related operations and puts them in the
 // corresponding dialect.
@@ -26,6 +17,7 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/FunctionSupport.h"
 #include "mlir/IR/OpDefinition.h"
+#include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/SymbolTable.h"
 
 namespace mlir {
@@ -63,7 +55,11 @@ public:
 
   /// Returns the numeric value used to identify the workgroup memory address
   /// space.
-  static int getWorkgroupAddressSpace() { return 3; }
+  static unsigned getWorkgroupAddressSpace() { return 3; }
+
+  /// Returns the numeric value used to identify the private memory address
+  /// space.
+  static unsigned getPrivateAddressSpace() { return 5; }
 
   LogicalResult verifyOperationAttribute(Operation *op,
                                          NamedAttribute attr) override;
@@ -72,61 +68,9 @@ public:
 /// Utility class for the GPU dialect to represent triples of `Value`s
 /// accessible through `.x`, `.y`, and `.z` similarly to CUDA notation.
 struct KernelDim3 {
-  Value *x;
-  Value *y;
-  Value *z;
-};
-
-/// Operation to launch a kernel given as outlined function.
-class LaunchFuncOp : public Op<LaunchFuncOp, OpTrait::AtLeastNOperands<6>::Impl,
-                               OpTrait::ZeroResult> {
-public:
-  using Op::Op;
-
-  static void build(Builder *builder, OperationState &result, FuncOp kernelFunc,
-                    Value *gridSizeX, Value *gridSizeY, Value *gridSizeZ,
-                    Value *blockSizeX, Value *blockSizeY, Value *blockSizeZ,
-                    ValueRange kernelOperands);
-
-  static void build(Builder *builder, OperationState &result, FuncOp kernelFunc,
-                    KernelDim3 gridSize, KernelDim3 blockSize,
-                    ValueRange kernelOperands);
-
-  /// The kernel function specified by the operation's `kernel` attribute.
-  StringRef kernel();
-  /// The number of operands passed to the kernel function.
-  unsigned getNumKernelOperands();
-  /// The name of the kernel module specified by the operation's `kernel_module`
-  /// attribute.
-  StringRef getKernelModuleName();
-  /// The i-th operand passed to the kernel function.
-  Value *getKernelOperand(unsigned i);
-
-  /// Get the SSA values passed as operands to specify the grid size.
-  KernelDim3 getGridSizeOperandValues();
-  /// Get the SSA values passed as operands to specify the block size.
-  KernelDim3 getBlockSizeOperandValues();
-
-  LogicalResult verify();
-
-  static StringRef getOperationName() { return "gpu.launch_func"; }
-
-  /// The number of launch configuration operands, placed at the leading
-  /// positions of the operand list.
-  static constexpr unsigned kNumConfigOperands = 6;
-
-private:
-  // This needs to quietly verify if attributes with names defined below are
-  // present since it is run before the verifier of this op.
-  friend LogicalResult GPUDialect::verifyOperationAttribute(Operation *,
-                                                            NamedAttribute);
-
-  /// The name of the symbolRef attribute specifying the kernel to launch.
-  static StringRef getKernelAttrName() { return "kernel"; }
-
-  /// The name of the symbolRef attribute specifying the name of the module
-  /// containing the kernel to launch.
-  static StringRef getKernelModuleAttrName() { return "kernel_module"; }
+  Value x;
+  Value y;
+  Value z;
 };
 
 #define GET_OP_CLASSES

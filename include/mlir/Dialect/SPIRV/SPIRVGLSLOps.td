@@ -1,19 +1,10 @@
 //===- SPIRVGLSLOps.td - GLSL extended insts spec file -----*- tablegen -*-===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This is the op definition spec of GLSL extension ops.
 //
@@ -100,7 +91,7 @@ def SPV_GLSLFAbsOp : SPV_GLSLUnaryArithmeticOp<"FAbs", 4, SPV_Float> {
     per component.
 
     ### Custom assembly format
-    ``` {.ebnf}
+    ```
     float-scalar-vector-type ::= float-type |
                                  `vector<` integer-literal `x` float-type `>`
     abs-op ::= ssa-id `=` `spv.GLSL.FAbs` ssa-use `:`
@@ -129,7 +120,7 @@ def SPV_GLSLSAbsOp : SPV_GLSLUnaryArithmeticOp<"SAbs", 5, SPV_Integer> {
     with the same component width. Results are computed per component.
 
     ### Custom assembly format
-    ``` {.ebnf}
+    ```
     integer-scalar-vector-type ::= integer-type |
                                    `vector<` integer-literal `x` integer-type `>`
     abs-op ::= ssa-id `=` `spv.GLSL.SAbs` ssa-use `:`
@@ -160,7 +151,7 @@ def SPV_GLSLCeilOp : SPV_GLSLUnaryArithmeticOp<"Ceil", 9, SPV_Float> {
     per component.
 
     ### Custom assembly format
-    ``` {.ebnf}
+    ```
     float-scalar-vector-type ::= float-type |
                                  `vector<` integer-literal `x` float-type `>`
     ceil-op ::= ssa-id `=` `spv.GLSL.Ceil` ssa-use `:`
@@ -190,7 +181,7 @@ def SPV_GLSLCosOp : SPV_GLSLUnaryArithmeticOp<"Cos", 14, SPV_Float16or32> {
     per component.
 
     ### Custom assembly format
-    ``` {.ebnf}
+    ```
     restricted-float-scalar-type ::=  `f16` | `f32`
     restricted-float-scalar-vector-type ::=
       restricted-float-scalar-type |
@@ -222,7 +213,7 @@ def SPV_GLSLExpOp : SPV_GLSLUnaryArithmeticOp<"Exp", 27, SPV_Float16or32> {
     computed per component.";
 
     ### Custom assembly format
-    ``` {.ebnf}
+    ```
     restricted-float-scalar-type ::=  `f16` | `f32`
     restricted-float-scalar-vector-type ::=
       restricted-float-scalar-type |
@@ -255,7 +246,7 @@ def SPV_GLSLFloorOp : SPV_GLSLUnaryArithmeticOp<"Floor", 8, SPV_Float> {
     per component.
 
     ### Custom assembly format
-    ``` {.ebnf}
+    ```
     float-scalar-vector-type ::= float-type |
                                  `vector<` integer-literal `x` float-type `>`
     floor-op ::= ssa-id `=` `spv.GLSL.Floor` ssa-use `:`
@@ -285,7 +276,7 @@ def SPV_GLSLInverseSqrtOp : SPV_GLSLUnaryArithmeticOp<"InverseSqrt", 32, SPV_Flo
     per component.
 
     ### Custom assembly format
-    ``` {.ebnf}
+    ```
     float-scalar-vector-type ::= float-type |
                                  `vector<` integer-literal `x` float-type `>`
     rsqrt-op ::= ssa-id `=` `spv.GLSL.InverseSqrt` ssa-use `:`
@@ -316,7 +307,7 @@ def SPV_GLSLLogOp : SPV_GLSLUnaryArithmeticOp<"Log", 28, SPV_Float16or32> {
     per component.
 
     ### Custom assembly format
-    ``` {.ebnf}
+    ```
     restricted-float-scalar-type ::=  `f16` | `f32`
     restricted-float-scalar-vector-type ::=
       restricted-float-scalar-type |
@@ -349,7 +340,7 @@ def SPV_GLSLFMaxOp : SPV_GLSLBinaryArithmeticOp<"FMax", 40, SPV_Float> {
     type. Results are computed per component.
 
     ### Custom assembly format
-    ``` {.ebnf}
+    ```
     float-scalar-vector-type ::= float-type |
                                  `vector<` integer-literal `x` float-type `>`
     fmax-op ::= ssa-id `=` `spv.GLSL.FMax` ssa-use `:`
@@ -379,7 +370,7 @@ def SPV_GLSLSMaxOp : SPV_GLSLBinaryArithmeticOp<"SMax", 42, SPV_Integer> {
     component.
 
     ### Custom assembly format
-    ``` {.ebnf}
+    ```
     integer-scalar-vector-type ::= integer-type |
                                    `vector<` integer-literal `x` integer-type `>`
     smax-op ::= ssa-id `=` `spv.GLSL.SMax` ssa-use `:`
@@ -410,7 +401,7 @@ def SPV_GLSLFMinOp : SPV_GLSLBinaryArithmeticOp<"FMin", 37, SPV_Float> {
     computed per component.
 
     ### Custom assembly format
-    ``` {.ebnf}
+    ```
     float-scalar-vector-type ::= float-type |
                                  `vector<` integer-literal `x` float-type `>`
     fmin-op ::= ssa-id `=` `spv.GLSL.FMin` ssa-use `:`
@@ -440,7 +431,7 @@ def SPV_GLSLSMinOp : SPV_GLSLBinaryArithmeticOp<"SMin", 39, SPV_Integer> {
     component.
 
     ### Custom assembly format
-    ``` {.ebnf}
+    ```
     integer-scalar-vector-type ::= integer-type |
                                    `vector<` integer-literal `x` integer-type `>`
     smin-op ::= ssa-id `=` `spv.GLSL.SMin` ssa-use `:`
@@ -470,7 +461,7 @@ def SPV_GLSLFSignOp : SPV_GLSLUnaryArithmeticOp<"FSign", 6, SPV_Float> {
     per component.
 
     ### Custom assembly format
-    ``` {.ebnf}
+    ```
     float-scalar-vector-type ::= float-type |
                                  `vector<` integer-literal `x` float-type `>`
     sign-op ::= ssa-id `=` `spv.GLSL.FSign` ssa-use `:`
@@ -499,7 +490,7 @@ def SPV_GLSLSSignOp : SPV_GLSLUnaryArithmeticOp<"SSign", 7, SPV_Integer> {
     with the same component width. Results are computed per component.
 
     ### Custom assembly format
-    ``` {.ebnf}
+    ```
     integer-scalar-vector-type ::= integer-type |
                                    `vector<` integer-literal `x` integer-type `>`
     sign-op ::= ssa-id `=` `spv.GLSL.SSign` ssa-use `:`
@@ -529,7 +520,7 @@ def SPV_GLSLSqrtOp : SPV_GLSLUnaryArithmeticOp<"Sqrt", 31, SPV_Float> {
     per component.
 
     ### Custom assembly format
-    ``` {.ebnf}
+    ```
     float-scalar-vector-type ::= float-type |
                                  `vector<` integer-literal `x` float-type `>`
     sqrt-op ::= ssa-id `=` `spv.GLSL.Sqrt` ssa-use `:`
@@ -559,7 +550,7 @@ def SPV_GLSLTanhOp : SPV_GLSLUnaryArithmeticOp<"Tanh", 21, SPV_Float16or32> {
     per component.
 
     ### Custom assembly format
-    ``` {.ebnf}
+    ```
     restricted-float-scalar-type ::=  `f16` | `f32`
     restricted-float-scalar-vector-type ::=
       restricted-float-scalar-type |

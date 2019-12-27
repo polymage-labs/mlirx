@@ -1,19 +1,10 @@
 //===- LLVMDialect.cpp - LLVM IR Ops and Dialect registration -------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This file defines the types and operation details for the LLVM IR dialect in
 // MLIR, and the LLVM IR dialect.  It also registers the dialect.
@@ -177,9 +168,8 @@ static void printGEPOp(OpAsmPrinter &p, GEPOp &op) {
   SmallVector<Type, 8> types(op.getOperandTypes());
   auto funcTy = FunctionType::get(types, op.getType(), op.getContext());
 
-  p << op.getOperationName() << ' ' << *op.base() << '[';
-  p.printOperands(std::next(op.operand_begin()), op.operand_end());
-  p << ']';
+  p << op.getOperationName() << ' ' << *op.base() << '['
+    << op.getOperands().drop_front() << ']';
   p.printOptionalAttrDict(op.getAttrs());
   p << " : " << funcTy;
 }
@@ -312,10 +302,7 @@ static void printCallOp(OpAsmPrinter &p, CallOp &op) {
   else
     p << *op.getOperand(0);
 
-  p << '(';
-  p.printOperands(llvm::drop_begin(op.getOperands(), isDirect ? 0 : 1));
-  p << ')';
-
+  p << '(' << op.getOperands().drop_front(isDirect ? 0 : 1) << ')';
   p.printOptionalAttrDict(op.getAttrs(), {"callee"});
 
   // Reconstruct the function MLIR function type from operand and result types.
@@ -419,7 +406,7 @@ static ParseResult parseCallOp(OpAsmParser &parser, OperationState &result) {
 // Expects vector to be of wrapped LLVM vector type and position to be of
 // wrapped LLVM i32 type.
 void LLVM::ExtractElementOp::build(Builder *b, OperationState &result,
-                                   Value *vector, Value *position,
+                                   Value vector, Value position,
                                    ArrayRef<NamedAttribute> attrs) {
   auto wrappedVectorType = vector->getType().cast<LLVM::LLVMType>();
   auto llvmType = wrappedVectorType.getVectorElementType();
@@ -685,7 +672,7 @@ static void printBrOp(OpAsmPrinter &p, BrOp &op) {
 // attribute-dict?
 static ParseResult parseBrOp(OpAsmParser &parser, OperationState &result) {
   Block *dest;
-  SmallVector<Value *, 4> operands;
+  SmallVector<Value, 4> operands;
   if (parser.parseSuccessorAndUseList(dest, operands) ||
       parser.parseOptionalAttrDict(result.attributes))
     return failure();
@@ -712,8 +699,8 @@ static void printCondBrOp(OpAsmPrinter &p, CondBrOp &op) {
 static ParseResult parseCondBrOp(OpAsmParser &parser, OperationState &result) {
   Block *trueDest;
   Block *falseDest;
-  SmallVector<Value *, 4> trueOperands;
-  SmallVector<Value *, 4> falseOperands;
+  SmallVector<Value, 4> trueOperands;
+  SmallVector<Value, 4> falseOperands;
   OpAsmParser::OperandType condition;
 
   Builder &builder = parser.getBuilder();
@@ -794,9 +781,12 @@ static ParseResult parseUndefOp(OpAsmParser &parser, OperationState &result) {
 //===----------------------------------------------------------------------===//
 
 GlobalOp AddressOfOp::getGlobal() {
-  auto module = getParentOfType<ModuleOp>();
+  Operation *module = getParentOp();
+  while (module && !satisfiesLLVMModule(module))
+    module = module->getParentOp();
   assert(module && "unexpected operation outside of a module");
-  return module.lookupSymbol<LLVM::GlobalOp>(global_name());
+  return dyn_cast_or_null<LLVM::GlobalOp>(
+      mlir::SymbolTable::lookupSymbolIn(module, global_name()));
 }
 
 static void printAddressOfOp(OpAsmPrinter &p, AddressOfOp op) {
@@ -938,8 +928,7 @@ static void printGlobalOp(OpAsmPrinter &p, GlobalOp op) {
   // Print the trailing type unless it's a string global.
   if (op.getValueOrNull().dyn_cast_or_null<StringAttr>())
     return;
-  p << " : ";
-  p.printType(op.type());
+  p << " : " << op.type();
 
   Region &initializer = op.getInitializerRegion();
   if (!initializer.empty())
@@ -1035,7 +1024,7 @@ static LogicalResult verify(GlobalOp op) {
   if (!llvm::PointerType::isValidElementType(op.getType().getUnderlyingType()))
     return op.emitOpError(
         "expects type to be a valid element type for an LLVM pointer");
-  if (op.getParentOp() && !isa<ModuleOp>(op.getParentOp()))
+  if (op.getParentOp() && !satisfiesLLVMModule(op.getParentOp()))
     return op.emitOpError("must appear at the module level");
 
   if (auto strAttr = op.getValueOrNull().dyn_cast_or_null<StringAttr>()) {
@@ -1068,8 +1057,8 @@ static LogicalResult verify(GlobalOp op) {
 //===----------------------------------------------------------------------===//
 // Expects vector to be of wrapped LLVM vector type and position to be of
 // wrapped LLVM i32 type.
-void LLVM::ShuffleVectorOp::build(Builder *b, OperationState &result, Value *v1,
-                                  Value *v2, ArrayAttr mask,
+void LLVM::ShuffleVectorOp::build(Builder *b, OperationState &result, Value v1,
+                                  Value v2, ArrayAttr mask,
                                   ArrayRef<NamedAttribute> attrs) {
   auto wrappedContainerType1 = v1->getType().cast<LLVM::LLVMType>();
   auto vType = LLVMType::getVectorTy(
@@ -1117,8 +1106,22 @@ static ParseResult parseShuffleVectorOp(OpAsmParser &parser,
 }
 
 //===----------------------------------------------------------------------===//
-// Builder, printer and verifier for LLVM::LLVMFuncOp.
+// Implementations for LLVM::LLVMFuncOp.
 //===----------------------------------------------------------------------===//
+
+// Add the entry block to the function.
+Block *LLVMFuncOp::addEntryBlock() {
+  assert(empty() && "function already has an entry block");
+  assert(!isVarArg() && "unimplemented: non-external variadic functions");
+
+  auto *entry = new Block;
+  push_back(entry);
+
+  LLVMType type = getType();
+  for (unsigned i = 0, e = type.getFunctionNumParams(); i < e; ++i)
+    entry->addArgument(type.getFunctionParamType(i));
+  return entry;
+}
 
 void LLVMFuncOp::build(Builder *builder, OperationState &result, StringRef name,
                        LLVMType type, LLVM::Linkage linkage,
@@ -1229,7 +1232,7 @@ static ParseResult parseLLVMFuncOp(OpAsmParser &parser,
 
   auto *body = result.addRegion();
   return parser.parseOptionalRegion(
-      *body, entryArgs, entryArgs.empty() ? llvm::ArrayRef<Type>() : argTypes);
+      *body, entryArgs, entryArgs.empty() ? ArrayRef<Type>() : argTypes);
 }
 
 // Print the LLVMFuncOp. Collects argument and result types and passes them to
@@ -1346,8 +1349,7 @@ static LogicalResult verify(LLVMFuncOp op) {
 static void printNullOp(OpAsmPrinter &p, LLVM::NullOp op) {
   p << NullOp::getOperationName();
   p.printOptionalAttrDict(op.getAttrs());
-  p << " : ";
-  p.printType(op.getType());
+  p << " : " << op.getType();
 }
 
 // <operation> = `llvm.mlir.null` : type
@@ -1502,7 +1504,7 @@ LLVMType LLVMType::get(MLIRContext *context, llvm::Type *llvmType) {
 /// Get an LLVMType with an llvm type that may cause changes to the underlying
 /// llvm context when constructed.
 LLVMType LLVMType::getLocked(LLVMDialect *dialect,
-                             llvm::function_ref<llvm::Type *()> typeBuilder) {
+                             function_ref<llvm::Type *()> typeBuilder) {
   // Lock access to the llvm context and build the type.
   llvm::sys::SmartScopedLock<true> lock(dialect->impl->mutex);
   return get(dialect->getContext(), typeBuilder());
@@ -1653,10 +1655,10 @@ LLVMType LLVMType::getVoidTy(LLVMDialect *dialect) {
 // Utility functions.
 //===----------------------------------------------------------------------===//
 
-Value *mlir::LLVM::createGlobalString(Location loc, OpBuilder &builder,
-                                      StringRef name, StringRef value,
-                                      LLVM::Linkage linkage,
-                                      LLVM::LLVMDialect *llvmDialect) {
+Value mlir::LLVM::createGlobalString(Location loc, OpBuilder &builder,
+                                     StringRef name, StringRef value,
+                                     LLVM::Linkage linkage,
+                                     LLVM::LLVMDialect *llvmDialect) {
   assert(builder.getInsertionBlock() &&
          builder.getInsertionBlock()->getParentOp() &&
          "expected builder to point to a block constrained in an op");
@@ -1673,11 +1675,16 @@ Value *mlir::LLVM::createGlobalString(Location loc, OpBuilder &builder,
       builder.getStringAttr(value));
 
   // Get the pointer to the first character in the global string.
-  Value *globalPtr = builder.create<LLVM::AddressOfOp>(loc, global);
-  Value *cst0 = builder.create<LLVM::ConstantOp>(
+  Value globalPtr = builder.create<LLVM::AddressOfOp>(loc, global);
+  Value cst0 = builder.create<LLVM::ConstantOp>(
       loc, LLVM::LLVMType::getInt64Ty(llvmDialect),
       builder.getIntegerAttr(builder.getIndexType(), 0));
-  return builder.create<LLVM::GEPOp>(
-      loc, LLVM::LLVMType::getInt8PtrTy(llvmDialect), globalPtr,
-      ArrayRef<Value *>({cst0, cst0}));
+  return builder.create<LLVM::GEPOp>(loc,
+                                     LLVM::LLVMType::getInt8PtrTy(llvmDialect),
+                                     globalPtr, ArrayRef<Value>({cst0, cst0}));
+}
+
+bool mlir::LLVM::satisfiesLLVMModule(Operation *op) {
+  return op->hasTrait<OpTrait::SymbolTable>() &&
+         op->hasTrait<OpTrait::IsIsolatedFromAbove>();
 }

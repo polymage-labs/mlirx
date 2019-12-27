@@ -1,19 +1,10 @@
 //===-- SPIRVArithmeticOps.td - MLIR SPIR-V Arithmetic Ops -*- tablegen -*-===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This file contains arithmetic ops for the SPIR-V dialect. It corresponds
 // to "3.32.13. Arithmetic Instructions" of the SPIR-V specification.
@@ -53,7 +44,7 @@ def SPV_FAddOp : SPV_ArithmeticBinaryOp<"FAdd", SPV_Float, [Commutative]> {
      Results are computed per component.
 
     ### Custom assembly form
-    ``` {.ebnf}
+    ```
     float-scalar-vector-type ::= float-type |
                                  `vector<` integer-literal `x` float-type `>`
     fadd-op ::= ssa-id `=` `spv.FAdd` ssa-use, ssa-use
@@ -83,7 +74,7 @@ def SPV_FDivOp : SPV_ArithmeticBinaryOp<"FDiv", SPV_Float, []> {
     if Operand 2 is 0.
 
     ### Custom assembly form
-    ``` {.ebnf}
+    ```
     float-scalar-vector-type ::= float-type |
                                  `vector<` integer-literal `x` float-type `>`
     fdiv-op ::= ssa-id `=` `spv.FDiv` ssa-use, ssa-use
@@ -118,7 +109,7 @@ def SPV_FModOp : SPV_ArithmeticBinaryOp<"FMod", SPV_Float, []> {
     sign of Operand 2.
 
     ### Custom assembly form
-    ``` {.ebnf}
+    ```
     float-scalar-vector-type ::= float-type |
                                  `vector<` integer-literal `x` float-type `>`
     fmod-op ::= ssa-id `=` `spv.FMod` ssa-use, ssa-use
@@ -148,7 +139,7 @@ def SPV_FMulOp : SPV_ArithmeticBinaryOp<"FMul", SPV_Float, [Commutative]> {
 
     ### Custom assembly form
 
-    ``` {.ebnf}
+    ```
     float-scalar-vector-type ::= float-type |
                                  `vector<` integer-literal `x` float-type `>`
     fmul-op ::= `spv.FMul` ssa-use, ssa-use
@@ -178,7 +169,7 @@ def SPV_FNegateOp : SPV_ArithmeticUnaryOp<"FNegate", SPV_Float, []> {
 
     ### Custom assembly form
 
-    ``` {.ebnf}
+    ```
     float-scalar-vector-type ::= float-type |
                                  `vector<` integer-literal `x` float-type `>`
     fmul-op ::= `spv.FNegate` ssa-use `:` float-scalar-vector-type
@@ -212,7 +203,7 @@ def SPV_FRemOp : SPV_ArithmeticBinaryOp<"FRem", SPV_Float, []> {
     sign of Operand 1.
 
     ### Custom assembly form
-    ``` {.ebnf}
+    ```
     float-scalar-vector-type ::= float-type |
                                  `vector<` integer-literal `x` float-type `>`
     frem-op ::= ssa-id `=` `spv.FRemOp` ssa-use, ssa-use
@@ -242,7 +233,7 @@ def SPV_FSubOp : SPV_ArithmeticBinaryOp<"FSub", SPV_Float, []> {
      Results are computed per component.
 
     ### Custom assembly form
-    ``` {.ebnf}
+    ```
     float-scalar-vector-type ::= float-type |
                                  `vector<` integer-literal `x` float-type `>`
     fsub-op ::= ssa-id `=` `spv.FRemOp` ssa-use, ssa-use
@@ -277,7 +268,7 @@ def SPV_IAddOp : SPV_ArithmeticBinaryOp<"IAdd", SPV_Integer, [Commutative]> {
      Results are computed per component.
 
     ### Custom assembly form
-    ``` {.ebnf}
+    ```
     integer-scalar-vector-type ::= integer-type |
                                  `vector<` integer-literal `x` integer-type `>`
     iadd-op ::= ssa-id `=` `spv.IAdd` ssa-use, ssa-use
@@ -315,7 +306,7 @@ def SPV_IMulOp : SPV_ArithmeticBinaryOp<"IMul", SPV_Integer, [Commutative]> {
      Results are computed per component.
 
     ### Custom assembly form
-    ``` {.ebnf}
+    ```
     integer-scalar-vector-type ::= integer-type |
                                  `vector<` integer-literal `x` integer-type `>`
     imul-op ::= ssa-id `=` `spv.IMul` ssa-use, ssa-use
@@ -353,7 +344,7 @@ def SPV_ISubOp : SPV_ArithmeticBinaryOp<"ISub", SPV_Integer, []> {
      Results are computed per component.
 
     ### Custom assembly form
-    ``` {.ebnf}
+    ```
     integer-scalar-vector-type ::= integer-type |
                                  `vector<` integer-literal `x` integer-type `>`
     isub-op ::= `spv.ISub` ssa-use, ssa-use
@@ -368,6 +359,8 @@ def SPV_ISubOp : SPV_ArithmeticBinaryOp<"ISub", SPV_Integer, []> {
 
     ```
   }];
+
+  let hasFolder = 1;
 }
 
 // -----
@@ -386,7 +379,7 @@ def SPV_SDivOp : SPV_ArithmeticBinaryOp<"SDiv", SPV_Integer, []> {
     if Operand 2 is 0.
 
     ### Custom assembly form
-    ``` {.ebnf}
+    ```
     integer-scalar-vector-type ::= integer-type |
                                  `vector<` integer-literal `x` integer-type `>`
     sdiv-op ::= ssa-id `=` `spv.SDiv` ssa-use, ssa-use
@@ -424,7 +417,7 @@ def SPV_SModOp : SPV_ArithmeticBinaryOp<"SMod", SPV_Integer, []> {
     sign of Operand 2.
 
     ### Custom assembly form
-    ``` {.ebnf}
+    ```
     integer-scalar-vector-type ::= integer-type |
                                  `vector<` integer-literal `x` integer-type `>`
     smod-op ::= ssa-id `=` `spv.SMod` ssa-use, ssa-use
@@ -461,7 +454,7 @@ def SPV_SRemOp : SPV_ArithmeticBinaryOp<"SRem", SPV_Integer, []> {
     sign of Operand 1.
 
     ### Custom assembly form
-    ``` {.ebnf}
+    ```
     integer-scalar-vector-type ::= integer-type |
                                  `vector<` integer-literal `x` integer-type `>`
     srem-op ::= ssa-id `=` `spv.SRem` ssa-use, ssa-use
@@ -493,7 +486,7 @@ def SPV_UDivOp : SPV_ArithmeticBinaryOp<"UDiv", SPV_Integer, []> {
     if Operand 2 is 0.
 
     ### Custom assembly form
-    ``` {.ebnf}
+    ```
     integer-scalar-vector-type ::= integer-type |
                                  `vector<` integer-literal `x` integer-type `>`
     udiv-op ::= ssa-id `=` `spv.UDiv` ssa-use, ssa-use
@@ -525,7 +518,7 @@ def SPV_UModOp : SPV_ArithmeticBinaryOp<"UMod", SPV_Integer> {
     if Operand 2 is 0.
 
     ### Custom assembly form
-    ``` {.ebnf}
+    ```
     integer-scalar-vector-type ::= integer-type |
                                  `vector<` integer-literal `x` integer-type `>`
     umod-op ::= ssa-id `=` `spv.UMod` ssa-use, ssa-use

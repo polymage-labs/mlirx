@@ -1,19 +1,10 @@
 //===- StorageUniquer.cpp - Common Storage Class Uniquer ------------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 
 #include "mlir/Support/StorageUniquer.h"
 
@@ -39,7 +30,7 @@ struct StorageUniquerImpl {
     unsigned hashValue;
 
     /// An equality function for comparing with an existing storage instance.
-    llvm::function_ref<bool(const BaseStorage *)> isEqual;
+    function_ref<bool(const BaseStorage *)> isEqual;
   };
 
   /// A utility wrapper object representing a hashed storage object. This class
@@ -52,8 +43,8 @@ struct StorageUniquerImpl {
   /// Get or create an instance of a complex derived type.
   BaseStorage *
   getOrCreate(unsigned kind, unsigned hashValue,
-              llvm::function_ref<bool(const BaseStorage *)> isEqual,
-              llvm::function_ref<BaseStorage *(StorageAllocator &)> ctorFn) {
+              function_ref<bool(const BaseStorage *)> isEqual,
+              function_ref<BaseStorage *(StorageAllocator &)> ctorFn) {
     LookupKey lookupKey{kind, hashValue, isEqual};
 
     // Check for an existing instance in read-only mode.
@@ -83,7 +74,7 @@ struct StorageUniquerImpl {
   /// Get or create an instance of a simple derived type.
   BaseStorage *
   getOrCreate(unsigned kind,
-              llvm::function_ref<BaseStorage *(StorageAllocator &)> ctorFn) {
+              function_ref<BaseStorage *(StorageAllocator &)> ctorFn) {
     // Check for an existing instance in read-only mode.
     {
       llvm::sys::SmartScopedReader<true> typeLock(mutex);
@@ -107,8 +98,8 @@ struct StorageUniquerImpl {
 
   /// Erase an instance of a complex derived type.
   void erase(unsigned kind, unsigned hashValue,
-             llvm::function_ref<bool(const BaseStorage *)> isEqual,
-             llvm::function_ref<void(BaseStorage *)> cleanupFn) {
+             function_ref<bool(const BaseStorage *)> isEqual,
+             function_ref<void(BaseStorage *)> cleanupFn) {
     LookupKey lookupKey{kind, hashValue, isEqual};
 
     // Acquire a writer-lock so that we can safely erase the type instance.
@@ -127,9 +118,9 @@ struct StorageUniquerImpl {
   //===--------------------------------------------------------------------===//
 
   /// Utility to create and initialize a storage instance.
-  BaseStorage *initializeStorage(
-      unsigned kind,
-      llvm::function_ref<BaseStorage *(StorageAllocator &)> ctorFn) {
+  BaseStorage *
+  initializeStorage(unsigned kind,
+                    function_ref<BaseStorage *(StorageAllocator &)> ctorFn) {
     BaseStorage *storage = ctorFn(allocator);
     storage->kind = kind;
     return storage;
@@ -162,11 +153,11 @@ struct StorageUniquerImpl {
   };
 
   // Unique types with specific hashing or storage constraints.
-  using StorageTypeSet = llvm::DenseSet<HashedStorage, StorageKeyInfo>;
+  using StorageTypeSet = DenseSet<HashedStorage, StorageKeyInfo>;
   StorageTypeSet storageTypes;
 
   // Unique types with just the kind.
-  llvm::DenseMap<unsigned, BaseStorage *> simpleTypes;
+  DenseMap<unsigned, BaseStorage *> simpleTypes;
 
   // Allocator to use when constructing derived type instances.
   StorageUniquer::StorageAllocator allocator;
@@ -184,7 +175,7 @@ StorageUniquer::~StorageUniquer() {}
 /// complex storage.
 auto StorageUniquer::getImpl(
     unsigned kind, unsigned hashValue,
-    llvm::function_ref<bool(const BaseStorage *)> isEqual,
+    function_ref<bool(const BaseStorage *)> isEqual,
     std::function<BaseStorage *(StorageAllocator &)> ctorFn) -> BaseStorage * {
   return impl->getOrCreate(kind, hashValue, isEqual, ctorFn);
 }
@@ -199,9 +190,8 @@ auto StorageUniquer::getImpl(
 
 /// Implementation for erasing an instance of a derived type with complex
 /// storage.
-void StorageUniquer::eraseImpl(
-    unsigned kind, unsigned hashValue,
-    llvm::function_ref<bool(const BaseStorage *)> isEqual,
-    std::function<void(BaseStorage *)> cleanupFn) {
+void StorageUniquer::eraseImpl(unsigned kind, unsigned hashValue,
+                               function_ref<bool(const BaseStorage *)> isEqual,
+                               std::function<void(BaseStorage *)> cleanupFn) {
   impl->erase(kind, hashValue, isEqual, cleanupFn);
 }

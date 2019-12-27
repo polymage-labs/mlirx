@@ -1,19 +1,10 @@
 //===- LinalgTypes.h - Linalg Types ---------------------------------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 
 #ifndef MLIR_DIALECT_LINALG_LINALGTYPES_H_
 #define MLIR_DIALECT_LINALG_LINALGTYPES_H_
@@ -26,8 +17,7 @@ class MLIRContext;
 
 namespace linalg {
 enum LinalgTypes {
-  Buffer = Type::FIRST_LINALG_TYPE,
-  Range,
+  Range = Type::FIRST_LINALG_TYPE,
   LAST_USED_LINALG_TYPE = Range,
 };
 
@@ -43,31 +33,11 @@ public:
   void printType(Type type, DialectAsmPrinter &os) const override;
 };
 
-/// A BufferType represents a contiguous block of memory that can be allocated
-/// and deallocated. A buffer cannot be indexed directly, a view must be
-/// laid out on a buffer to give it indexing semantics.
-struct BufferTypeStorage;
-class BufferType : public Type::TypeBase<BufferType, Type, BufferTypeStorage> {
-public:
-  // Used for generic hooks in TypeBase.
-  using Base::Base;
-  /// Construction hook.
-  static BufferType get(MLIRContext *context, Type elementType,
-                        int64_t bufferSize = -1);
-  /// Used to implement llvm-style cast.
-  static bool kindof(unsigned kind) { return kind == LinalgTypes::Buffer; }
-
-  // Type-specific functionality.
-  Type getElementType();
-  bool hasConstantSize();
-  Optional<int64_t> getBufferSize();
-};
-
 /// A RangeType represents a minimal range abstraction (min, max, step).
 /// It is constructed by calling the linalg.range op with three values index of
 /// index type:
 ///
-/// ```{.mlir}
+/// ```mlir
 ///    func @foo(%arg0 : index, %arg1 : index, %arg2 : index) {
 ///      %0 = linalg.range %arg0:%arg1:%arg2 : !linalg.range
 ///    }

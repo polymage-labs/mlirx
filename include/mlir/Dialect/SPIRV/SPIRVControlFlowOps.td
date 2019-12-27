@@ -1,19 +1,10 @@
 //===-- SPIRVControlFlowOps.td - SPIR-V Control Flow Ops ---*- tablegen -*-===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This file contains control flow ops for the SPIR-V dialect. It corresponds
 // to "3.32.17. Control-Flow Instructions" of the SPIR-V specification.
@@ -36,7 +27,7 @@ def SPV_BranchOp : SPV_Op<"Branch", [InFunctionScope, Terminator]> {
 
     ### Custom assembly form
 
-    ``` {.ebnf}
+    ```
     branch-op ::= `spv.Branch` successor
     successor ::= bb-id branch-use-list?
     branch-use-list ::= `(` ssa-use-list `:` type-list-no-parens `)`
@@ -106,7 +97,7 @@ def SPV_BranchConditionalOp : SPV_Op<"BranchConditional",
 
     ### Custom assembly form
 
-    ``` {.ebnf}
+    ```
     branch-conditional-op ::= `spv.BranchConditional` ssa-use
                               (`[` integer-literal, integer-literal `]`)?
                               `,` successor `,` successor
@@ -132,7 +123,7 @@ def SPV_BranchConditionalOp : SPV_Op<"BranchConditional",
 
   let builders = [
     OpBuilder<
-      "Builder *builder, OperationState &state, Value *condition, "
+      "Builder *builder, OperationState &state, Value condition, "
       "Block *trueBlock, ValueRange trueArguments, "
       "Block *falseBlock, ValueRange falseArguments, "
       "Optional<std::pair<uint32_t, uint32_t>> weights = {}",
@@ -231,7 +222,7 @@ def SPV_FunctionCallOp : SPV_Op<"FunctionCall", [
 
     ### Custom assembly form
 
-    ``` {.ebnf}
+    ```
     function-call-op ::= `spv.FunctionCall` function-id `(` ssa-use-list `)`
                      `:` function-type
     ```
@@ -355,7 +346,7 @@ def SPV_ReturnOp : SPV_Op<"Return", [InFunctionScope, Terminator]> {
 
     ### Custom assembly form
 
-    ``` {.ebnf}
+    ```
     return-op ::= `spv.Return`
     ```
   }];
@@ -378,7 +369,7 @@ def SPV_UnreachableOp : SPV_Op<"Unreachable", [InFunctionScope, Terminator]> {
 
     ### Custom assembly form
 
-    ``` {.ebnf}
+    ```
     unreachable-op ::= `spv.Unreachable`
     ```
   }];
@@ -405,7 +396,7 @@ def SPV_ReturnValueOp : SPV_Op<"ReturnValue", [InFunctionScope, Terminator]> {
 
     ### Custom assembly form
 
-    ``` {.ebnf}
+    ```
     return-value-op ::= `spv.ReturnValue` ssa-use `:` spirv-type
     ```
 

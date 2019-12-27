@@ -1,19 +1,10 @@
 //===- PassRegistry.cpp - Pass Registration Utilities ---------------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Pass/Pass.h"
@@ -27,17 +18,21 @@ using namespace mlir;
 using namespace detail;
 
 /// Static mapping of all of the registered passes.
-static llvm::ManagedStatic<llvm::DenseMap<const PassID *, PassInfo>>
-    passRegistry;
+static llvm::ManagedStatic<DenseMap<const PassID *, PassInfo>> passRegistry;
 
 /// Static mapping of all of the registered pass pipelines.
 static llvm::ManagedStatic<llvm::StringMap<PassPipelineInfo>>
     passPipelineRegistry;
 
-// Helper to avoid exposing OpPassManager.
-void mlir::detail::addPassToPassManager(OpPassManager &pm,
-                                        std::unique_ptr<Pass> pass) {
-  pm.addPass(std::move(pass));
+/// Utility to create a default registry function from a pass instance.
+static PassRegistryFunction
+buildDefaultRegistryFn(const PassAllocatorFunction &allocator) {
+  return [=](OpPassManager &pm, StringRef options) {
+    std::unique_ptr<Pass> pass = allocator();
+    LogicalResult result = pass->initializeOptions(options);
+    pm.addPass(std::move(pass));
+    return result;
+  };
 }
 
 //===----------------------------------------------------------------------===//
@@ -56,9 +51,13 @@ void mlir::registerPassPipeline(StringRef arg, StringRef description,
 // PassInfo
 //===----------------------------------------------------------------------===//
 
+PassInfo::PassInfo(StringRef arg, StringRef description, const PassID *passID,
+                   const PassAllocatorFunction &allocator)
+    : PassRegistryEntry(arg, description, buildDefaultRegistryFn(allocator)) {}
+
 void mlir::registerPass(StringRef arg, StringRef description,
                         const PassID *passID,
-                        const PassRegistryFunction &function) {
+                        const PassAllocatorFunction &function) {
   PassInfo passInfo(arg, description, passID, function);
   bool inserted = passRegistry->try_emplace(passID, passInfo).second;
   assert(inserted && "Pass registered multiple times");
@@ -77,7 +76,19 @@ const PassInfo *mlir::Pass::lookupPassInfo(const PassID *passID) {
 // PassOptions
 //===----------------------------------------------------------------------===//
 
-LogicalResult PassOptionsBase::parseFromString(StringRef options) {
+/// Out of line virtual function to provide home for the class.
+void detail::PassOptions::OptionBase::anchor() {}
+
+/// Copy the option values from 'other'.
+void detail::PassOptions::copyOptionValuesFrom(const PassOptions &other) {
+  assert(options.size() == other.options.size());
+  if (options.empty())
+    return;
+  for (auto optionsIt : llvm::zip(options, other.options))
+    std::get<0>(optionsIt)->copyValueFrom(*std::get<1>(optionsIt));
+}
+
+LogicalResult detail::PassOptions::parseFromString(StringRef options) {
   // TODO(parkers): Handle escaping strings.
   // NOTE: `options` is modified in place to always refer to the unprocessed
   // part of the string.
@@ -109,7 +120,6 @@ LogicalResult PassOptionsBase::parseFromString(StringRef options) {
     auto it = OptionsMap.find(key);
     if (it == OptionsMap.end()) {
       llvm::errs() << "<Pass-Options-Parser>: no such option " << key << "\n";
-
       return failure();
     }
     if (llvm::cl::ProvidePositionalOption(it->second, value, 0))
@@ -117,6 +127,28 @@ LogicalResult PassOptionsBase::parseFromString(StringRef options) {
   }
 
   return success();
+}
+
+/// Print the options held by this struct in a form that can be parsed via
+/// 'parseFromString'.
+void detail::PassOptions::print(raw_ostream &os) {
+  // If there are no options, there is nothing left to do.
+  if (OptionsMap.empty())
+    return;
+
+  // Sort the options to make the ordering deterministic.
+  SmallVector<OptionBase *, 4> orderedOptions(options.begin(), options.end());
+  llvm::array_pod_sort(orderedOptions.begin(), orderedOptions.end(),
+                       [](OptionBase *const *lhs, OptionBase *const *rhs) {
+                         return (*lhs)->getArgStr().compare(
+                             (*rhs)->getArgStr());
+                       });
+
+  // Interleave the options with ' '.
+  os << '{';
+  interleave(
+      orderedOptions, os, [&](OptionBase *option) { option->print(os); }, " ");
+  os << '}';
 }
 
 //===----------------------------------------------------------------------===//
@@ -138,7 +170,7 @@ private:
   /// A functor used to emit errors found during pipeline handling. The first
   /// parameter corresponds to the raw location within the pipeline string. This
   /// should always return failure.
-  using ErrorHandlerT = function_ref<LogicalResult(const char *, llvm::Twine)>;
+  using ErrorHandlerT = function_ref<LogicalResult(const char *, Twine)>;
 
   /// A struct to capture parsed pass pipeline names.
   ///
@@ -189,7 +221,7 @@ LogicalResult TextualPipeline::initialize(StringRef text,
   pipelineMgr.AddNewSourceBuffer(llvm::MemoryBuffer::getMemBuffer(
                                      text, "MLIR Textual PassPipeline Parser"),
                                  llvm::SMLoc());
-  auto errorHandler = [&](const char *rawLoc, llvm::Twine msg) {
+  auto errorHandler = [&](const char *rawLoc, Twine msg) {
     pipelineMgr.PrintMessage(errorStream, llvm::SMLoc::getFromPointer(rawLoc),
                              llvm::SourceMgr::DK_Error, msg);
     return failure();
@@ -401,7 +433,7 @@ namespace {
 
 /// The name for the command line option used for parsing the textual pass
 /// pipeline.
-static constexpr llvm::StringLiteral passPipelineArg = "pass-pipeline";
+static constexpr StringLiteral passPipelineArg = "pass-pipeline";
 
 /// Adds command line option for each registered pass or pass pipeline, as well
 /// as textual pass pipelines.

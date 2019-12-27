@@ -1,19 +1,10 @@
 //===- TestLinalgTransformPatterns.td - Test patterns --*- tablegen ----*-===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This is the pattern definition file for declarative Linalg transformations
 // tests.
@@ -74,10 +65,62 @@ def : Pattern<(DotOp:$op $a, $b, $c),
               [(Constraint<HasLinalgTransformMarker<"L1">> $op)]>;
 
 //===----------------------------------------------------------------------===//
+// Linalg tiling and permutation patterns.
+//===----------------------------------------------------------------------===//
+def : Pat<(MatmulOp:$op $A, $B, $C),
+          (TileLinalgOp<[2000, 3000, 4000], "L2__with_perm__", [1,2,0]> $op),
+          [(Constraint<HasLinalgTransformMarker<"__with_perm__">> $op)]>;
+def : Pat<(MatmulOp:$op $A, $B, $C),
+          (TileLinalgOp<[200, 300, 400], "L1__with_perm__", [1,0,2]> $op),
+          [(Constraint<HasLinalgTransformMarker<"L2__with_perm__">> $op)]>;
+def : Pat<(MatmulOp:$op $A, $B, $C),
+          (TileLinalgOp<[20, 30, 40], "REG__with_perm__"> $op),
+          [(Constraint<HasLinalgTransformMarker<"L1__with_perm__">> $op)]>;
+
+
+def : Pattern<(MatvecOp:$op $A, $b, $c),
+              [(TileLinalgOp<[5, 6], "L1__with_perm__", [1,0]> $op)],
+              [(Constraint<HasLinalgTransformMarker<"__with_perm__">> $op)]>;
+
+def : Pattern<(DotOp:$op $a, $b, $c),
+              [(TileLinalgOp<[8000], "L1__with_perm__"> $op)],
+              [(Constraint<HasLinalgTransformMarker<"__with_perm__">> $op)]>;
+def : Pattern<(DotOp:$op $a, $b, $c),
+              [(TileLinalgOp<[8], "REG__with_perm__"> $op)],
+              [(Constraint<HasLinalgTransformMarker<"L1__with_perm__">> $op)]>;
+
+//===----------------------------------------------------------------------===//
 // Linalg to loops patterns.
 //===----------------------------------------------------------------------===//
 def : Pattern<(DotOp:$op $a, $b, $c),
               [(LinalgOpToLoops<"DotOp"> $op)],
               [(Constraint<HasLinalgTransformMarker<"REG">> $op)]>;
 
+//===----------------------------------------------------------------------===//
+// Linalg to vector contraction patterns.
+//===----------------------------------------------------------------------===//
+def : Pattern<(GenericOp:$op $_1, $_2, $_3, $_4, $_5, $_6, $_7, $_8),
+              [(LinalgOpToVectorContraction<"GenericOp"> $op)],
+              [(Constraint<HasLinalgTransformMarker<"_marked_matmul_">> $op)]>;
+
+//===----------------------------------------------------------------------===//
+// Linalg generic permutation patterns.
+//===----------------------------------------------------------------------===//
+def : Pat<(GenericOp:$op $_1, $_2, $_3, $_4, $_5, $_6, $_7, $_8),
+              (PermuteGenericLinalgOp<[1,2,0],"PERMUTED"> $op),
+              [(Constraint<And<[HasNoLinalgTransformMarker,
+                           AffineMapDomainHasDim<3>]>> $op)]>;
+
+def : Pat<(IndexedGenericOp:$op $_1, $_2, $_3, $_4, $_5, $_6, $_7, $_8),
+              (PermuteGenericLinalgOp<[1,2,0],"PERMUTED"> $op),
+              [(Constraint<And<[HasNoLinalgTransformMarker,
+                           AffineMapDomainHasDim<3>]>> $op)]>;
+
+//===----------------------------------------------------------------------===//
+// Linalg subview operands promotion.
+//===----------------------------------------------------------------------===//
+def : Pat<(MatmulOp:$op $A, $B, $C),
+          (LinalgOpPromoteSubviews<"MatmulOp"> $op),
+          [(Constraint<HasOperandsOfType<"SubViewOp">> $op),
+          (Constraint<HasLinalgTransformMarker<"_promote_views_">> $op)]>;
 #endif // TEST_LINALG_TRANSFORMS_PATTERNS

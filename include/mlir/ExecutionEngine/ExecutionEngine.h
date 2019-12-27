@@ -1,19 +1,10 @@
 //===- ExecutionEngine.h - MLIR Execution engine and utils -----*- C++ -*--===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This file provides a JIT-backed execution engine for MLIR modules.
 //
@@ -50,7 +41,7 @@ public:
   std::unique_ptr<llvm::MemoryBuffer> getObject(const llvm::Module *M) override;
 
   /// Dump cached object to output file `filename`.
-  void dumpToObjectFile(llvm::StringRef filename);
+  void dumpToObjectFile(StringRef filename);
 
 private:
   llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> cachedObjects;
@@ -103,7 +94,7 @@ public:
   static bool setupTargetTriple(llvm::Module *llvmModule);
 
   /// Dump object code to output file `filename`.
-  void dumpToObjectFile(llvm::StringRef filename);
+  void dumpToObjectFile(StringRef filename);
 
 private:
   // Ordering of llvmContext and jit is important for destruction purposes: the
@@ -124,7 +115,7 @@ llvm::Error ExecutionEngine::invoke(StringRef name, Args &... args) {
     return expectedFPtr.takeError();
   auto fptr = *expectedFPtr;
 
-  llvm::SmallVector<void *, 8> packedArgs{static_cast<void *>(&args)...};
+  SmallVector<void *, 8> packedArgs{static_cast<void *>(&args)...};
   (*fptr)(packedArgs.data());
 
   return llvm::Error::success();

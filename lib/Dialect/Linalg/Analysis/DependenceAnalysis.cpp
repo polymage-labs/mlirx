@@ -1,19 +1,10 @@
 //===- DependenceAnalysis.cpp - Dependence analysis on SSA views ----------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This file implements view-based alias and dependence analyses.
 //
@@ -49,21 +40,18 @@ static StringRef toStringRef(LinalgDependenceGraph::DependenceType dt) {
   llvm_unreachable("Unexpected DependenceType");
 }
 
-Value *Aliases::find(Value *v) {
-  if (isa<BlockArgument>(v))
+Value Aliases::find(Value v) {
+  if (v.isa<BlockArgument>())
     return v;
 
   auto it = aliases.find(v);
   if (it != aliases.end()) {
-    assert(((isa<BlockArgument>(it->getSecond()) &&
-             it->getSecond()->getType().isa<MemRefType>()) ||
-            it->getSecond()->getType().isa<BufferType>()) &&
-           "Buffer or block argument expected");
+    assert(it->getSecond()->getType().isa<MemRefType>() && "Memref expected");
     return it->getSecond();
   }
 
   while (true) {
-    if (isa<BlockArgument>(v))
+    if (v.isa<BlockArgument>())
       return v;
     if (auto alloc = dyn_cast_or_null<AllocOp>(v->getDefiningOp())) {
       if (isStrided(alloc.getType()))
@@ -150,9 +138,9 @@ LinalgDependenceGraph::getDependencesInto(
 }
 
 void LinalgDependenceGraph::addDependencesBetween(LinalgOp src, LinalgOp dst) {
-  for (auto *srcView : src.getOutputs()) { // W
+  for (auto srcView : src.getOutputs()) { // W
     // RAW graph
-    for (auto *dstView : dst.getInputs()) {  // R
+    for (auto dstView : dst.getInputs()) {   // R
       if (aliases.alias(srcView, dstView)) { // if alias, fill RAW
         addDependenceElem(DependenceType::RAW,
                           LinalgOpView{src.getOperation(), srcView},
@@ -160,7 +148,7 @@ void LinalgDependenceGraph::addDependencesBetween(LinalgOp src, LinalgOp dst) {
       }
     }
     // WAW graph
-    for (auto *dstView : dst.getOutputs()) { // W
+    for (auto dstView : dst.getOutputs()) {  // W
       if (aliases.alias(srcView, dstView)) { // if alias, fill WAW
         addDependenceElem(DependenceType::WAW,
                           LinalgOpView{src.getOperation(), srcView},
@@ -168,9 +156,9 @@ void LinalgDependenceGraph::addDependencesBetween(LinalgOp src, LinalgOp dst) {
       }
     }
   }
-  for (auto *srcView : src.getInputs()) { // R
+  for (auto srcView : src.getInputs()) { // R
     // RAR graph
-    for (auto *dstView : dst.getInputs()) {  // R
+    for (auto dstView : dst.getInputs()) {   // R
       if (aliases.alias(srcView, dstView)) { // if alias, fill RAR
         addDependenceElem(DependenceType::RAR,
                           LinalgOpView{src.getOperation(), srcView},
@@ -178,7 +166,7 @@ void LinalgDependenceGraph::addDependencesBetween(LinalgOp src, LinalgOp dst) {
       }
     }
     // WAR graph
-    for (auto *dstView : dst.getOutputs()) { // W
+    for (auto dstView : dst.getOutputs()) {  // W
       if (aliases.alias(srcView, dstView)) { // if alias, fill WAR
         addDependenceElem(DependenceType::WAR,
                           LinalgOpView{src.getOperation(), srcView},
@@ -197,14 +185,14 @@ LinalgDependenceGraph::findCoveringDependences(LinalgOp srcLinalgOp,
 }
 
 SmallVector<Operation *, 8> LinalgDependenceGraph::findCoveringWrites(
-    LinalgOp srcLinalgOp, LinalgOp dstLinalgOp, Value *view) const {
+    LinalgOp srcLinalgOp, LinalgOp dstLinalgOp, Value view) const {
   return findOperationsWithCoveringDependences(
       srcLinalgOp, dstLinalgOp, view,
       {DependenceType::WAW, DependenceType::WAR});
 }
 
 SmallVector<Operation *, 8> LinalgDependenceGraph::findCoveringReads(
-    LinalgOp srcLinalgOp, LinalgOp dstLinalgOp, Value *view) const {
+    LinalgOp srcLinalgOp, LinalgOp dstLinalgOp, Value view) const {
   return findOperationsWithCoveringDependences(
       srcLinalgOp, dstLinalgOp, view,
       {DependenceType::RAR, DependenceType::RAW});
@@ -212,7 +200,7 @@ SmallVector<Operation *, 8> LinalgDependenceGraph::findCoveringReads(
 
 SmallVector<Operation *, 8>
 LinalgDependenceGraph::findOperationsWithCoveringDependences(
-    LinalgOp srcLinalgOp, LinalgOp dstLinalgOp, Value *view,
+    LinalgOp srcLinalgOp, LinalgOp dstLinalgOp, Value view,
     ArrayRef<DependenceType> types) const {
   auto *src = srcLinalgOp.getOperation();
   auto *dst = dstLinalgOp.getOperation();

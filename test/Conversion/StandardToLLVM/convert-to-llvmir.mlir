@@ -1,4 +1,4 @@
-// RUN: mlir-opt -convert-std-to-llvm %s | FileCheck %s
+// RUN: mlir-opt -convert-std-to-llvm %s -split-input-file | FileCheck %s
 
 // CHECK-LABEL: func @empty() {
 // CHECK-NEXT:  llvm.return
@@ -364,31 +364,36 @@ func @multireturn_caller() {
   return
 }
 
-// CHECK-LABEL: func @vector_ops(%arg0: !llvm<"<4 x float>">, %arg1: !llvm<"<4 x i1>">, %arg2: !llvm<"<4 x i64>">) -> !llvm<"<4 x float>"> {
-func @vector_ops(vector<4xf32>, vector<4xi1>, vector<4xi64>) -> vector<4xf32> {
-^bb0(%arg0: vector<4xf32>, %arg1: vector<4xi1>, %arg2: vector<4xi64>):
+// CHECK-LABEL: func @vector_ops(%arg0: !llvm<"<4 x float>">, %arg1: !llvm<"<4 x i1>">, %arg2: !llvm<"<4 x i64>">, %arg3: !llvm<"<4 x i64>">) -> !llvm<"<4 x float>"> {
+func @vector_ops(%arg0: vector<4xf32>, %arg1: vector<4xi1>, %arg2: vector<4xi64>, %arg3: vector<4xi64>) -> vector<4xf32> {
 // CHECK-NEXT:  %0 = llvm.mlir.constant(dense<4.200000e+01> : vector<4xf32>) : !llvm<"<4 x float>">
   %0 = constant dense<42.> : vector<4xf32>
 // CHECK-NEXT:  %1 = llvm.fadd %arg0, %0 : !llvm<"<4 x float>">
   %1 = addf %arg0, %0 : vector<4xf32>
 // CHECK-NEXT:  %2 = llvm.sdiv %arg2, %arg2 : !llvm<"<4 x i64>">
-  %3 = divis %arg2, %arg2 : vector<4xi64>
+  %3 = divi_signed %arg2, %arg2 : vector<4xi64>
 // CHECK-NEXT:  %3 = llvm.udiv %arg2, %arg2 : !llvm<"<4 x i64>">
-  %4 = diviu %arg2, %arg2 : vector<4xi64>
+  %4 = divi_unsigned %arg2, %arg2 : vector<4xi64>
 // CHECK-NEXT:  %4 = llvm.srem %arg2, %arg2 : !llvm<"<4 x i64>">
-  %5 = remis %arg2, %arg2 : vector<4xi64>
+  %5 = remi_signed %arg2, %arg2 : vector<4xi64>
 // CHECK-NEXT:  %5 = llvm.urem %arg2, %arg2 : !llvm<"<4 x i64>">
-  %6 = remiu %arg2, %arg2 : vector<4xi64>
+  %6 = remi_unsigned %arg2, %arg2 : vector<4xi64>
 // CHECK-NEXT:  %6 = llvm.fdiv %arg0, %0 : !llvm<"<4 x float>">
   %7 = divf %arg0, %0 : vector<4xf32>
 // CHECK-NEXT:  %7 = llvm.frem %arg0, %0 : !llvm<"<4 x float>">
   %8 = remf %arg0, %0 : vector<4xf32>
-// CHECK-NEXT:  %8 = llvm.and %arg2, %arg2 : !llvm<"<4 x i64>">
-  %9 = and %arg2, %arg2 : vector<4xi64>
-// CHECK-NEXT:  %9 = llvm.or %arg2, %arg2 : !llvm<"<4 x i64>">
-  %10 = or %arg2, %arg2 : vector<4xi64>
-// CHECK-NEXT:  %10 = llvm.xor %arg2, %arg2 : !llvm<"<4 x i64>">
-  %11 = xor %arg2, %arg2 : vector<4xi64>
+// CHECK-NEXT:  %8 = llvm.and %arg2, %arg3 : !llvm<"<4 x i64>">
+  %9 = and %arg2, %arg3 : vector<4xi64>
+// CHECK-NEXT:  %9 = llvm.or %arg2, %arg3 : !llvm<"<4 x i64>">
+  %10 = or %arg2, %arg3 : vector<4xi64>
+// CHECK-NEXT:  %10 = llvm.xor %arg2, %arg3 : !llvm<"<4 x i64>">
+  %11 = xor %arg2, %arg3 : vector<4xi64>
+// CHECK-NEXT:  %11 = llvm.shl %arg2, %arg2 : !llvm<"<4 x i64>">
+  %12 = shift_left %arg2, %arg2 : vector<4xi64>
+// CHECK-NEXT:  %12 = llvm.ashr %arg2, %arg2 : !llvm<"<4 x i64>">
+  %13 = shift_right_signed %arg2, %arg2 : vector<4xi64>
+// CHECK-NEXT:  %13 = llvm.lshr %arg2, %arg2 : !llvm<"<4 x i64>">
+  %14 = shift_right_unsigned %arg2, %arg2 : vector<4xi64>
   return %1 : vector<4xf32>
 }
 
@@ -402,13 +407,13 @@ func @ops(f32, f32, i32, i32) -> (f32, i32) {
 // CHECK-NEXT:  %2 = llvm.icmp "slt" %arg2, %1 : !llvm.i32
   %2 = cmpi "slt", %arg2, %1 : i32
 // CHECK-NEXT:  %3 = llvm.sdiv %arg2, %arg3 : !llvm.i32
-  %4 = divis %arg2, %arg3 : i32
+  %4 = divi_signed %arg2, %arg3 : i32
 // CHECK-NEXT:  %4 = llvm.udiv %arg2, %arg3 : !llvm.i32
-  %5 = diviu %arg2, %arg3 : i32
+  %5 = divi_unsigned %arg2, %arg3 : i32
 // CHECK-NEXT:  %5 = llvm.srem %arg2, %arg3 : !llvm.i32
-  %6 = remis %arg2, %arg3 : i32
+  %6 = remi_signed %arg2, %arg3 : i32
 // CHECK-NEXT:  %6 = llvm.urem %arg2, %arg3 : !llvm.i32
-  %7 = remiu %arg2, %arg3 : i32
+  %7 = remi_unsigned %arg2, %arg3 : i32
 // CHECK-NEXT:  %7 = llvm.select %2, %arg2, %arg3 : !llvm.i1, !llvm.i32
   %8 = select %2, %arg2, %arg3 : i32
 // CHECK-NEXT:  %8 = llvm.fdiv %arg0, %arg1 : !llvm.float
@@ -423,6 +428,18 @@ func @ops(f32, f32, i32, i32) -> (f32, i32) {
   %13 = xor %arg2, %arg3 : i32
 // CHECK-NEXT: %13 = "llvm.intr.exp"(%arg0) : (!llvm.float) -> !llvm.float
   %14 = std.exp %arg0 : f32
+// CHECK-NEXT: %14 = llvm.call @tanhf(%arg0) : (!llvm.float) -> !llvm.float
+  %15 = std.tanh %arg0 : f32
+// CHECK-NEXT: %15 = llvm.mlir.constant(7.900000e-01 : f64) : !llvm.double
+  %16 = constant 7.9e-01 : f64
+// CHECK-NEXT: %16 = llvm.call @tanh(%15) : (!llvm.double) -> !llvm.double
+  %17 = std.tanh %16 : f64
+// CHECK-NEXT: %17 = llvm.shl %arg2, %arg3 : !llvm.i32
+  %18 = shift_left %arg2, %arg3 : i32
+// CHECK-NEXT: %18 = llvm.ashr %arg2, %arg3 : !llvm.i32
+  %19 = shift_right_signed %arg2, %arg3 : i32
+// CHECK-NEXT: %19 = llvm.lshr %arg2, %arg3 : !llvm.i32
+  %20 = shift_right_unsigned %arg2, %arg3 : i32
 
   return %0, %4 : f32, i32
 }
@@ -492,23 +509,21 @@ func @integer_extension_and_truncation() {
 }
 
 // CHECK-LABEL: @dfs_block_order
-func @dfs_block_order() -> (i32) {
-// CHECK-NEXT:  %0 = llvm.mlir.constant(42 : i32) : !llvm.i32
+func @dfs_block_order(%arg0: i32) -> (i32) {
+// CHECK-NEXT:  %[[CST:.*]] = llvm.mlir.constant(42 : i32) : !llvm.i32
   %0 = constant 42 : i32
 // CHECK-NEXT:  llvm.br ^bb2
   br ^bb2
 
 // CHECK-NEXT: ^bb1:
-// CHECK-NEXT:  %1 = llvm.add %0, %2 : !llvm.i32
-// CHECK-NEXT:  llvm.return %1 : !llvm.i32
+// CHECK-NEXT:  %[[ADD:.*]] = llvm.add %arg0, %[[CST]] : !llvm.i32
+// CHECK-NEXT:  llvm.return %[[ADD]] : !llvm.i32
 ^bb1:
-  %2 = addi %0, %1 : i32
+  %2 = addi %arg0, %0 : i32
   return %2 : i32
 
 // CHECK-NEXT: ^bb2:
 ^bb2:
-// CHECK-NEXT:  %2 = llvm.mlir.constant(55 : i32) : !llvm.i32
-  %1 = constant 55 : i32
 // CHECK-NEXT:  llvm.br ^bb1
   br ^bb1
 }
@@ -787,4 +802,20 @@ func @subview_const_stride(%0 : memref<64x4xf32, (d0, d1) -> (d0 * 4 + d1)>, %ar
   %1 = subview %0[%arg0, %arg1][%arg0, %arg1][] :
     memref<64x4xf32, (d0, d1) -> (d0 * 4 + d1)> to memref<?x?xf32, (d0, d1)[s0] -> (d0 * 4 + d1 * 2 + s0)>
   return
+}
+
+// -----
+
+module {
+  func @check_tanh_func_added_only_once_to_symbol_table(%f: f32, %lf: f64) -> () {
+    %f0 = std.tanh %f : f32
+    %f1 = std.tanh %f0 : f32
+    %lf0 = std.tanh %lf : f64
+    %lf1 = std.tanh %lf0 : f64
+    return
+  }
+// CHECK: module {
+// CHECK: llvm.func @tanh(!llvm.double) -> !llvm.double
+// CHECK: llvm.func @tanhf(!llvm.float) -> !llvm.float
+// CHECK-LABEL: func @check_tanh_func_added_only_once_to_symbol_table
 }

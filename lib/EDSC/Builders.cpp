@@ -1,19 +1,10 @@
 //===- Builders.cpp - MLIR Declarative Builder Classes --------------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 
 #include "mlir/EDSC/Builders.h"
 #include "mlir/Dialect/StandardOps/Ops.h"
@@ -90,7 +81,7 @@ ValueHandle &mlir::edsc::ValueHandle::operator=(const ValueHandle &other) {
 
 ValueHandle
 mlir::edsc::ValueHandle::createComposedAffineApply(AffineMap map,
-                                                   ArrayRef<Value *> operands) {
+                                                   ArrayRef<Value> operands) {
   Operation *op =
       makeComposedAffineApply(ScopedContext::getBuilder(),
                               ScopedContext::getLocation(), map, operands)
@@ -118,7 +109,7 @@ OperationHandle OperationHandle::create(StringRef name,
                                         ArrayRef<Type> resultTypes,
                                         ArrayRef<NamedAttribute> attributes) {
   OperationState state(ScopedContext::getLocation(), name);
-  SmallVector<Value *, 4> ops(operands.begin(), operands.end());
+  SmallVector<Value, 4> ops(operands.begin(), operands.end());
   state.addOperands(ops);
   state.addTypes(resultTypes);
   for (const auto &attr : attributes) {
@@ -142,21 +133,21 @@ BlockHandle mlir::edsc::BlockHandle::create(ArrayRef<Type> argTypes) {
   return res;
 }
 
-static llvm::Optional<ValueHandle> emitStaticFor(ArrayRef<ValueHandle> lbs,
-                                                 ArrayRef<ValueHandle> ubs,
-                                                 int64_t step) {
+static Optional<ValueHandle> emitStaticFor(ArrayRef<ValueHandle> lbs,
+                                           ArrayRef<ValueHandle> ubs,
+                                           int64_t step) {
   if (lbs.size() != 1 || ubs.size() != 1)
-    return llvm::Optional<ValueHandle>();
+    return Optional<ValueHandle>();
 
   auto *lbDef = lbs.front().getValue()->getDefiningOp();
   auto *ubDef = ubs.front().getValue()->getDefiningOp();
   if (!lbDef || !ubDef)
-    return llvm::Optional<ValueHandle>();
+    return Optional<ValueHandle>();
 
   auto lbConst = dyn_cast<ConstantIndexOp>(lbDef);
   auto ubConst = dyn_cast<ConstantIndexOp>(ubDef);
   if (!lbConst || !ubConst)
-    return llvm::Optional<ValueHandle>();
+    return Optional<ValueHandle>();
 
   return ValueHandle::create<AffineForOp>(lbConst.getValue(),
                                           ubConst.getValue(), step);
@@ -169,8 +160,8 @@ mlir::edsc::LoopBuilder mlir::edsc::LoopBuilder::makeAffine(
   if (auto staticFor = emitStaticFor(lbHandles, ubHandles, step)) {
     *iv = staticFor.getValue();
   } else {
-    SmallVector<Value *, 4> lbs(lbHandles.begin(), lbHandles.end());
-    SmallVector<Value *, 4> ubs(ubHandles.begin(), ubHandles.end());
+    SmallVector<Value, 4> lbs(lbHandles.begin(), lbHandles.end());
+    SmallVector<Value, 4> ubs(ubHandles.begin(), ubHandles.end());
     *iv = ValueHandle::create<AffineForOp>(
         lbs, ScopedContext::getBuilder().getMultiDimIdentityMap(lbs.size()),
         ubs, ScopedContext::getBuilder().getMultiDimIdentityMap(ubs.size()),
@@ -194,7 +185,7 @@ mlir::edsc::LoopBuilder::makeLoop(ValueHandle *iv, ValueHandle lbHandle,
   return result;
 }
 
-void mlir::edsc::LoopBuilder::operator()(llvm::function_ref<void(void)> fun) {
+void mlir::edsc::LoopBuilder::operator()(function_ref<void(void)> fun) {
   // Call to `exit` must be explicit and asymmetric (cannot happen in the
   // destructor) because of ordering wrt comma operator.
   /// The particular use case concerns nested blocks:
@@ -236,7 +227,7 @@ mlir::edsc::AffineLoopNestBuilder::AffineLoopNestBuilder(
 }
 
 void mlir::edsc::AffineLoopNestBuilder::operator()(
-    llvm::function_ref<void(void)> fun) {
+    function_ref<void(void)> fun) {
   if (fun)
     fun();
   // Iterate on the calling operator() on all the loops in the nest.
@@ -281,7 +272,7 @@ mlir::edsc::BlockBuilder::BlockBuilder(BlockHandle *bh,
                                        ArrayRef<ValueHandle *> args) {
   assert(!*bh && "BlockHandle already captures a block, use "
                  "the explicit BockBuilder(bh, Append())({}) syntax instead.");
-  llvm::SmallVector<Type, 8> types;
+  SmallVector<Type, 8> types;
   for (auto *a : args) {
     assert(!a->hasValue() &&
            "Expected delayed ValueHandle that has not yet captured.");
@@ -296,7 +287,7 @@ mlir::edsc::BlockBuilder::BlockBuilder(BlockHandle *bh,
 
 /// Only serves as an ordering point between entering nested block and creating
 /// stmts.
-void mlir::edsc::BlockBuilder::operator()(llvm::function_ref<void(void)> fun) {
+void mlir::edsc::BlockBuilder::operator()(function_ref<void(void)> fun) {
   // Call to `exit` must be explicit and asymmetric (cannot happen in the
   // destructor) because of ordering wrt comma operator.
   if (fun)
@@ -309,11 +300,11 @@ static ValueHandle createBinaryHandle(ValueHandle lhs, ValueHandle rhs) {
   return ValueHandle::create<Op>(lhs.getValue(), rhs.getValue());
 }
 
-static std::pair<AffineExpr, Value *>
-categorizeValueByAffineType(MLIRContext *context, Value *val, unsigned &numDims,
+static std::pair<AffineExpr, Value>
+categorizeValueByAffineType(MLIRContext *context, Value val, unsigned &numDims,
                             unsigned &numSymbols) {
   AffineExpr d;
-  Value *resultVal = nullptr;
+  Value resultVal = nullptr;
   if (auto constant = dyn_cast_or_null<ConstantIndexOp>(val->getDefiningOp())) {
     d = getAffineConstantExpr(constant.getValue(), context);
   } else if (isValidSymbol(val) && !isValidDim(val)) {
@@ -328,16 +319,16 @@ categorizeValueByAffineType(MLIRContext *context, Value *val, unsigned &numDims,
 
 static ValueHandle createBinaryIndexHandle(
     ValueHandle lhs, ValueHandle rhs,
-    llvm::function_ref<AffineExpr(AffineExpr, AffineExpr)> affCombiner) {
+    function_ref<AffineExpr(AffineExpr, AffineExpr)> affCombiner) {
   MLIRContext *context = ScopedContext::getContext();
   unsigned numDims = 0, numSymbols = 0;
   AffineExpr d0, d1;
-  Value *v0, *v1;
+  Value v0, v1;
   std::tie(d0, v0) =
       categorizeValueByAffineType(context, lhs.getValue(), numDims, numSymbols);
   std::tie(d1, v1) =
       categorizeValueByAffineType(context, rhs.getValue(), numDims, numSymbols);
-  SmallVector<Value *, 2> operands;
+  SmallVector<Value, 2> operands;
   if (v0) {
     operands.push_back(v0);
   }
@@ -352,7 +343,7 @@ static ValueHandle createBinaryIndexHandle(
 template <typename IOp, typename FOp>
 static ValueHandle createBinaryHandle(
     ValueHandle lhs, ValueHandle rhs,
-    llvm::function_ref<AffineExpr(AffineExpr, AffineExpr)> affCombiner) {
+    function_ref<AffineExpr(AffineExpr, AffineExpr)> affCombiner) {
   auto thisType = lhs.getValue()->getType();
   auto thatType = rhs.getValue()->getType();
   assert(thisType == thatType && "cannot mix types in operators");
@@ -390,14 +381,14 @@ ValueHandle mlir::edsc::op::operator*(ValueHandle lhs, ValueHandle rhs) {
 }
 
 ValueHandle mlir::edsc::op::operator/(ValueHandle lhs, ValueHandle rhs) {
-  return createBinaryHandle<DivISOp, DivFOp>(
+  return createBinaryHandle<SignedDivIOp, DivFOp>(
       lhs, rhs, [](AffineExpr d0, AffineExpr d1) -> AffineExpr {
         llvm_unreachable("only exprs of non-index type support operator/");
       });
 }
 
 ValueHandle mlir::edsc::op::operator%(ValueHandle lhs, ValueHandle rhs) {
-  return createBinaryHandle<RemISOp, RemFOp>(
+  return createBinaryHandle<SignedRemIOp, RemFOp>(
       lhs, rhs, [](AffineExpr d0, AffineExpr d1) { return d0 % d1; });
 }
 

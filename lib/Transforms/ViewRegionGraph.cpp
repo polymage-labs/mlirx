@@ -1,19 +1,10 @@
 //===- ViewRegionGraph.cpp - View/write graphviz graphs -------------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 
 #include "mlir/Transforms/ViewRegionGraph.h"
 #include "mlir/IR/RegionGraphTraits.h"
@@ -53,41 +44,40 @@ std::string DOTGraphTraits<Region *>::getNodeLabel(Block *Block, Region *) {
 
 } // end namespace llvm
 
-void mlir::viewGraph(Region &region, const llvm::Twine &name, bool shortNames,
-                     const llvm::Twine &title,
-                     llvm::GraphProgram::Name program) {
+void mlir::viewGraph(Region &region, const Twine &name, bool shortNames,
+                     const Twine &title, llvm::GraphProgram::Name program) {
   llvm::ViewGraph(&region, name, shortNames, title, program);
 }
 
-llvm::raw_ostream &mlir::writeGraph(llvm::raw_ostream &os, Region &region,
-                                    bool shortNames, const llvm::Twine &title) {
+raw_ostream &mlir::writeGraph(raw_ostream &os, Region &region, bool shortNames,
+                              const Twine &title) {
   return llvm::WriteGraph(os, &region, shortNames, title);
 }
 
-void mlir::Region::viewGraph(const llvm::Twine &regionName) {
+void mlir::Region::viewGraph(const Twine &regionName) {
   ::mlir::viewGraph(*this, regionName);
 }
 void mlir::Region::viewGraph() { viewGraph("region"); }
 
 namespace {
 struct PrintCFGPass : public FunctionPass<PrintCFGPass> {
-  PrintCFGPass(llvm::raw_ostream &os = llvm::errs(), bool shortNames = false,
-               const llvm::Twine &title = "")
+  PrintCFGPass(raw_ostream &os = llvm::errs(), bool shortNames = false,
+               const Twine &title = "")
       : os(os), shortNames(shortNames), title(title.str()) {}
   void runOnFunction() override {
     mlir::writeGraph(os, getFunction().getBody(), shortNames, title);
   }
 
 private:
-  llvm::raw_ostream &os;
+  raw_ostream &os;
   bool shortNames;
   std::string title;
 };
 } // namespace
 
 std::unique_ptr<mlir::OpPassBase<mlir::FuncOp>>
-mlir::createPrintCFGGraphPass(llvm::raw_ostream &os, bool shortNames,
-                              const llvm::Twine &title) {
+mlir::createPrintCFGGraphPass(raw_ostream &os, bool shortNames,
+                              const Twine &title) {
   return std::make_unique<PrintCFGPass>(os, shortNames, title);
 }
 

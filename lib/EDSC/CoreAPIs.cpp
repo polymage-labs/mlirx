@@ -1,19 +1,10 @@
 //===- Types.cpp - Implementations of MLIR Core C APIs --------------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 
 #include "mlir-c/Core.h"
 
@@ -34,7 +25,7 @@ using namespace mlir;
 mlir_type_t makeMemRefType(mlir_context_t context, mlir_type_t elemType,
                            int64_list_t sizes) {
   auto t = mlir::MemRefType::get(
-      llvm::ArrayRef<int64_t>(sizes.values, sizes.n),
+      ArrayRef<int64_t>(sizes.values, sizes.n),
       mlir::Type::getFromOpaquePointer(elemType),
       {mlir::AffineMap::getMultiDimIdentityMap(
           sizes.n, reinterpret_cast<mlir::MLIRContext *>(context))},
@@ -44,7 +35,7 @@ mlir_type_t makeMemRefType(mlir_context_t context, mlir_type_t elemType,
 
 mlir_type_t makeFunctionType(mlir_context_t context, mlir_type_list_t inputs,
                              mlir_type_list_t outputs) {
-  llvm::SmallVector<mlir::Type, 8> ins(inputs.n), outs(outputs.n);
+  SmallVector<mlir::Type, 8> ins(inputs.n), outs(outputs.n);
   for (unsigned i = 0; i < inputs.n; ++i) {
     ins[i] = mlir::Type::getFromOpaquePointer(inputs.types[i]);
   }
@@ -71,6 +62,18 @@ mlir_attr_t makeIntegerAttr(mlir_type_t type, int64_t value) {
 mlir_attr_t makeBoolAttr(mlir_context_t context, bool value) {
   auto *ctx = reinterpret_cast<mlir::MLIRContext *>(context);
   auto attr = BoolAttr::get(value, ctx);
+  return mlir_attr_t{attr.getAsOpaquePointer()};
+}
+
+mlir_attr_t makeFloatAttr(mlir_context_t context, float value) {
+  auto *ctx = reinterpret_cast<mlir::MLIRContext *>(context);
+  auto attr = FloatAttr::get(FloatType::getF32(ctx), APFloat(value));
+  return mlir_attr_t{attr.getAsOpaquePointer()};
+}
+
+mlir_attr_t makeStringAttr(mlir_context_t context, const char *value) {
+  auto *ctx = reinterpret_cast<mlir::MLIRContext *>(context);
+  auto attr = StringAttr::get(value, ctx);
   return mlir_attr_t{attr.getAsOpaquePointer()};
 }
 

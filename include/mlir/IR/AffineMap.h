@@ -1,19 +1,10 @@
 //===- AffineMap.h - MLIR Affine Map Class ----------------------*- C++ -*-===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // Affine maps are mathematical functions which map a list of dimension
 // identifiers and symbols, to multidimensional affine expressions.
@@ -180,27 +171,27 @@ AffineMap simplifyAffineMap(AffineMap map);
 ///
 /// Example 1:
 ///
-/// ```{.mlir}
+/// ```mlir
 ///    (d0, d1, d2) -> (d1, d1, d0, d2, d1, d2, d1, d0)
 ///                      0       2   3
 /// ```
 ///
 /// returns:
 ///
-/// ```{.mlir}
+/// ```mlir
 ///    (d0, d1, d2, d3, d4, d5, d6, d7) -> (d2, d0, d3)
 /// ```
 ///
 /// Example 2:
 ///
-/// ```{.mlir}
+/// ```mlir
 ///    (d0, d1, d2) -> (d1, d0 + d1, d0, d2, d1, d2, d1, d0)
 ///                      0            2   3
 /// ```
 ///
 /// returns:
 ///
-/// ```{.mlir}
+/// ```mlir
 ///    (d0, d1, d2, d3, d4, d5, d6, d7) -> (d2, d0, d3)
 /// ```
 AffineMap inversePermutation(AffineMap map);
@@ -214,7 +205,7 @@ AffineMap inversePermutation(AffineMap map);
 /// Example:
 /// When applied to the following list of 3 affine maps,
 ///
-/// ```{.mlir}
+/// ```mlir
 ///    {
 ///      (i, j, k) -> (i, k),
 ///      (i, j, k) -> (k, j),
@@ -224,10 +215,10 @@ AffineMap inversePermutation(AffineMap map);
 ///
 /// Returns the map:
 ///
-/// ```{.mlir}
+/// ```mlir
 ///     (i, j, k) -> (i, k, k, j, i, j)
 /// ```
-AffineMap concatAffineMaps(llvm::ArrayRef<AffineMap> maps);
+AffineMap concatAffineMaps(ArrayRef<AffineMap> maps);
 
 inline raw_ostream &operator<<(raw_ostream &os, AffineMap map) {
   map.print(os);

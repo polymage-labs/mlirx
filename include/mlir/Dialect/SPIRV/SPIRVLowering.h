@@ -1,19 +1,10 @@
 //===- SPIRVLowering.h - SPIR-V lowering utilities  -------------*- C++ -*-===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // Defines utilities to use while targeting SPIR-V dialect.
 //
@@ -30,7 +21,7 @@
 
 namespace mlir {
 
-/// Type conversion from stdandard types to SPIR-V types for shader interface.
+/// Type conversion from standard types to SPIR-V types for shader interface.
 ///
 /// For composite types, this converter additionally performs type wrapping to
 /// satisfy shader interface requirements: shader interface types must be
@@ -39,10 +30,10 @@ class SPIRVTypeConverter final : public TypeConverter {
 public:
   using TypeConverter::TypeConverter;
 
-  /// Converts the given standard `type` to SPIR-V correspondance.
+  /// Converts the given standard `type` to SPIR-V correspondence.
   Type convertType(Type type) override;
 
-  /// Gets the SPIR-V correspondance for the standard index type.
+  /// Gets the SPIR-V correspondence for the standard index type.
   static Type getIndexType(MLIRContext *context);
 };
 
@@ -64,14 +55,8 @@ protected:
 namespace spirv {
 /// Returns a value that represents a builtin variable value within the SPIR-V
 /// module.
-Value *getBuiltinVariableValue(Operation *op, spirv::BuiltIn builtin,
-                               OpBuilder &builder);
-
-/// Legalizes a function as an entry function.
-FuncOp lowerAsEntryFunction(FuncOp funcOp, SPIRVTypeConverter &typeConverter,
-                            ConversionPatternRewriter &rewriter,
-                            ArrayRef<spirv::InterfaceVarABIAttr> argABIInfo,
-                            spirv::EntryPointABIAttr entryPointInfo);
+Value getBuiltinVariableValue(Operation *op, spirv::BuiltIn builtin,
+                              OpBuilder &builder);
 
 /// Attribute name for specifying argument ABI information.
 StringRef getInterfaceVarABIAttrName();
@@ -88,6 +73,12 @@ StringRef getEntryPointABIAttrName();
 /// Get the EntryPointABIAttr given its fields.
 EntryPointABIAttr getEntryPointABIAttr(ArrayRef<int32_t> localSize,
                                        MLIRContext *context);
+
+/// Sets the InterfaceVarABIAttr and EntryPointABIAttr for a function and its
+/// arguments
+LogicalResult setABIAttrs(FuncOp funcOp,
+                          spirv::EntryPointABIAttr entryPointInfo,
+                          ArrayRef<spirv::InterfaceVarABIAttr> argABIInfo);
 
 } // namespace spirv
 } // namespace mlir

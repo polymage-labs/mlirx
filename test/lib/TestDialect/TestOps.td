@@ -1,19 +1,10 @@
 //===-- TestOps.td - Test dialect operation definitions ----*- tablegen -*-===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 
 #ifndef TEST_OPS
 #define TEST_OPS
@@ -403,8 +394,7 @@ def I32ElementsAttrOp : TEST_Op<"i32ElementsAttr"> {
 }
 
 def OpWithInferTypeInterfaceOp : TEST_Op<"op_with_infer_type_if", [
-    DeclareOpInterfaceMethods<InferTypeOpInterface>,
-    InferTypeOpInterfaceDefault]> {
+    DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
   let arguments = (ins AnyTensor, AnyTensor);
   let results = (outs AnyTensor);
 }
@@ -645,7 +635,7 @@ def OpSymbolBindingB : TEST_Op<"symbol_binding_b", []> {
 
   let builders = [
     OpBuilder<
-      "Builder *builder, OperationState &state, Value *operand",
+      "Builder *builder, OperationState &state, Value operand",
       [{
         state.types.assign({builder->getIntegerType(32)});
         state.addOperands({operand});
@@ -916,10 +906,10 @@ def MixedVResultOp3 : TEST_Op<"mixed_variadic_out3",
       "Builder *builder, OperationState &state, IntegerAttr count",
       [{
         auto i32Type = builder->getIntegerType(32);
-        state.addTypes(i32Type); // $ouput1
+        state.addTypes(i32Type); // $output1
         SmallVector<Type, 4> types(count.getInt(), i32Type);
-        state.addTypes(types); // $ouput2
-        state.addTypes(types); // $ouput3
+        state.addTypes(types); // $output2
+        state.addTypes(types); // $output3
         state.addAttribute("count", count);
       }]>
   ];

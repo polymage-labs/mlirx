@@ -1,19 +1,10 @@
 //===- Visitors.h - Utilities for visiting operations -----------*- C++ -*-===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This file defines utilities for walking and visiting operations.
 //
@@ -94,7 +85,7 @@ template <
     typename RetT = decltype(std::declval<FuncTy>()(std::declval<ArgT>()))>
 typename std::enable_if<std::is_same<ArgT, Operation *>::value, RetT>::type
 walkOperations(Operation *op, FuncTy &&callback) {
-  return detail::walkOperations(op, llvm::function_ref<RetT(ArgT)>(callback));
+  return detail::walkOperations(op, function_ref<RetT(ArgT)>(callback));
 }
 
 /// Walk all of the operations of type 'ArgT' nested under and including the

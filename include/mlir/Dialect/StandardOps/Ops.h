@@ -1,19 +1,10 @@
 //===- Ops.h - Standard MLIR Operations -------------------------*- C++ -*-===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This file defines convenience types for working with standard operations
 // in the MLIR operation set.
@@ -42,6 +33,11 @@ class StandardOpsDialect : public Dialect {
 public:
   StandardOpsDialect(MLIRContext *context);
   static StringRef getDialectNamespace() { return "std"; }
+
+  /// Materialize a single constant operation from a given attribute value with
+  /// the desired resultant type.
+  Operation *materializeConstant(OpBuilder &builder, Attribute value, Type type,
+                                 Location loc) override;
 };
 
 /// The predicate indicates the type of the comparison to perform:
@@ -177,27 +173,26 @@ class DmaStartOp
 public:
   using Op::Op;
 
-  static void build(Builder *builder, OperationState &result, Value *srcMemRef,
-                    ValueRange srcIndices, Value *destMemRef,
-                    ValueRange destIndices, Value *numElements,
-                    Value *tagMemRef, ValueRange tagIndices,
-                    Value *stride = nullptr,
-                    Value *elementsPerStride = nullptr);
+  static void build(Builder *builder, OperationState &result, Value srcMemRef,
+                    ValueRange srcIndices, Value destMemRef,
+                    ValueRange destIndices, Value numElements, Value tagMemRef,
+                    ValueRange tagIndices, Value stride = nullptr,
+                    Value elementsPerStride = nullptr);
 
   // Returns the source MemRefType for this DMA operation.
-  Value *getSrcMemRef() { return getOperand(0); }
+  Value getSrcMemRef() { return getOperand(0); }
   // Returns the rank (number of indices) of the source MemRefType.
   unsigned getSrcMemRefRank() {
     return getSrcMemRef()->getType().cast<MemRefType>().getRank();
   }
-  // Returns the source memerf indices for this DMA operation.
+  // Returns the source memref indices for this DMA operation.
   operand_range getSrcIndices() {
     return {getOperation()->operand_begin() + 1,
             getOperation()->operand_begin() + 1 + getSrcMemRefRank()};
   }
 
   // Returns the destination MemRefType for this DMA operations.
-  Value *getDstMemRef() { return getOperand(1 + getSrcMemRefRank()); }
+  Value getDstMemRef() { return getOperand(1 + getSrcMemRefRank()); }
   // Returns the rank (number of indices) of the destination MemRefType.
   unsigned getDstMemRefRank() {
     return getDstMemRef()->getType().cast<MemRefType>().getRank();
@@ -217,12 +212,12 @@ public:
   }
 
   // Returns the number of elements being transferred by this DMA operation.
-  Value *getNumElements() {
+  Value getNumElements() {
     return getOperand(1 + getSrcMemRefRank() + 1 + getDstMemRefRank());
   }
 
   // Returns the Tag MemRef for this DMA operation.
-  Value *getTagMemRef() {
+  Value getTagMemRef() {
     return getOperand(1 + getSrcMemRefRank() + 1 + getDstMemRefRank() + 1);
   }
   // Returns the rank (number of indices) of the tag MemRefType.
@@ -263,21 +258,21 @@ public:
   void print(OpAsmPrinter &p);
   LogicalResult verify();
 
-  static void getCanonicalizationPatterns(OwningRewritePatternList &results,
-                                          MLIRContext *context);
+  LogicalResult fold(ArrayRef<Attribute> cstOperands,
+                     SmallVectorImpl<OpFoldResult> &results);
 
   bool isStrided() {
     return getNumOperands() != 1 + getSrcMemRefRank() + 1 + getDstMemRefRank() +
                                    1 + 1 + getTagMemRefRank();
   }
 
-  Value *getStride() {
+  Value getStride() {
     if (!isStrided())
       return nullptr;
     return getOperand(getNumOperands() - 1 - 1);
   }
 
-  Value *getNumElementsPerStride() {
+  Value getNumElementsPerStride() {
     if (!isStrided())
       return nullptr;
     return getOperand(getNumOperands() - 1);
@@ -302,13 +297,13 @@ class DmaWaitOp
 public:
   using Op::Op;
 
-  static void build(Builder *builder, OperationState &result, Value *tagMemRef,
-                    ValueRange tagIndices, Value *numElements);
+  static void build(Builder *builder, OperationState &result, Value tagMemRef,
+                    ValueRange tagIndices, Value numElements);
 
   static StringRef getOperationName() { return "std.dma_wait"; }
 
   // Returns the Tag MemRef associated with the DMA operation being waited on.
-  Value *getTagMemRef() { return getOperand(0); }
+  Value getTagMemRef() { return getOperand(0); }
 
   // Returns the tag memref index for this DMA operation.
   operand_range getTagIndices() {
@@ -322,12 +317,12 @@ public:
   }
 
   // Returns the number of elements transferred in the associated DMA operation.
-  Value *getNumElements() { return getOperand(1 + getTagMemRefRank()); }
+  Value getNumElements() { return getOperand(1 + getTagMemRefRank()); }
 
   static ParseResult parse(OpAsmParser &parser, OperationState &result);
   void print(OpAsmPrinter &p);
-  static void getCanonicalizationPatterns(OwningRewritePatternList &results,
-                                          MLIRContext *context);
+  LogicalResult fold(ArrayRef<Attribute> cstOperands,
+                     SmallVectorImpl<OpFoldResult> &results);
 };
 
 /// Prints dimension and symbol list.
@@ -337,10 +332,10 @@ void printDimAndSymbolList(Operation::operand_iterator begin,
 
 /// Parses dimension and symbol list and returns true if parsing failed.
 ParseResult parseDimAndSymbolList(OpAsmParser &parser,
-                                  SmallVectorImpl<Value *> &operands,
+                                  SmallVectorImpl<Value> &operands,
                                   unsigned &numDims);
 
-llvm::raw_ostream &operator<<(llvm::raw_ostream &os, SubViewOp::Range &range);
+raw_ostream &operator<<(raw_ostream &os, SubViewOp::Range &range);
 
 } // end namespace mlir
 

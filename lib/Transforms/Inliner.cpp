@@ -1,19 +1,10 @@
 //===- Inliner.cpp - Pass to inline function calls ------------------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This file implements a basic inlining algorithm that operates bottom up over
 // the Strongly Connect Components(SCCs) of the CallGraph. This enables a more
@@ -29,7 +20,10 @@
 #include "mlir/Transforms/InliningUtils.h"
 #include "mlir/Transforms/Passes.h"
 #include "llvm/ADT/SCCIterator.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/Parallel.h"
+
+#define DEBUG_TYPE "inlining"
 
 using namespace mlir;
 
@@ -79,11 +73,11 @@ struct ResolvedCall {
 /// Collect all of the callable operations within the given range of blocks. If
 /// `traverseNestedCGNodes` is true, this will also collect call operations
 /// inside of nested callgraph nodes.
-static void collectCallOps(llvm::iterator_range<Region::iterator> blocks,
+static void collectCallOps(iterator_range<Region::iterator> blocks,
                            CallGraph &cg, SmallVectorImpl<ResolvedCall> &calls,
                            bool traverseNestedCGNodes) {
   SmallVector<Block *, 8> worklist;
-  auto addToWorklist = [&](llvm::iterator_range<Region::iterator> blocks) {
+  auto addToWorklist = [&](iterator_range<Region::iterator> blocks) {
     for (Block &block : blocks)
       worklist.push_back(&block);
   };
@@ -120,8 +114,8 @@ struct Inliner : public InlinerInterface {
 
   /// Process a set of blocks that have been inlined. This callback is invoked
   /// *before* inlined terminator operations have been processed.
-  void processInlinedBlocks(
-      llvm::iterator_range<Region::iterator> inlinedBlocks) final {
+  void
+  processInlinedBlocks(iterator_range<Region::iterator> inlinedBlocks) final {
     collectCallOps(inlinedBlocks, cg, calls, /*traverseNestedCGNodes=*/true);
   }
 
@@ -173,6 +167,10 @@ static LogicalResult inlineCallsInSCC(Inliner &inliner,
   bool inlinedAnyCalls = false;
   for (unsigned i = 0; i != calls.size(); ++i) {
     ResolvedCall &it = calls[i];
+    LLVM_DEBUG({
+      llvm::dbgs() << "* Considering inlining call: ";
+      it.call.dump();
+    });
     if (!shouldInline(it))
       continue;
 

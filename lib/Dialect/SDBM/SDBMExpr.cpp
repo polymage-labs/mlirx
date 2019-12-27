@@ -1,19 +1,10 @@
 //===- SDBMExpr.cpp - MLIR SDBM Expression implementation -----------------===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // A striped difference-bound matrix (SDBM) expression is a constant expression,
 // an identifier, a binary expression with constant RHS and +, stripe operators
@@ -89,7 +80,7 @@ public:
       : subExprs(exprs.begin(), exprs.end()) {}
   AffineExprMatcherStorage(AffineExprMatcher &a, AffineExprMatcher &b)
       : subExprs({a, b}) {}
-  llvm::SmallVector<AffineExprMatcher, 0> subExprs;
+  SmallVector<AffineExprMatcher, 0> subExprs;
   AffineExpr matched;
 };
 } // namespace
@@ -311,7 +302,7 @@ AffineExpr SDBMExpr::getAsAffineExpr() const {
 // LHS if the constant becomes zero.  Otherwise, construct a sum expression.
 template <typename Result>
 Result addConstantAndSink(SDBMDirectExpr expr, int64_t constant, bool negated,
-                          llvm::function_ref<Result(SDBMDirectExpr)> builder) {
+                          function_ref<Result(SDBMDirectExpr)> builder) {
   SDBMDialect *dialect = expr.getDialect();
   if (auto sumExpr = expr.dyn_cast<SDBMSumExpr>()) {
     if (negated)
@@ -671,10 +662,7 @@ SDBMDirectExpr SDBMNegExpr::getVar() const {
   return static_cast<ImplType *>(impl)->expr;
 }
 
-namespace mlir {
-namespace ops_assertions {
-
-SDBMExpr operator+(SDBMExpr lhs, SDBMExpr rhs) {
+SDBMExpr mlir::ops_assertions::operator+(SDBMExpr lhs, SDBMExpr rhs) {
   if (auto folded = foldSumDiff(lhs, rhs))
     return folded;
   assert(!(lhs.isa<SDBMNegExpr>() && rhs.isa<SDBMNegExpr>()) &&
@@ -707,7 +695,7 @@ SDBMExpr operator+(SDBMExpr lhs, SDBMExpr rhs) {
   return addConstant(lhs.cast<SDBMVaryingExpr>(), rhsConstant.getValue());
 }
 
-SDBMExpr operator-(SDBMExpr lhs, SDBMExpr rhs) {
+SDBMExpr mlir::ops_assertions::operator-(SDBMExpr lhs, SDBMExpr rhs) {
   // Fold x - x == 0.
   if (lhs == rhs)
     return SDBMConstantExpr::get(lhs.getDialect(), 0);
@@ -734,7 +722,7 @@ SDBMExpr operator-(SDBMExpr lhs, SDBMExpr rhs) {
   return buildDiffExpr(lhs.cast<SDBMDirectExpr>(), (-rhs).cast<SDBMNegExpr>());
 }
 
-SDBMExpr stripe(SDBMExpr expr, SDBMExpr factor) {
+SDBMExpr mlir::ops_assertions::stripe(SDBMExpr expr, SDBMExpr factor) {
   auto constantFactor = factor.cast<SDBMConstantExpr>();
   assert(constantFactor.getValue() > 0 && "non-positive stripe");
 
@@ -744,6 +732,3 @@ SDBMExpr stripe(SDBMExpr expr, SDBMExpr factor) {
 
   return SDBMStripeExpr::get(expr.cast<SDBMDirectExpr>(), constantFactor);
 }
-
-} // namespace ops_assertions
-} // namespace mlir

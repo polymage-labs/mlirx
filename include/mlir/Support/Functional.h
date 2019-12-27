@@ -1,23 +1,15 @@
 //===- Functional.h - Helpers for functional-style Combinators --*- C++ -*-===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 
 #ifndef MLIR_SUPPORT_FUNCTIONAL_H_
 #define MLIR_SUPPORT_FUNCTIONAL_H_
 
+#include "mlir/Support/LLVM.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
@@ -34,10 +26,9 @@ namespace functional {
 /// Map with iterators.
 template <typename Fn, typename IterType>
 auto map(Fn fun, IterType begin, IterType end)
-    -> llvm::SmallVector<typename std::result_of<Fn(decltype(*begin))>::type,
-                         8> {
+    -> SmallVector<typename std::result_of<Fn(decltype(*begin))>::type, 8> {
   using R = typename std::result_of<Fn(decltype(*begin))>::type;
-  llvm::SmallVector<R, 8> res;
+  SmallVector<R, 8> res;
   // auto i works with both pointer types and value types with an operator*.
   // auto *i only works for pointer types.
   for (auto i = begin; i != end; ++i) {
@@ -58,13 +49,12 @@ auto map(Fn fun, ContainerType input)
 /// TODO(ntv): make variadic when needed.
 template <typename Fn, typename ContainerType1, typename ContainerType2>
 auto zipMap(Fn fun, ContainerType1 input1, ContainerType2 input2)
-    -> llvm::SmallVector<
-        typename std::result_of<Fn(decltype(*input1.begin()),
-                                   decltype(*input2.begin()))>::type,
-        8> {
+    -> SmallVector<typename std::result_of<Fn(decltype(*input1.begin()),
+                                              decltype(*input2.begin()))>::type,
+                   8> {
   using R = typename std::result_of<Fn(decltype(*input1.begin()),
                                        decltype(*input2.begin()))>::type;
-  llvm::SmallVector<R, 8> res;
+  SmallVector<R, 8> res;
   auto zipIter = llvm::zip(input1, input2);
   for (auto it : zipIter) {
     res.push_back(fun(std::get<0>(it), std::get<1>(it)));
@@ -104,7 +94,7 @@ void zipApply(Fn fun, ContainerType1 input1, ContainerType2 input2) {
 ///   Operation::operand_range types.
 template <typename T, typename ToType = T>
 inline std::function<ToType *(T *)> makePtrDynCaster() {
-  return [](T *val) { return llvm::dyn_cast<ToType>(val); };
+  return [](T *val) { return dyn_cast<ToType>(val); };
 }
 
 /// Simple ScopeGuard.

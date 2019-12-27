@@ -1,19 +1,10 @@
 //===-- OpBase.td - Base op definition file ----------------*- tablegen -*-===//
 //
-// Copyright 2019 The MLIR Authors.
+// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// =============================================================================
+//===----------------------------------------------------------------------===//
 //
 // This is the base operation definition file.
 //
@@ -1242,7 +1233,11 @@ class AllAttrConstraintsOf<list<AttrConstraint> constraints> : AttrConstraint<
 
 class IntMinValue<int n> : AttrConstraint<
     CPred<"$_self.cast<IntegerAttr>().getInt() >= " # n>,
-    "whose minimal value is " # n>;
+    "whose minimum value is " # n>;
+
+class IntMaxValue<int n> : AttrConstraint<
+    CPred<"$_self.cast<IntegerAttr>().getInt() <= " # n>,
+    "whose maximum value is " # n>;
 
 class ArrayMinCount<int n> : AttrConstraint<
     CPred<"$_self.cast<ArrayAttr>().size() >= " # n>,
@@ -1421,7 +1416,8 @@ class OpInterfaceTrait<string name> : NativeOpTrait<""> {
 // Note: non-static interface methods have an implicit 'op' parameter
 // corresponding to an instance of the derived operation.
 class InterfaceMethod<string desc, string retTy, string methodName,
-                      dag args = (ins), code methodBody = [{}]> {
+                      dag args = (ins), code methodBody = [{}],
+                      code defaultImplementation = [{}]> {
   // A human-readable description of what this method does.
   string description = desc;
 
@@ -1436,12 +1432,17 @@ class InterfaceMethod<string desc, string retTy, string methodName,
 
   // An optional body to the method.
   code body = methodBody;
+
+  // An optional default implementation of the method.
+  code defaultBody = defaultImplementation;
 }
 
 // This class represents a single static interface method.
 class StaticInterfaceMethod<string desc, string retTy, string methodName,
-                            dag args = (ins), code methodBody = [{}]>
-    : InterfaceMethod<desc, retTy, methodName, args, methodBody>;
+                            dag args = (ins), code methodBody = [{}],
+                            code defaultImplementation = [{}]>
+    : InterfaceMethod<desc, retTy, methodName, args, methodBody,
+                      defaultImplementation>;
 
 // OpInterface represents an interface regarding an op.
 class OpInterface<string name> : OpInterfaceTrait<name> {
@@ -1576,6 +1577,7 @@ class Op<Dialect dialect, string mnemonic, list<OpTrait> props = []> {
   bit hasFolder = 0;
 
   // Op traits.
+  // Note: The list of traits will be uniqued by ODS.
   list<OpTrait> traits = props;
 
   // Additional code that will be added to the public part of the generated

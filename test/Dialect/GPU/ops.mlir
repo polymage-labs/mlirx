@@ -61,8 +61,7 @@ module attributes {gpu.container_module} {
   }
 
   module @kernels attributes {gpu.kernel_module} {
-    func @kernel_1(%arg0 : f32, %arg1 : memref<?xf32, 1>)
-        attributes { gpu.kernel } {
+    gpu.func @kernel_1(%arg0 : f32, %arg1 : memref<?xf32, 1>) attributes {gpu.kernel} {
       %tIdX = "gpu.thread_id"() {dimension = "x"} : () -> (index)
       %tIdY = "gpu.thread_id"() {dimension = "y"} : () -> (index)
       %tIdZ = "gpu.thread_id"() {dimension = "z"} : () -> (index)
@@ -82,15 +81,21 @@ module attributes {gpu.container_module} {
       %one = constant 1.0 : f32
       %sum = "gpu.all_reduce"(%one) ({}) {op = "add"} : (f32) -> (f32)
 
+      %width = constant 7 : i32
+      %offset = constant 3 : i32
+      // CHECK: gpu.shuffle %{{.*}}, %{{.*}}, %{{.*}} xor : f32
+      %shfl, %pred = gpu.shuffle %arg0, %offset, %width xor : f32
+
       "gpu.barrier"() : () -> ()
 
       "some_op"(%bIdX, %tIdX) : (index, index) -> ()
       %42 = load %arg1[%bIdX] : memref<?xf32, 1>
-      return
+      gpu.return
     }
 
-    func @kernel_2(f32, memref<?xf32, 1>)
-        attributes { gpu.kernel }
+    gpu.func @kernel_2(%arg0: f32, %arg1: memref<?xf32, 1>) attributes {gpu.kernel} {
+      gpu.return
+    }
   }
 
   func @foo() {
