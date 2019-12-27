@@ -292,6 +292,11 @@ inline ::llvm::hash_code hash_value(Value arg) {
   return ::llvm::hash_value(arg.impl);
 }
 
+// Replaces all uses of `orig` with `replacement` except if the user is listed
+// in `exceptions`.
+void replaceAllUsesExcept(Value orig, Value replacement,
+                          const SmallPtrSetImpl<Operation *> &exceptions);
+
 } // namespace mlir
 
 namespace llvm {

@@ -401,6 +401,27 @@ func @memref_cast_mixed_to_mixed(%mixed : memref<42x?xf32>) {
   return
 }
 
+// CHECK-LABEL: func @memref_shape_cast(%arg0: !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }*">) -> !llvm<"{ <16 x float>*, <16 x float>*, i64, [1 x i64], [1 x i64] }">
+func @memref_shape_cast(%M : memref<42x16xf32>) -> memref<42xvector<16xf32>> {
+// CHECK-NEXT:   %0 = llvm.load %arg0 : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }*">
+// CHECK-NEXT:   %1 = llvm.mlir.undef : !llvm<"{ <16 x float>*, <16 x float>*, i64, [1 x i64], [1 x i64] }">
+// CHECK-NEXT:   %2 = llvm.extractvalue %0[0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+// CHECK-NEXT:   %3 = llvm.bitcast %2 : !llvm<"float*"> to !llvm<"<16 x float>*">
+// CHECK-NEXT:   %4 = llvm.insertvalue %3, %1[0 : index] : !llvm<"{ <16 x float>*, <16 x float>*, i64, [1 x i64], [1 x i64] }">
+// CHECK-NEXT:   %5 = llvm.extractvalue %0[1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+// CHECK-NEXT:   %6 = llvm.bitcast %5 : !llvm<"float*"> to !llvm<"<16 x float>*">
+// CHECK-NEXT:   %7 = llvm.insertvalue %6, %4[1 : index] : !llvm<"{ <16 x float>*, <16 x float>*, i64, [1 x i64], [1 x i64] }">
+// CHECK-NEXT:   %8 = llvm.mlir.constant(0 : index) : !llvm.i64
+// CHECK-NEXT:   %9 = llvm.insertvalue %8, %7[2 : index] : !llvm<"{ <16 x float>*, <16 x float>*, i64, [1 x i64], [1 x i64] }">
+// CHECK-NEXT:   %10 = llvm.mlir.constant(42 : index) : !llvm.i64
+// CHECK-NEXT:   %11 = llvm.mlir.constant(1 : index) : !llvm.i64
+// CHECK-NEXT:   %12 = llvm.insertvalue %10, %9[3, 0] : !llvm<"{ <16 x float>*, <16 x float>*, i64, [1 x i64], [1 x i64] }">
+// CHECK-NEXT:   %13 = llvm.insertvalue %11, %12[4, 0] : !llvm<"{ <16 x float>*, <16 x float>*, i64, [1 x i64], [1 x i64] }">
+// CHECK-NEXT:   llvm.return %13 : !llvm<"{ <16 x float>*, <16 x float>*, i64, [1 x i64], [1 x i64] }">
+  %MV = memref_shape_cast %M : memref<42x16xf32> to memref<42xvector<16xf32>>
+  return %MV : memref<42xvector<16xf32>>
+}
+
 // CHECK-LABEL: func @memref_cast_ranked_to_unranked
 func @memref_cast_ranked_to_unranked(%arg : memref<42x2x?xf32>) {
 // CHECK-NEXT: %[[ld:.*]] = llvm.load %{{.*}} : !llvm<"{ float*, float*, i64, [3 x i64], [3 x i64] }*">

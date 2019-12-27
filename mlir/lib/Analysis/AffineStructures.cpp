@@ -1364,17 +1364,29 @@ static bool detectAsMod(const FlatAffineConstraints &cst, unsigned pos,
   return false;
 }
 
-// Gather lower and upper bounds for the pos^th identifier.
+// Gather lower and upper bounds for the pos^th identifier, and optionally the
+// equalities for it. The bounds are to be independent of
+// [offset, offset + num) identifiers.
 static void getLowerAndUpperBoundIndices(const FlatAffineConstraints &cst,
                                          unsigned pos,
                                          SmallVectorImpl<unsigned> *lbIndices,
-                                         SmallVectorImpl<unsigned> *ubIndices) {
+                                         SmallVectorImpl<unsigned> *ubIndices,
+                                         SmallVectorImpl<unsigned> *eqIndices = nullptr,
+                                         unsigned offset = 0,
+                                         unsigned num = 0) {
   assert(pos < cst.getNumIds() && "invalid position");
 
   // Gather all lower bounds and upper bounds of the variable. Since the
   // canonical form c_1*x_1 + c_2*x_2 + ... + c_0 >= 0, a constraint is a lower
   // bound for x_i if c_i >= 1, and an upper bound if c_i <= -1.
   for (unsigned r = 0, e = cst.getNumInequalities(); r < e; r++) {
+    // The bounds are to be independent of [offset, offset + num) columns.
+    unsigned c, f;
+    for (c = offset, f = offset + num; c < f; ++c) {
+      if (c == pos) continue;
+      if (cst.atIneq(r, c) != 0) break;
+    }
+    if (c < f) continue;
     if (cst.atIneq(r, pos) >= 1) {
       // Lower bound.
       lbIndices->push_back(r);
@@ -1382,6 +1394,18 @@ static void getLowerAndUpperBoundIndices(const FlatAffineConstraints &cst,
       // Upper bound.
       ubIndices->push_back(r);
     }
+  }
+
+  if (!eqIndices) return;
+  for (unsigned r = 0, e = cst.getNumEqualities(); r < e; r++) {
+    if (cst.atEq(r, pos) == 0) continue;
+    unsigned c, f;
+    for (c = offset, f = offset + num; c < f; ++c) {
+      if (c == pos) continue;
+      if (cst.atEq(r, c) != 0) break;
+    }
+    if (c < f) continue;
+    eqIndices->push_back(r);
   }
 }
 
@@ -1522,8 +1546,9 @@ std::pair<AffineMap, AffineMap> FlatAffineConstraints::getLowerAndUpperBound(
   assert(getNumLocalIds() == localExprs.size() &&
          "incorrect local exprs count");
 
-  SmallVector<unsigned, 4> lbIndices, ubIndices;
-  getLowerAndUpperBoundIndices(*this, pos + offset, &lbIndices, &ubIndices);
+  SmallVector<unsigned, 4> lbIndices, ubIndices, eqIndices;
+  getLowerAndUpperBoundIndices(*this, pos + offset, &lbIndices, &ubIndices,
+                               &eqIndices, offset, num);
 
   /// Add to 'b' from 'a' in set [0, offset) U [offset + num, symbStartPos).
   auto addCoeffs = [&](ArrayRef<int64_t> a, SmallVectorImpl<int64_t> &b) {
@@ -1535,10 +1560,10 @@ std::pair<AffineMap, AffineMap> FlatAffineConstraints::getLowerAndUpperBound(
   };
 
   SmallVector<int64_t, 8> lb, ub;
-  SmallVector<AffineExpr, 4> exprs;
+  SmallVector<AffineExpr, 4> lbExprs;
   unsigned dimCount = symStartPos - num;
   unsigned symCount = getNumDimAndSymbolIds() - symStartPos;
-  exprs.reserve(lbIndices.size());
+  lbExprs.reserve(lbIndices.size() + eqIndices.size());
   // Lower bound expressions.
   for (auto idx : lbIndices) {
     auto ineq = getInequality(idx);
@@ -1548,24 +1573,49 @@ std::pair<AffineMap, AffineMap> FlatAffineConstraints::getLowerAndUpperBound(
     addCoeffs(ineq, lb);
     std::transform(lb.begin(), lb.end(), lb.begin(), std::negate<int64_t>());
     auto expr = mlir::toAffineExpr(lb, dimCount, symCount, localExprs, context);
-    exprs.push_back(expr);
+    // expr ceildiv divisor is (expr + divisor - 1) floordiv divisor
+    int64_t divisor = std::abs(ineq[pos + offset]);
+    expr = (expr + divisor  - 1).floorDiv(divisor);
+    lbExprs.push_back(expr);
   }
-  auto lbMap =
-      exprs.empty() ? AffineMap() : AffineMap::get(dimCount, symCount, exprs);
 
-  exprs.clear();
-  exprs.reserve(ubIndices.size());
+  SmallVector<AffineExpr, 4> ubExprs;
+  ubExprs.reserve(ubIndices.size() + eqIndices.size());
   // Upper bound expressions.
   for (auto idx : ubIndices) {
     auto ineq = getInequality(idx);
     // Extract the upper bound (in terms of other coeff's + const).
     addCoeffs(ineq, ub);
     auto expr = mlir::toAffineExpr(ub, dimCount, symCount, localExprs, context);
+    expr = expr.floorDiv(std::abs(ineq[pos + offset]));
     // Upper bound is exclusive.
-    exprs.push_back(expr + 1);
+    ubExprs.push_back(expr + 1);
   }
-  auto ubMap =
-      exprs.empty() ? AffineMap() : AffineMap::get(dimCount, symCount, exprs);
+
+  // Equalities. It's both a lower and a upper bound.
+  SmallVector<int64_t, 4> b;
+  for (auto idx : eqIndices) {
+    auto eq = getEquality(idx);
+    addCoeffs(eq, b);
+    if (eq[pos + offset] > 0)
+      std::transform(b.begin(), b.end(), b.begin(), std::negate<int64_t>());
+
+    // Extract the upper bound (in terms of other coeff's + const).
+    auto expr = mlir::toAffineExpr(b, dimCount, symCount, localExprs, context);
+    expr = expr.floorDiv(std::abs(eq[pos + offset]));
+    // Upper bound is exclusive.
+    ubExprs.push_back(expr + 1);
+    // Lower bound.
+    expr = mlir::toAffineExpr(b, dimCount, symCount, localExprs, context);
+    expr = expr.ceilDiv(std::abs(eq[pos + offset]));
+    lbExprs.push_back(expr);
+  }
+
+  auto lbMap = lbExprs.empty() ? AffineMap()
+                               : AffineMap::get(dimCount, symCount, lbExprs);
+
+  auto ubMap = ubExprs.empty() ? AffineMap()
+                               : AffineMap::get(dimCount, symCount, ubExprs);
 
   return {lbMap, ubMap};
 }
@@ -2737,6 +2787,20 @@ static BoundCmpResult compareBounds(ArrayRef<int64_t> a, ArrayRef<int64_t> b) {
 }
 } // namespace
 
+static void getCommonConstraints(const FlatAffineConstraints &A,
+                                 const FlatAffineConstraints &B,
+                                 FlatAffineConstraints *C) {
+  C->reset(A.getNumDimIds(), A.getNumSymbolIds(), A.getNumLocalIds());
+  for (unsigned r = 0, e = A.getNumInequalities(); r < e; ++r) {
+    for (unsigned s = 0, f = B.getNumInequalities(); s < f; ++s) {
+      if (A.getInequality(r) == B.getInequality(s)) {
+        C->addInequality(A.getInequality(r));
+        break;
+      }
+    }
+  }
+}
+
 // Computes the bounding box with respect to 'other' by finding the min of the
 // lower bounds and the max of the upper bounds along each of the dimensions.
 LogicalResult
@@ -2755,7 +2819,10 @@ FlatAffineConstraints::unionBoundingBox(const FlatAffineConstraints &otherCst) {
     mergeAndAlignIds(/*offset=*/numDims, this, &otherCopy.getValue());
   }
 
-  const auto &other = otherCopy ? *otherCopy : otherCst;
+  const auto &otherAligned = otherCopy ? *otherCopy : otherCst;
+
+  FlatAffineConstraints commonCst;
+  getCommonConstraints(*this, otherAligned, &commonCst);
 
   std::vector<SmallVector<int64_t, 8>> boundingLbs;
   std::vector<SmallVector<int64_t, 8>> boundingUbs;
@@ -2778,7 +2845,7 @@ FlatAffineConstraints::unionBoundingBox(const FlatAffineConstraints &otherCst) {
       // TODO(bondhugula): handle union if a dimension is unbounded.
       return failure();
 
-    auto otherExtent = other.getConstantBoundOnDimSize(
+    auto otherExtent = otherAligned.getConstantBoundOnDimSize(
         d, &otherLb, &otherLbFloorDivisor, &otherUb);
     if (!otherExtent.hasValue() || lbFloorDivisor != otherLbFloorDivisor)
       // TODO(bondhugula): symbolic extents when necessary.
@@ -2800,7 +2867,7 @@ FlatAffineConstraints::unionBoundingBox(const FlatAffineConstraints &otherCst) {
     } else {
       // Uncomparable - check for constant lower/upper bounds.
       auto constLb = getConstantLowerBound(d);
-      auto constOtherLb = other.getConstantLowerBound(d);
+      auto constOtherLb = otherAligned.getConstantLowerBound(d);
       if (!constLb.hasValue() || !constOtherLb.hasValue())
         return failure();
       std::fill(minLb.begin(), minLb.end(), 0);
@@ -2816,7 +2883,7 @@ FlatAffineConstraints::unionBoundingBox(const FlatAffineConstraints &otherCst) {
     } else {
       // Uncomparable - check for constant lower/upper bounds.
       auto constUb = getConstantUpperBound(d);
-      auto constOtherUb = other.getConstantUpperBound(d);
+      auto constOtherUb = otherAligned.getConstantUpperBound(d);
       if (!constUb.hasValue() || !constOtherUb.hasValue())
         return failure();
       std::fill(maxUb.begin(), maxUb.end(), 0);
@@ -2846,9 +2913,12 @@ FlatAffineConstraints::unionBoundingBox(const FlatAffineConstraints &otherCst) {
     addInequality(boundingLbs[d]);
     addInequality(boundingUbs[d]);
   }
+
   // TODO(mlir-team): copy over pure symbolic constraints from this and 'other'
   // over to the union (since the above are just the union along dimensions); we
   // shouldn't be discarding any other constraints on the symbols.
+  append(commonCst);
+  removeTrivialRedundancy();
 
   return success();
 }

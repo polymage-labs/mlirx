@@ -160,7 +160,7 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
     // Add optimizations if enabled.
     if (enableOpt) {
       optPM.addPass(mlir::createLoopFusionPass());
-      optPM.addPass(mlir::createMemRefDataFlowOptPass());
+      optPM.addPass(mlir::createAffineScalarReplacementPass());
     }
   }
 

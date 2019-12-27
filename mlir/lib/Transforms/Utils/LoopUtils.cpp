@@ -21,6 +21,7 @@
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/Function.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "mlir/Transforms/Utils.h"
 #include "llvm/ADT/DenseMap.h"
@@ -394,8 +395,8 @@ LogicalResult mlir::loopUnrollFull(AffineForOp forOp) {
   return failure();
 }
 
-/// Unrolls and jams this loop by the specified factor or by the trip count (if
-/// constant) whichever is lower.
+/// Unrolls this loop by the specified factor or by the trip count (if constant)
+/// whichever is lower.
 LogicalResult mlir::loopUnrollUpToFactor(AffineForOp forOp,
                                          uint64_t unrollFactor) {
   Optional<uint64_t> mayBeConstantTripCount = getConstantTripCount(forOp);
@@ -963,17 +964,6 @@ TileLoops mlir::extractFixedOuterLoops(loop::ForOp rootForOp,
   return tileLoops;
 }
 
-// Replaces all uses of `orig` with `replacement` except if the user is listed
-// in `exceptions`.
-static void
-replaceAllUsesExcept(Value orig, Value replacement,
-                     const SmallPtrSetImpl<Operation *> &exceptions) {
-  for (auto &use : llvm::make_early_inc_range(orig->getUses())) {
-    if (exceptions.count(use.getOwner()) == 0)
-      use.set(replacement);
-  }
-}
-
 // Transform a loop with a strictly positive step
 //   for %i = %lb to %ub step %s
 // into a 0-based loop with step 1
@@ -1116,6 +1106,260 @@ void mlir::mapLoopToProcessorIds(loop::ForOp forOp, ArrayRef<Value> processorId,
   forOp.setStep(step);
 }
 
+/// Returns true if the load/store associated with `acc' can be hoisted out of
+/// `forOp' (without considering hoisting of the op creating the memref.
+static bool isHoistableLoadStore(const MemRefAccess &acc, AffineForOp forOp) {
+  Value memref = acc.memref;
+
+  // If the memref is defined in the same for op, can't hoist.
+  if (memref->getDefiningOp() &&
+      memref->getDefiningOp()->getBlock() == forOp.getBody())
+    return false;
+
+  AffineValueMap vmap;
+  acc.getAccessMap(&vmap);
+  // Check if the access is invariant with respect to this forOp.
+  return llvm::find(vmap.getOperands(), forOp.getInductionVar()) ==
+         vmap.getOperands().end();
+}
+
+/// Returns true if no other affine for op's are nested within.
+static bool isInnermostAffineForOp(AffineForOp forOp) {
+  // Only for the innermost affine.for op's.
+  bool isInnermost = true;
+  forOp.walk([&](AffineForOp thisForOp) {
+    isInnermost = (thisForOp == forOp);
+    return WalkResult::interrupt();
+  });
+  return isInnermost;
+}
+
+/// Returns true if the two memref access provided can't be determined to be
+/// either equivalent to and can't be determined to be distinct from each other
+/// at compile time; false otherwise. Note that accesses are compared post full
+/// composition - so all information up until provenance is captured.
+//  Ex: %A[%i][%j], %A[%i][%j] will return true.
+//      %A[%i][%j], %A[%i + 1][%j] will return true (since it's known they are
+//                                                  different)
+//      %A[symbol(%M)], %A[symbol(%M)] will return true.
+//      %A[%i][%j], %A[%j][%i] will return false.
+//      %A[%M], %A[%N] will return false.
+static bool mayBeEqual(const MemRefAccess &A, const MemRefAccess &B) {
+  if (A.memref != B.memref)
+    return false;
+
+  AffineValueMap diff, AMap, BMap;
+  A.getAccessMap(&AMap);
+  B.getAccessMap(&BMap);
+
+  AffineValueMap::difference(AMap, BMap, &diff);
+  // return !diff.getAffineMap().getResult(0).isa<AffineConstantExpr>();
+  return llvm::any_of(diff.getAffineMap().getResults(), [](AffineExpr e) {
+    return !e.isa<AffineConstantExpr>();
+  });
+}
+
+// TODO: only works on innermost loops.
+// TODO: does not check for escaping memrefs.
+// TODO: only hoists one loop up when it does.
+void mlir::scalarReplace(AffineForOp forOp) {
+  FuncOp f = forOp.getOperation()->getParentOfType<FuncOp>();
+  // Only innermost loops for now.
+  if (!isInnermostAffineForOp(forOp))
+    return;
+
+  // Constant zero index to avoid duplicates.
+  OpBuilder topBuilder(f.getBody());
+  Value zeroIndex = topBuilder.create<ConstantIndexOp>(f.getLoc(), 0);
+
+  // Create groups of affine accesses such that each group of affine accesses
+  // all refers to the same memref location. It is not feasible to construct a
+  // key, but one can check if two affine references access the same element
+  // (for a given value of all outer IVs and parameters).
+  // TODO: this can be optimized using a disjoint set data structure (union
+  // find) if needed.
+  std::vector<SmallVector<MemRefAccess, 4>> accessSets;
+
+  LLVM_DEBUG(llvm::dbgs() << "COLLECTING ACCESS SETS\n";);
+  // Process all affine load and store ops.
+  forOp.walk([&](Operation *op) {
+    if (!isa<AffineLoadOp>(op) && !isa<AffineStoreOp>(op))
+      return;
+
+    MemRefAccess acc(op);
+
+    // Check if a group of equivalent accesses already exists.
+    const auto &en =
+        std::find_if(accessSets.begin(), accessSets.end(),
+                     [&](const SmallVector<MemRefAccess, 4> &accList) {
+                       assert(!accList.empty() && "expected non-empty");
+                       return (accList.front() == acc);
+                     });
+    if (en != accessSets.end()) {
+      // If the reference exists, add operation to that group.
+      en->push_back(acc);
+    } else {
+      // Create a new group otherwise.
+      accessSets.emplace_back(SmallVector<MemRefAccess, 4>{acc});
+    }
+  });
+
+  LLVM_DEBUG(llvm::dbgs() << accessSets.size()
+                          << " ACCESS SETS TO ITERATE THROUGH\n");
+
+  // Determine which groups are replacable by scalars. Iterate through the
+  // disjoint sets of memory accesses.
+  std::vector<bool> isScalarReplacable(accessSets.size(), false);
+  for (auto &en : llvm::enumerate(accessSets)) {
+    const auto &eqAccesses = en.value();
+    unsigned i = en.index();
+
+    // Find the first appearing op - the one that dominates everything else in
+    // the group: this is the part that needs to be extended to handle
+    // non-innermost loops since isBeforeInBlock can longer be used (instead,
+    // srcAppearsBeforeDstInCommonBlock is needed).
+    assert(!eqAccesses.empty() && "equivalence class can't be empty");
+    auto sampleMemOp = eqAccesses.front();
+
+    MemRefAccess acc(sampleMemOp);
+
+    bool containsStore = llvm::any_of(eqAccesses, [](const MemRefAccess &acc) {
+      return isa<AffineStoreOp>(acc.opInst);
+    });
+
+    if (!containsStore) {
+      // All subsequent loads can be replaced with the result of the first
+      // load, if stores in all other groups are provably distinct.
+      // Check if any of the other groups have a may conflict store.
+      if (llvm::any_of(
+              accessSets, [&](const SmallVector<MemRefAccess, 4> &accSet) {
+                if (llvm::all_of(accSet, [](const MemRefAccess &thisAcc) {
+                      return !isa<AffineStoreOp>(thisAcc.opInst);
+                    }))
+                  // None of them is a store op.
+                  return false;
+                return mayBeEqual(accSet.front(), acc);
+              })) {
+        continue;
+      }
+      isScalarReplacable[i] = true;
+      continue;
+    }
+
+    // One of the ops is a store.
+    // A replacement can only be performed if the memory op's in other group
+    // are known to be distinct from this.
+    if (llvm::any_of(accessSets,
+                     [&](const SmallVector<MemRefAccess, 4> &accList) {
+                       return mayBeEqual(acc, accList.front());
+                     })) {
+      continue;
+    }
+
+    // If one of the op's is a store, we will only do the replacement if the
+    // accesses are hoistable, and the replacement will be performed using a
+    // single element memref.
+
+    // We don't care about the case that's not hoistable for now, as
+    // forwardStoreToLoad already handles this.
+    if (isHoistableLoadStore(acc, forOp))
+      isScalarReplacable[i] = true;
+  }
+
+  LLVM_DEBUG(llvm::dbgs() << accessSets.size() << " ITERATING 1st PHASE END\n");
+
+  // Iterate through the disjoint sets of memory accesses.
+  for (auto &en : llvm::enumerate(accessSets)) {
+    if (!isScalarReplacable[en.index()])
+      continue;
+
+    const auto &eqAccesses = en.value();
+
+    // Find the first appearing op - the one that dominates everything else in
+    // the group: this is the part that needs to be extended to handle
+    // non-innermost loops since isBeforeInBlock can longer be used (instead,
+    // srcAppearsBeforeDstInCommonBlock is needed).
+    auto *firstMemOp =
+        std::min_element(eqAccesses.begin(), eqAccesses.end(),
+                         [](const MemRefAccess &a, const MemRefAccess &b) {
+                           return a.opInst->isBeforeInBlock(b.opInst);
+                         })
+            ->opInst;
+
+    MemRefAccess acc(firstMemOp);
+    AffineValueMap vMap;
+    acc.getAccessMap(&vMap);
+
+    MemRefType origMemrefType = acc.memref->getType().cast<MemRefType>();
+
+    bool containsStore = llvm::any_of(eqAccesses, [](const MemRefAccess &acc) {
+      return isa<AffineStoreOp>(acc.opInst);
+    });
+
+    if (!containsStore) {
+      // All ops in this equivalence class are loads.
+      Value scalar;
+      bool hoistable = isHoistableLoadStore(acc, forOp);
+      if (hoistable) {
+        // Hoist the load; create the new load.
+        SmallVector<Value, 4> operands;
+        operands.reserve(1 + vMap.getNumOperands());
+        operands.push_back(acc.memref);
+        operands.append(vMap.getOperands().begin(), vMap.getOperands().end());
+        // Insert right before the for op.
+        OpBuilder b(forOp.getOperation());
+        scalar = b.create<AffineLoadOp>(forOp.getLoc(), vMap.getAffineMap(),
+                                        operands);
+      } else {
+        scalar = cast<AffineLoadOp>(firstMemOp).getResult();
+      }
+      // Erase and replace all uses of existing load op's with the scalar.
+      for (auto it = hoistable ? eqAccesses.begin()
+                               : std::next(eqAccesses.begin());
+           it != eqAccesses.end();) {
+        auto loadOp = cast<AffineLoadOp>((*it++).opInst);
+        loadOp.getResult()->replaceAllUsesWith(scalar);
+        loadOp.erase();
+      }
+      continue;
+    }
+
+    // At least one of the ops is a store.
+    // Hoistable - create a single element memref.
+    OpBuilder b(forOp.getOperation());
+    auto singleEltMemRef = b.create<AllocaOp>(
+        forOp.getLoc(),
+        MemRefType::get(/*shape=*/{1}, origMemrefType.getElementType()));
+
+    // Load from the memref and store to the scalar (one element memref).
+    // %singleEltMemref[0] = %A[...];
+    Value scalar = b.create<AffineLoadOp>(
+        forOp.getLoc(), acc.memref, vMap.getAffineMap(), vMap.getOperands());
+    b.create<AffineStoreOp>(forOp.getLoc(), scalar, singleEltMemRef, zeroIndex);
+
+    // Replace all load/stores of original memref with %singleEltMemref[0].
+    SmallVector<AffineExpr, 1> resultExprs = {b.getAffineConstantExpr(0)};
+    for (auto &acc : eqAccesses) {
+      if (failed(replaceAllMemRefUsesWith(
+              acc.memref, singleEltMemRef, acc.opInst, {},
+              AffineMap::get(origMemrefType.getRank(), 0, resultExprs), {})))
+        assert(false && "unimplemented escaping uses");
+    }
+
+    // Create the epilogue that stores from the single elt memref back to
+    // the original, and dealloc the former.
+    // %A[...] = %singleEltMemRef[0]
+    b.setInsertionPoint(forOp.getOperation()->getBlock(),
+                        std::next(Block::iterator(forOp.getOperation())));
+    scalar = b.create<AffineLoadOp>(forOp.getLoc(), singleEltMemRef, zeroIndex);
+    b.create<AffineStoreOp>(forOp.getLoc(), scalar, acc.memref,
+                            vMap.getAffineMap(), vMap.getOperands());
+    // No need of a dealloc since we are using an alloca.
+  }
+
+  LLVM_DEBUG(llvm::dbgs() << "SCAL REP END\n");
+}
+
 /// Given a memref region, determine the lowest depth at which transfers can be
 /// placed for it, and return the corresponding block, start and end positions
 /// in the block for placing incoming (read) and outgoing (write) copies
@@ -1191,55 +1435,80 @@ static void getMultiLevelStrides(const MemRefRegion &region,
 /// returns the outermost AffineForOp of the copy loop nest. `memIndicesStart'
 /// holds the lower coordinates of the region in the original memref to copy
 /// in/out. If `copyOut' is true, generates a copy-out; otherwise a copy-in.
-static AffineForOp generatePointWiseCopy(Location loc, Value memref,
-                                         Value fastMemRef,
-                                         AffineMap memAffineMap,
-                                         ArrayRef<Value> memIndicesStart,
-                                         ArrayRef<int64_t> fastBufferShape,
-                                         bool isCopyOut, OpBuilder b) {
-  assert(!memIndicesStart.empty() && "only 1-d or more memrefs");
+static AffineForOp
+generatePointWiseCopy(Location loc, Value memref, Value fastMemRef,
+                      ArrayRef<AffineMap> lbMaps, ArrayRef<Value> lbOperands,
+                      ArrayRef<AffineMap> ubMaps, ArrayRef<Value> ubOperands,
+                      bool isCopyOut, OpBuilder b) {
+  assert(llvm::all_of(lbMaps, [&](AffineMap lbMap) {
+    return lbMap.getNumInputs() == lbOperands.size();
+  }));
+  assert(llvm::all_of(ubMaps, [&](AffineMap ubMap) {
+    return ubMap.getNumInputs() == ubOperands.size();
+  }));
+
+  unsigned rank = memref->getType().cast<MemRefType>().getRank();
+  (void)rank; // unused in opt mode
+  assert(lbMaps.size() == rank && "wrong number of lb maps");
+  assert(ubMaps.size() == rank && "wrong number of ub maps");
 
   // The copy-in nest is generated as follows as an example for a 2-d region:
   // for x = ...
   //   for y = ...
   //     fast_buf[x][y] = buf[mem_x + x][mem_y + y]
 
-  SmallVector<Value, 4> fastBufIndices, memIndices;
+  SmallVector<Value, 4> memIndices;
+  SmallVector<AffineExpr, 4> fastBufExprs;
+  SmallVector<Value, 4> fastBufMapOperands;
   AffineForOp copyNestRoot;
-  for (unsigned d = 0, e = fastBufferShape.size(); d < e; ++d) {
-    auto forOp = b.create<AffineForOp>(loc, 0, fastBufferShape[d]);
+  for (unsigned d = 0, e = ubMaps.size(); d < e; ++d) {
+    SmallVector<Value, 4> thisUbOperands(ubOperands.begin(), ubOperands.end());
+    AffineMap ubMap = ubMaps[d];
+    canonicalizeMapAndOperands(&ubMap, &thisUbOperands);
+
+    AffineMap lbMap = lbMaps[d];
+    SmallVector<Value, 4> thisLbOperands(lbOperands.begin(), lbOperands.end());
+    canonicalizeMapAndOperands(&lbMap, &thisLbOperands);
+
+    auto forOp = b.create<AffineForOp>(loc, thisLbOperands, lbMap,
+                                       thisUbOperands, ubMap);
     if (d == 0)
       copyNestRoot = forOp;
+
     b = forOp.getBodyBuilder();
-    fastBufIndices.push_back(forOp.getInductionVar());
 
-    Value memBase =
-        (memAffineMap == b.getMultiDimIdentityMap(memAffineMap.getNumDims()))
-            ? memIndicesStart[d]
-            : b.create<AffineApplyOp>(
-                  loc,
-                  AffineMap::get(memAffineMap.getNumDims(),
-                                 memAffineMap.getNumSymbols(),
-                                 memAffineMap.getResult(d)),
-                  memIndicesStart);
+    // TODO: get rid of this affine.apply as well.
+    Value lb = (lbMap.getNumResults() == 1 &&
+                lbMap == b.getMultiDimIdentityMap(lbMap.getNumDims()))
+                   ? thisLbOperands[0]
+                   : b.create<AffineApplyOp>(loc, lbMap, thisLbOperands);
 
-    // Construct the subscript for the slow memref being copied.
-    auto memIndex = b.create<AffineApplyOp>(
-        loc,
-        AffineMap::get(2, 0, b.getAffineDimExpr(0) + b.getAffineDimExpr(1)),
-        ValueRange({memBase, forOp.getInductionVar()}));
-    memIndices.push_back(memIndex);
+    // Construct the subscript for the fast memref being copied.
+    fastBufExprs.push_back(b.getAffineDimExpr(2 * d + 1) -
+                           b.getAffineDimExpr(2 * d));
+    fastBufMapOperands.push_back(lb);
+    fastBufMapOperands.push_back(forOp.getInductionVar());
+
+    // Subscript for the slow memref being copied.
+    memIndices.push_back(forOp.getInductionVar());
   }
+
+  auto fastBufAccessMap = AffineMap::get(2 * ubMaps.size(), 0, fastBufExprs);
+  fullyComposeAffineMapAndOperands(&fastBufAccessMap, &fastBufMapOperands);
+  fastBufAccessMap = simplifyAffineMap(fastBufAccessMap);
+  canonicalizeMapAndOperands(&fastBufAccessMap, &fastBufMapOperands);
 
   if (!isCopyOut) {
     // Copy in.
     auto load = b.create<AffineLoadOp>(loc, memref, memIndices);
-    b.create<AffineStoreOp>(loc, load, fastMemRef, fastBufIndices);
+    b.create<AffineStoreOp>(loc, load, fastMemRef, fastBufAccessMap,
+                            fastBufMapOperands);
     return copyNestRoot;
   }
 
   // Copy out.
-  auto load = b.create<AffineLoadOp>(loc, fastMemRef, fastBufIndices);
+  auto load = b.create<AffineLoadOp>(loc, fastMemRef, fastBufAccessMap,
+                                     fastBufMapOperands);
   b.create<AffineStoreOp>(loc, load, memref, memIndices);
   return copyNestRoot;
 }
@@ -1312,6 +1581,9 @@ static LogicalResult generateCopy(
 
   unsigned rank = memRefType.getRank();
   SmallVector<int64_t, 4> fastBufferShape;
+  AffineMap fastBufferLayout = copyOptions.fastBufferLayout
+                                   ? copyOptions.fastBufferLayout
+                                   : b.getMultiDimIdentityMap(rank);
 
   // Compute the extents of the buffer.
   std::vector<SmallVector<int64_t, 4>> lbs;
@@ -1329,6 +1601,10 @@ static LogicalResult generateCopy(
     *sizeInBytes = 0;
     return success();
   }
+
+  SmallVector<AffineMap, 4> lbMaps(rank), ubMaps(rank);
+  for (unsigned i = 0; i < rank; ++i)
+    region.getLowerAndUpperBound(i, &lbMaps[i], &ubMaps[i]);
 
   const FlatAffineConstraints *cst = region.getConstraints();
   // 'regionSymbols' hold values that this memory region is symbolic/parametric
@@ -1387,7 +1663,6 @@ static LogicalResult generateCopy(
   // Check if a buffer was already created.
   bool existingBuf = fastBufferMap.count(memref) > 0;
   if (!existingBuf) {
-    AffineMap fastBufferLayout = b.getMultiDimIdentityMap(rank);
     auto fastMemRefType =
         MemRefType::get(fastBufferShape, memRefType.getElementType(),
                         fastBufferLayout, copyOptions.fastMemorySpace);
@@ -1444,8 +1719,9 @@ static LogicalResult generateCopy(
 
   if (!copyOptions.generateDma) {
     // Point-wise copy generation.
-    auto copyNest = generatePointWiseCopy(loc, memref, fastMemRef, memAffineMap,
-                                          memIndices, fastBufferShape,
+    auto copyNest = generatePointWiseCopy(loc, memref, fastMemRef, lbMaps,
+                                          /*lbOperands=*/regionSymbols, ubMaps,
+                                          /*ubOperands=*/regionSymbols,
                                           /*isCopyOut=*/region.isWrite(), b);
 
     // Record this so that we can skip it from yet another copy.
@@ -1596,7 +1872,9 @@ static bool getFullMemRefAsRegion(Operation *opInst, unsigned numParamLoopIVs,
 uint64_t mlir::affineDataCopyGenerate(Block::iterator begin,
                                       Block::iterator end,
                                       const AffineCopyOptions &copyOptions,
-                                      DenseSet<Operation *> &copyNests) {
+                                      Optional<Value> filterMemRef,
+                                      DenseSet<Operation *> &copyNests,
+                                      SmallVectorImpl<Value> *fastBufs) {
   if (begin == end)
     return 0;
 
@@ -1632,12 +1910,16 @@ uint64_t mlir::affineDataCopyGenerate(Block::iterator begin,
   block->walk(begin, end, [&](Operation *opInst) {
     // Gather regions to allocate to buffers in faster memory space.
     if (auto loadOp = dyn_cast<AffineLoadOp>(opInst)) {
-      if ((loadOp.getMemRefType().getMemorySpace() !=
+      if ((filterMemRef.hasValue() &&
+           filterMemRef.getValue() != loadOp.getMemRef()) ||
+          (loadOp.getMemRefType().getMemorySpace() !=
            copyOptions.slowMemorySpace))
         return;
     } else if (auto storeOp = dyn_cast<AffineStoreOp>(opInst)) {
-      if (storeOp.getMemRefType().getMemorySpace() !=
-          copyOptions.slowMemorySpace)
+      if ((filterMemRef.hasValue() &&
+           filterMemRef.getValue() != storeOp.getMemRef()) ||
+          storeOp.getMemRefType().getMemorySpace() !=
+              copyOptions.slowMemorySpace)
         return;
     } else {
       // Neither load nor a store op.
@@ -1646,7 +1928,8 @@ uint64_t mlir::affineDataCopyGenerate(Block::iterator begin,
 
     // Compute the MemRefRegion accessed.
     auto region = std::make_unique<MemRefRegion>(opInst->getLoc());
-    if (failed(region->compute(opInst, copyDepth))) {
+    if (failed(region->compute(opInst, copyDepth, /*sliceState=*/nullptr,
+                               /*addMemRefDimBounds=*/false))) {
       LLVM_DEBUG(llvm::dbgs()
                  << "Error obtaining memory region: semi-affine maps?\n");
       LLVM_DEBUG(llvm::dbgs() << "over-approximating to the entire memref\n");
@@ -1775,5 +2058,347 @@ uint64_t mlir::affineDataCopyGenerate(Block::iterator begin,
     block->getParentOp()->emitError(str);
   }
 
+  if (fastBufs) {
+    fastBufs->clear();
+    fastBufs->reserve(fastBufferMap.size());
+    for (const auto &entry : fastBufferMap) {
+      fastBufs->push_back(entry.second);
+    }
+  }
+
   return totalCopyBuffersSizeInBytes;
+}
+
+/// Returns scalars that are live in to 'forOp'.
+static void getLiveInScalars(AffineForOp forOp,
+                             SmallVectorImpl<Value> &scalars) {
+  SmallVector<AffineForOp, 4> ivs;
+  forOp.walk([&](Operation *op) {
+    // Skip operands of affine.load/store.
+    if (isa<AffineLoadOp>(op) || isa<AffineStoreOp>(op) ||
+        isa<AffineApplyOp>(op))
+      return;
+    for (auto value : op->getOperands()) {
+      if (auto *defOp = value->getDefiningOp()) {
+        ivs.clear();
+        // Check whether the defining op is outside iv.
+        getLoopIVs(*defOp, &ivs);
+        if (llvm::find(ivs, forOp) == ivs.end())
+          scalars.push_back(value);
+      } else {
+        scalars.push_back(value);
+      }
+    }
+  });
+}
+
+/// Given an input type, provides a vector type for it of the provided width.
+static VectorType getVectorizedType(Type inputType, unsigned width) {
+  assert(width > 1 && "unexpected vector width");
+  Type baseEltType = inputType;
+  SmallVector<int64_t, 4> vecShape;
+  if (auto vecEltType = inputType.dyn_cast<VectorType>()) {
+    baseEltType = vecEltType.getElementType();
+    vecShape.reserve(vecShape.size() + vecEltType.getRank());
+    vecShape.assign(vecEltType.getShape().begin(), vecEltType.getShape().end());
+  }
+  vecShape.push_back(width);
+  return VectorType::get(vecShape, baseEltType);
+}
+
+/// Casts a given input memref, uses memref_shape_cast op to cast it to a memref
+/// with an elemental type that is `vector width` times (for eg., f32 becomes
+/// vector<8xf32>, vector<8xf32> becomes vector<8x8xf32> if `vectorWidth` were
+/// to be 8).
+static Value createVectorMemRef(Value scalMemRef, unsigned vectorWidth) {
+  auto scalMemRefType = scalMemRef->getType().cast<MemRefType>();
+  auto shape = scalMemRefType.getShape();
+  assert(shape.back() % vectorWidth == 0 && "unexpected memref shape");
+
+  OpBuilder b(scalMemRef->getContext());
+  if (auto *defOp = scalMemRef->getDefiningOp())
+    b.setInsertionPointAfter(defOp);
+  else
+    b.setInsertionPointToStart(cast<BlockArgument>(scalMemRef)->getOwner());
+
+  auto vecMemRefEltType =
+      getVectorizedType(scalMemRefType.getElementType(), vectorWidth);
+
+  SmallVector<int64_t, 4> vecMemRefShape(shape.begin(), shape.end());
+  vecMemRefShape.back() /= vectorWidth;
+
+  auto vecMemRefType = MemRefType::get(vecMemRefShape, vecMemRefEltType);
+  return b.create<MemRefShapeCastOp>(b.getUnknownLoc(), vecMemRefType,
+                                     scalMemRef);
+}
+
+/// Returns an affine map with the last result of `input' scaled down by
+/// `factor'.
+static AffineMap scaleDownLastResult(AffineMap input, int64_t factor) {
+  SmallVector<AffineExpr, 4> results(input.getResults().begin(),
+                                     input.getResults().end());
+  results.back() = results.back().floorDiv(factor);
+  return AffineMap::get(input.getNumDims(), input.getNumSymbols(), results);
+}
+
+/// Vectorize any operation other than AffineLoadOp, AffineStoreOp,
+/// and splat op. Operands of the op should have already been vectorized. The op
+/// can't have any regions.
+static Operation *vectorizeMiscLeafOp(Operation *op, unsigned width) {
+  // Sanity checks.
+  assert(!isa<AffineLoadOp>(op) &&
+         "all loads should have already been fully vectorized");
+  assert(!isa<AffineStoreOp>(op) &&
+         "all stores should have already been fully vectorized");
+
+  if (op->getNumRegions() != 0)
+    return nullptr;
+
+  SmallVector<Type, 8> vectorTypes;
+  for (auto v : op->getResults()) {
+    vectorTypes.push_back(getVectorizedType(v->getType(), width));
+  }
+  SmallVector<Value, 4> vectorOperands(op->getOperands());
+
+  // Check whether a single operand is null. If so, vectorization failed.
+  bool success = llvm::all_of(
+      vectorOperands, [](Value v) { return v->getType().isa<VectorType>(); });
+  if (!success) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "\n[affine-vect]+++++ operands shoulds have been vectorized");
+    return nullptr;
+  }
+
+  OpBuilder b(op);
+  OperationState newOp(op->getLoc(), op->getName().getStringRef(),
+                       vectorOperands, vectorTypes, op->getAttrs(),
+                       /*successors=*/{},
+                       /*regions=*/{}, op->hasResizableOperandsList());
+  return b.createOperation(newOp);
+}
+
+LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
+                                  DenseMap<Value, Value> *vecMemRefMap) {
+  // Walk and collect all memrefs that need to be turned into vector types (or
+  // to higher dimensional vector types).
+  //
+  // For vector memrefs, loads are replaced; for stores, just operands is
+  // replaced. For invariant load/stores, splat result of the loads; leave
+  // stores alone if the store value is a scalar; otherwise, write the last
+  // value.
+  // Live-in scalars are splat. All other ops' operands are automatically
+  // replaced as a result of the above. Replace such ops with new ones so that
+  // their result types are vector types.
+  //
+  DenseSet<Operation *> toVecLoadOps, toVecStoreOps;
+  SmallVector<Operation *, 4> toSplatLoadOps, writeLastEltStoreOps;
+  // Mapping from a memref to its vector counterpart.
+  DenseMap<Value, Value> toVecMemRefMap;
+  SetVector<Value> toVecMemRefs;
+
+  // Analysis phase.
+  bool error = false;
+
+  forOp.walk([&](Operation *op) {
+    auto loadOp = dyn_cast<AffineLoadOp>(op);
+    auto storeOp = dyn_cast<AffineStoreOp>(op);
+    if (!loadOp && !storeOp)
+      return WalkResult::advance();
+
+    bool isInvariant = loadOp ? isInvariantAccess(loadOp, forOp)
+                              : isInvariantAccess(storeOp, forOp);
+    if (isInvariant) {
+      if (loadOp)
+        toSplatLoadOps.push_back(loadOp);
+      else
+        writeLastEltStoreOps.push_back(storeOp);
+      return WalkResult::advance();
+    }
+
+    Value memref = loadOp ? loadOp.getMemRef() : storeOp.getMemRef();
+
+    if (loadOp)
+      toVecLoadOps.insert(loadOp);
+    else
+      toVecStoreOps.insert(storeOp);
+
+    if (toVecMemRefs.count(memref) == 0) {
+      toVecMemRefs.insert(memref);
+    }
+    return WalkResult::advance();
+  });
+
+  if (error)
+    return failure();
+
+  if (toVecMemRefs.empty()) {
+    LLVM_DEBUG(llvm::dbgs() << "No memrefs to vectorize\n");
+    return failure();
+  }
+
+  // Compute the width for vectorization.
+  int vectorWidth = -1;
+  for (auto memref : toVecMemRefs) {
+    auto memrefType = memref->getType().cast<MemRefType>();
+    auto eltType = memrefType.getElementType();
+    if (eltType.isa<VectorType>()) {
+      LLVM_DEBUG(llvm::dbgs() << "code already vectorized?\n");
+      return failure();
+    }
+
+    if (simdWidth % eltType.getIntOrFloatBitWidth() != 0) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "scalar width does not divide h/w vector width\n");
+      return failure();
+    }
+    unsigned thisVectorWidth = simdWidth / eltType.getIntOrFloatBitWidth();
+    if (vectorWidth == -1) {
+      vectorWidth = thisVectorWidth;
+    } else {
+      if (std::max<unsigned>(vectorWidth, thisVectorWidth) %
+              std::min<unsigned>(vectorWidth, thisVectorWidth) !=
+          0) {
+        LLVM_DEBUG(llvm::dbgs() << "Different memrefs require widths that "
+                                   "aren't multiples of each other\n");
+        return failure();
+      }
+      vectorWidth = std::min<unsigned>(vectorWidth, thisVectorWidth);
+    }
+  }
+
+  assert(vectorWidth > 0 && "valid vector width should have been found\n");
+  LLVM_DEBUG(llvm::dbgs() << "Using vector width: " << vectorWidth << "\n");
+
+  // TODO: Handle cleanups with view ops.
+  if (getLargestDivisorOfTripCount(forOp) % vectorWidth != 0) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "Trip count not known to be a multiple of vector width\n");
+    return failure();
+  }
+
+  // Check if all live-in scalars are of non-memref/vector/tensor type since we
+  // can't splat these.
+  SmallVector<Value, 4> liveInScalars;
+  getLiveInScalars(forOp, liveInScalars);
+  if (llvm::any_of(liveInScalars, [](Value v) {
+        auto type = v.getType();
+        return type.isa<VectorType>() || type.isa<TensorType>();
+      })) {
+    LLVM_DEBUG(llvm::dbgs() << "Non-scalar type live in - can't splat\n");
+    return failure();
+  }
+
+  // Check if memref dim size is a multiple of the width.
+  for (auto memref : toVecMemRefs) {
+    auto memrefType = memref->getType().cast<MemRefType>();
+    int64_t lastDimSize = memrefType.getDimSize(memrefType.getRank() - 1);
+    if (lastDimSize == -1 || lastDimSize % vectorWidth != 0) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "memref dimension not multiple of vector width\n");
+      LLVM_DEBUG(memrefType.dump());
+      return failure();
+    }
+  }
+
+  // Create vector memrefs for the ones that will have their load/stores
+  // vectorized.
+  for (auto vecMemRef : toVecMemRefs) {
+    toVecMemRefMap.insert(
+        {vecMemRef, createVectorMemRef(vecMemRef, vectorWidth)});
+  }
+
+  // End of analysis phase.
+
+  // Vectorize load ops with the loop being vectorized indexing the fastest
+  // varying dimension of the memref. Turn the load into a load on its vector
+  // memref cast, and scale down the last access by vector width.
+  for (auto op : toVecLoadOps) {
+    auto loadOp = cast<AffineLoadOp>(op);
+    OpBuilder rewriter(loadOp);
+    SmallVector<Value, 4> mapOperands(loadOp.getMapOperands());
+    auto vecLoadOp = rewriter.create<AffineLoadOp>(
+        loadOp.getLoc(), toVecMemRefMap[loadOp.getMemRef()],
+        scaleDownLastResult(loadOp.getAffineMap(), vectorWidth), mapOperands);
+    loadOp.getOperation()->replaceAllUsesWith(vecLoadOp);
+    loadOp.erase();
+  }
+
+  // Splat invariant load ops.
+  for (auto op : toSplatLoadOps) {
+    auto loadOp = cast<AffineLoadOp>(op);
+    OpBuilder rewriter(loadOp.getContext());
+    rewriter.setInsertionPointAfter(loadOp);
+    auto splat = rewriter.create<SplatOp>(
+        loadOp.getLoc(),
+        getVectorizedType(loadOp.getMemRefType().getElementType(), vectorWidth),
+        loadOp.getResult());
+    SmallPtrSet<Operation *, 1> exceptions = {splat};
+    replaceAllUsesExcept(loadOp, splat, exceptions);
+  }
+
+  // Vectorize store ops with the loop being vectorized indexing the fastest
+  // varying dimension of the memref. Turn the store into a store on its vector
+  // memref cast, and scale down the last access by vector width.
+  for (auto op : toVecStoreOps) {
+    auto storeOp = cast<AffineStoreOp>(op);
+    OpBuilder rewriter(storeOp);
+    SmallVector<Value, 4> mapOperands(storeOp.getMapOperands());
+    rewriter.create<AffineStoreOp>(
+        storeOp.getLoc(), storeOp.getValueToStore(),
+        toVecMemRefMap[storeOp.getMemRef()],
+        scaleDownLastResult(storeOp.getAffineMap(), vectorWidth), mapOperands);
+    storeOp.erase();
+  }
+
+  // Vectorize remaining ops.
+  forOp.walk([&](Operation *op) {
+    if (isa<AffineLoadOp>(op) || isa<AffineStoreOp>(op) ||
+        isa<AffineApplyOp>(op) || isa<SplatOp>(op) ||
+        isa<AffineTerminatorOp>(op))
+      return;
+    if (auto *vecOp = vectorizeMiscLeafOp(op, vectorWidth)) {
+      op->replaceAllUsesWith(vecOp);
+      if (op->use_empty())
+        op->erase();
+    }
+  });
+
+  // Splat live-in scalars.
+  for (auto scalar : liveInScalars) {
+    OpBuilder rewriter(scalar->getContext());
+    Location loc = rewriter.getUnknownLoc();
+    if (auto *defOp = scalar->getDefiningOp()) {
+      loc = defOp->getLoc();
+      rewriter.setInsertionPointAfter(defOp);
+    } else {
+      auto *block = cast<BlockArgument>(scalar)->getOwner();
+      loc = block->getParentOp()->getLoc();
+      rewriter.setInsertionPointToStart(block);
+    }
+    auto splat = rewriter.create<SplatOp>(
+        loc, scalar, getVectorizedType(scalar.getType(), vectorWidth));
+    replaceAllUsesInRegionWith(scalar, splat, forOp.region());
+  }
+
+  assert(writeLastEltStoreOps.empty() && "unimplemented last write store ops");
+
+  // Set the step.
+  forOp.setStep(forOp.getStep() * vectorWidth);
+
+  // TODO: an initial check should provide a guarantee that if we complete this
+  // method, everything would be vectorized.
+
+  // Compose any affine apply ops, fold ops, drop dead ops, and normalize
+  // strided loops.
+  auto *context = forOp.getContext();
+  OwningRewritePatternList patterns;
+  AffineForOp::getCanonicalizationPatterns(patterns, context);
+  AffineLoadOp::getCanonicalizationPatterns(patterns, context);
+  AffineStoreOp::getCanonicalizationPatterns(patterns, context);
+  applyPatternsGreedily(forOp.getParentOfType<FuncOp>(), std::move(patterns));
+
+  if (vecMemRefMap)
+    *vecMemRefMap = std::move(toVecMemRefMap);
+
+  return success();
 }

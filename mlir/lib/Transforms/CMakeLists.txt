@@ -3,9 +3,12 @@ add_subdirectory(Utils)
 add_llvm_library(MLIRTransforms
   AffineDataCopyGeneration.cpp
   AffineLoopInvariantCodeMotion.cpp
+  AffineScalarReplacement.cpp
+  AffineVectorize.cpp
   Canonicalizer.cpp
   CSE.cpp
   DialectConversion.cpp
+  HigherOrderPolyhedralOpt.cpp
   Inliner.cpp
   LoopCoalescing.cpp
   LoopFusion.cpp
@@ -13,7 +16,6 @@ add_llvm_library(MLIRTransforms
   LoopTiling.cpp
   LoopUnrollAndJam.cpp
   LoopUnroll.cpp
-  MemRefDataFlowOpt.cpp
   PipelineDataTransfer.cpp
   SimplifyAffineStructures.cpp
   StripDebugInfo.cpp

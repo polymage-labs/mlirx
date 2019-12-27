@@ -257,6 +257,8 @@ Expected<std::unique_ptr<ExecutionEngine>> ExecutionEngine::create(
   // LLJITWithObjectCache example.
   auto compileFunctionCreator = [&](JITTargetMachineBuilder JTMB)
       -> Expected<IRCompileLayer::CompileFunction> {
+    // Set FPOpFusion to emit FMAs.
+    JTMB.getOptions().AllowFPOpFusion = llvm::FPOpFusion::Fast;
     if (jitCodeGenOptLevel)
       JTMB.setCodeGenOptLevel(jitCodeGenOptLevel.getValue());
     auto TM = JTMB.createTargetMachine();

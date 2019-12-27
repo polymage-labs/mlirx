@@ -38,7 +38,9 @@
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/ToolOutputFile.h"
+#include <iomanip>
 #include <numeric>
+#include <sys/time.h>
 
 using namespace mlir;
 using llvm::Error;
@@ -54,6 +56,13 @@ static llvm::cl::opt<std::string> mainFuncType(
     "entry-point-result",
     llvm::cl::desc("Textual description of the function type to be called"),
     llvm::cl::value_desc("f32 | void"), llvm::cl::init("f32"));
+
+static llvm::cl::opt<bool>
+    clTime("time", llvm::cl::desc("Report compile and execution times"),
+           llvm::cl::init(true));
+static llvm::cl::opt<unsigned>
+    clReps("reps", llvm::cl::desc("Number of execution repetitions"),
+              llvm::cl::value_desc("<unsigned>"), llvm::cl::init(1));
 
 static llvm::cl::OptionCategory optFlags("opt-like flags");
 
@@ -81,6 +90,16 @@ static llvm::cl::list<std::string>
     clSharedLibs("shared-libs", llvm::cl::desc("Libraries to link dynamically"),
                  llvm::cl::ZeroOrMore, llvm::cl::MiscFlags::CommaSeparated,
                  llvm::cl::cat(clOptionsCategory));
+
+// Timer based on gettimeofday.
+// TODO: replace with an existing LLVM utility if appropriate.
+static double rtclock() {
+  struct timeval Tp;
+  int stat = gettimeofday(&Tp, NULL);
+  if (stat != 0)
+    printf("Error return from gettimeofday: %d", stat);
+  return (Tp.tv_sec + Tp.tv_usec * 1.0e-6);
+}
 
 // CLI variables for debugging.
 static llvm::cl::opt<bool> dumpObjectFile(
@@ -139,6 +158,8 @@ static Error
 compileAndExecute(ModuleOp module, StringRef entryPoint,
                   std::function<llvm::Error(llvm::Module *)> transformer,
                   void **args) {
+  // Record start time for compilation.
+  double tStart = rtclock();
   Optional<llvm::CodeGenOpt::Level> jitCodeGenOptLevel;
   if (auto clOptLevel = getCommandLineOptLevel())
     jitCodeGenOptLevel =
@@ -146,6 +167,13 @@ compileAndExecute(ModuleOp module, StringRef entryPoint,
   SmallVector<StringRef, 4> libs(clSharedLibs.begin(), clSharedLibs.end());
   auto expectedEngine = mlir::ExecutionEngine::create(module, transformer,
                                                       jitCodeGenOptLevel, libs);
+  double tLapsed = rtclock() - tStart;
+  if (clTime) {
+    std::stringstream msg;
+    msg << std::setprecision(6) << "Compilation time: " << tLapsed << "s\n";
+    llvm::errs() << msg.str();
+  }
+
   if (!expectedEngine)
     return expectedEngine.takeError();
 
@@ -159,7 +187,17 @@ compileAndExecute(ModuleOp module, StringRef entryPoint,
                                                     : objectFilename);
 
   void (*fptr)(void **) = *expectedFPtr;
-  (*fptr)(args);
+
+  tStart = rtclock();
+  for (unsigned i = 0; i < clReps; ++i)
+    (*fptr)(args);
+  tLapsed = rtclock() - tStart;
+  if (clTime) {
+    std::stringstream msg;
+    msg << std::setprecision(6)
+        << "Total execution time: " << tLapsed << "s\n";
+    llvm::errs() << msg.str();
+  }
 
   return Error::success();
 }

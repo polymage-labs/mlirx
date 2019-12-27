@@ -35,7 +35,10 @@ std::unique_ptr<Pass> createCSEPass();
 /// Creates a pass to vectorize loops, operations and data types using a
 /// target-independent, n-D super-vector abstraction.
 std::unique_ptr<OpPassBase<FuncOp>>
-createVectorizePass(ArrayRef<int64_t> virtualVectorSize);
+createSuperVectorizePass(ArrayRef<int64_t> virtualVectorSize);
+
+/// Creates a pass to vectorize affine loops (the new one).
+std::unique_ptr<OpPassBase<FuncOp>> createAffineVectorizePass();
 
 /// Creates a pass to allow independent testing of vectorizer functionality with
 /// FileCheck.
@@ -113,9 +116,13 @@ std::unique_ptr<OpPassBase<FuncOp>> createAffineDataCopyGenerationPass(
     unsigned tagMemorySpace = 0, int minDmaTransferSize = 1024,
     uint64_t fastMemCapacityBytes = std::numeric_limits<uint64_t>::max());
 
+/// Creates a pass that performs high order polyhedral optimization.
+std::unique_ptr<OpPassBase<FuncOp>> createHigherOrderPolyhedralOptPass();
+
 /// Creates a pass to perform optimizations relying on memref dataflow such as
-/// store to load forwarding, elimination of dead stores, and dead allocs.
-std::unique_ptr<OpPassBase<FuncOp>> createMemRefDataFlowOptPass();
+/// store to load forwarding, scalar replacement of memref accesses, elimination
+/// of dead stores, and dead allocs.
+std::unique_ptr<OpPassBase<FuncOp>> createAffineScalarReplacementPass();
 
 /// Creates a pass to strip debug information from a function.
 std::unique_ptr<OpPassBase<FuncOp>> createStripDebugInfoPass();

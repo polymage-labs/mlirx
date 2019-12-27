@@ -15,6 +15,7 @@
 #ifndef MLIR_TRANSFORMS_LOOP_UTILS_H
 #define MLIR_TRANSFORMS_LOOP_UTILS_H
 
+#include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Block.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
@@ -148,6 +149,13 @@ Loops tile(ArrayRef<loop::ForOp> forOps, ArrayRef<Value> sizes,
 /// Returns the newly created intra-tile loops.
 Loops tilePerfectlyNested(loop::ForOp rootForOp, ArrayRef<Value> sizes);
 
+/// Replaces affine load and store accesses on memref's in `forOp' with accesses
+/// to a scalar or a single element memref in the case of loop passthroughs
+/// (scalars that are live out of a loop). Load/store accesses that are loop
+/// invariant are hoisted out of the loop when that's valid.
+//  TODO: This currently works only on innermost affine for op's.
+void scalarReplace(AffineForOp forOp);
+
 /// Explicit copy / DMA generation options for mlir::affineDataCopyGenerate.
 struct AffineCopyOptions {
   // True if DMAs should be generated instead of point-wise copies.
@@ -160,6 +168,11 @@ struct AffineCopyOptions {
   unsigned tagMemorySpace;
   // Capacity of the fast memory space in bytes.
   uint64_t fastMemCapacityBytes;
+  // Fast buffer data layout remap (for pointwise copying only, i.e., with
+  // generateDma = false). If specified, indices are remapped using it to
+  // generate new indices, effectively enforcing a new layout; row major
+  // layout is unsed if left unspecified.
+  AffineMap fastBufferLayout;
 };
 
 /// Performs explicit copying for the contiguous sequence of operations in the
@@ -174,7 +187,9 @@ struct AffineCopyOptions {
 /// processing this block range.
 uint64_t affineDataCopyGenerate(Block::iterator begin, Block::iterator end,
                                 const AffineCopyOptions &copyOptions,
-                                DenseSet<Operation *> &copyNests);
+                                Optional<Value *> filterMemRef,
+                                DenseSet<Operation *> &copyNests,
+                                SmallVectorImpl<Value *> *fastBufs = nullptr);
 
 /// Tile a nest of standard for loops rooted at `rootForOp` by finding such
 /// parametric tile sizes that the outer loops have a fixed number of iterations
@@ -186,6 +201,11 @@ TileLoops extractFixedOuterLoops(loop::ForOp rootFOrOp,
 /// `loops` contains a list of perfectly nested loops with bounds and steps
 /// independent of any loop induction variable involved in the nest.
 void coalesceLoops(MutableArrayRef<loop::ForOp> loops);
+
+/// Vectorizes a loop (either outer or inner, with a perfect or imperfectly
+/// nested body).
+LogicalResult loopVectorize(AffineForOp forOp,
+                            DenseMap<Value *, Value *> *vecMemRefs = nullptr);
 
 /// Maps `forOp` for execution on a parallel grid of virtual `processorIds` of
 /// size given by `numProcessors`. This is achieved by embedding the SSA values

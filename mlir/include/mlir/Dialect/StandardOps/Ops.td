@@ -213,6 +213,76 @@ def AllocOp : Std_Op<"alloc"> {
   let hasCanonicalizer = 1;
 }
 
+def AllocaOp : Std_Op<"alloca"> {
+  let summary = "stack memory allocation operation";
+  let description = [{
+    The "alloca" operation allocates a region of memory, as specified by its
+    memref type. For example:
+
+      %0 = alloca() : memref<8x64xf32, (d0, d1) -> (d0, d1), 1>
+
+    The optional list of dimension operands are bound to the dynamic dimensions
+    specified in its memref type. In the example below, the ssa value '%d' is
+    bound to the second dimension of the memref (which is dynamic).
+
+      %0 = alloca(%d) : memref<8x?xf32, (d0, d1) -> (d0, d1), 1>
+
+    The optional list of symbol operands are bound to the symbols of the
+    memrefs affine map. In the example below, the ssa value '%s' is bound to
+    the symbol 's0' in the affine map specified in the allocs memref type.
+
+      %0 = alloca()[%s] : memref<8x64xf32, (d0, d1)[s0] -> ((d0 + s0), d1), 1>
+
+    This operation returns a single ssa value of memref type, which can be used
+    by subsequent load and store operations.
+  }];
+
+  let arguments = (ins Variadic<Index>:$value,
+                   Confined<OptionalAttr<I32Attr>,
+                     [IntMinValue<0>]>:$alignment);
+  let results = (outs AnyMemRef);
+
+  let builders = [OpBuilder<
+    "Builder *builder, OperationState &result, MemRefType memrefType, "
+    "unsigned alignment = 0", [{
+       result.types.push_back(memrefType);
+       if (alignment != 0) {
+         auto alignmentAttr = builder->getI32IntegerAttr(alignment);
+         result.addAttribute(getAlignmentAttrName(), alignmentAttr);
+       }
+     }]>,
+    OpBuilder<
+    "Builder *builder, OperationState &result, MemRefType memrefType, " #
+    "ArrayRef<Value*> operands, IntegerAttr alignment = IntegerAttr()", [{
+       result.addOperands(operands);
+       result.types.push_back(memrefType);
+       if (alignment)
+         result.addAttribute(getAlignmentAttrName(), alignment);
+     }]>];
+
+  let extraClassDeclaration = [{
+    static StringRef getAlignmentAttrName() { return "alignment"; }
+
+    MemRefType getType() { return getResult()->getType().cast<MemRefType>(); }
+
+    /// Returns the number of symbolic operands (the ones in square brackets),
+    /// which bind to the symbols of the memref's layout map.
+    unsigned getNumSymbolicOperands() {
+      return getNumOperands() - getType().getNumDynamicDims();
+    }
+
+    /// Returns the symbolic operands (the ones in square brackets), which bind
+    /// to the symbols of the memref's layout map.
+    operand_range getSymbolicOperands() {
+      return {operand_begin() + getType().getNumDynamicDims(), operand_end()};
+    }
+
+    /// Returns the dynamic sizes for this alloc operation if specified.
+    operand_range getDynamicSizes() { return getOperands(); }
+  }];
+}
+
+
 def AndOp : IntArithmeticOp<"and", [Commutative]> {
   let summary = "integer binary and";
   let hasFolder = 1;
@@ -891,6 +961,30 @@ def MemRefCastOp : CastOp<"memref_cast"> {
 
     /// The result of a memref_cast is always a memref.
     Type getType() { return getResult()->getType(); }
+  }];
+}
+
+def MemRefShapeCastOp : CastOp<"memref_shape_cast"> {
+  let summary = "memref shape cast operation";
+  let description = [{
+    The "memref_shape_cast" operation converts a memref from one type to
+    another memref type with a shape containing the same number of elements,
+    when also counting elements of shaped elemental type.
+
+   %1 = memref_shape_cast %0 : memref<64x16xf32> to memref<64x2xvector<8xf32>>
+   %3 = memref_shape_cast %2 : memref<64x16xf32> to memref<32x32xf32>
+  }];
+
+  let arguments = (ins AnyStaticShapeMemRef:$source);
+  let results = (outs AnyStaticShapeMemRef);
+
+  let extraClassDeclaration = [{
+    /// Return true if `a` and `b` are valid operand and result pairs for
+    /// the operation.
+    static bool areCastCompatible(Type a, Type b);
+
+    /// The result of a memref_shape_cast is always a memref.
+    MemRefType getType() { return getResult()->getType().cast<MemRefType>(); }
   }];
 }
 

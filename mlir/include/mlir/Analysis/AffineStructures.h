@@ -27,7 +27,6 @@ class AffineForOp;
 class IntegerSet;
 class MLIRContext;
 class Value;
-class HyperRectangularSet;
 class MemRefType;
 
 /// A mutable affine map. Its affine expressions are however unique.
@@ -234,8 +233,8 @@ public:
   /// of constraints and identifiers..
   FlatAffineConstraints(unsigned numReservedInequalities,
                         unsigned numReservedEqualities,
-                        unsigned numReservedCols, unsigned numDims = 0,
-                        unsigned numSymbols = 0, unsigned numLocals = 0,
+                        unsigned numReservedCols, unsigned numDims,
+                        unsigned numSymbols, unsigned numLocals = 0,
                         ArrayRef<Optional<Value>> idArgs = {})
       : numReservedCols(numReservedCols), numDims(numDims),
         numSymbols(numSymbols) {
@@ -251,9 +250,11 @@ public:
       ids.append(idArgs.begin(), idArgs.end());
   }
 
+  FlatAffineConstraints() : FlatAffineConstraints(0, 0) {}
+
   /// Constructs a constraint system with the specified number of
   /// dimensions and symbols.
-  FlatAffineConstraints(unsigned numDims = 0, unsigned numSymbols = 0,
+  FlatAffineConstraints(unsigned numDims, unsigned numSymbols,
                         unsigned numLocals = 0,
                         ArrayRef<Optional<Value>> idArgs = {})
       : numReservedCols(numDims + numSymbols + numLocals + 1), numDims(numDims),
@@ -268,13 +269,11 @@ public:
       ids.append(idArgs.begin(), idArgs.end());
   }
 
-  explicit FlatAffineConstraints(const HyperRectangularSet &set);
-
   /// Create a flat affine constraint system from an AffineValueMap or a list of
-  /// these. The constructed system will only include equalities.
-  // TODO(bondhugula)
+  /// these. The constructed system will only include equalities corresponding
+  /// to the map's results and other constraints connecting dimensions and
+  /// symbols to local variables if any.
   explicit FlatAffineConstraints(const AffineValueMap &avm);
-  explicit FlatAffineConstraints(ArrayRef<const AffineValueMap *> avmRef);
 
   /// Creates an affine constraint system from an IntegerSet.
   explicit FlatAffineConstraints(IntegerSet set);
@@ -786,10 +785,10 @@ AffineExpr simplifyAffineExpr(AffineExpr expr, unsigned numDims,
 /// 'cst' contains constraints that connect newly introduced local identifiers
 /// to existing dimensional and symbolic identifiers. See documentation for
 /// AffineExprFlattener on how mod's and div's are flattened.
-LogicalResult getFlattenedAffineExpr(AffineExpr expr, unsigned numDims,
-                                     unsigned numSymbols,
-                                     SmallVectorImpl<int64_t> *flattenedExpr,
-                                     FlatAffineConstraints *cst = nullptr);
+LogicalResult
+getFlattenedAffineExpr(AffineExpr expr, unsigned numDims, unsigned numSymbols,
+                       SmallVectorImpl<int64_t> *flattenedExpr,
+                       FlatAffineConstraints *cst);
 
 /// Flattens the result expressions of the map to their corresponding flattened
 /// forms and set in 'flattenedExprs'. Returns failure if any expression in the

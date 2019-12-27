@@ -1,4 +1,4 @@
-//===- Vectorize.cpp - Vectorize Pass Impl --------------------------------===//
+//===- Vectorize.cpp - Super Vectorize Pass Impl --------------------------===//
 //
 // Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -524,14 +524,14 @@ using namespace mlir;
 /// Of course, much more intricate n-D imperfectly-nested patterns can be
 /// vectorized too and specified in a fully declarative fashion.
 
-#define DEBUG_TYPE "early-vect"
+#define DEBUG_TYPE "super-vect"
 
 using functional::makePtrDynCaster;
 using functional::map;
 using llvm::dbgs;
 using llvm::SetVector;
 
-static llvm::cl::OptionCategory clOptionsCategory("vectorize options");
+static llvm::cl::OptionCategory clOptionsCategory("super vectorize options");
 
 static llvm::cl::list<int> clVirtualVectorSize(
     "virtual-vector-size",
@@ -1235,6 +1235,7 @@ static LogicalResult vectorizeRootMatch(NestedMatch m,
 /// predetermined patterns.
 void Vectorize::runOnFunction() {
   FuncOp f = getFunction();
+
   if (!fastestVaryingPattern.empty() &&
       fastestVaryingPattern.size() != vectorSizes.size()) {
     f.emitRemark("Fastest varying pattern specified with different size than "
@@ -1283,10 +1284,10 @@ void Vectorize::runOnFunction() {
 }
 
 std::unique_ptr<OpPassBase<FuncOp>>
-mlir::createVectorizePass(ArrayRef<int64_t> virtualVectorSize) {
+mlir::createSuperVectorizePass(ArrayRef<int64_t> virtualVectorSize) {
   return std::make_unique<Vectorize>(virtualVectorSize);
 }
 
 static PassRegistration<Vectorize>
-    pass("affine-vectorize",
+    pass("affine-super-vectorize",
          "Vectorize to a target independent n-D vector abstraction");
