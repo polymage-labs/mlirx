@@ -2119,7 +2119,7 @@ static Value createVectorMemRef(Value scalMemRef, unsigned vectorWidth) {
   if (auto *defOp = scalMemRef->getDefiningOp())
     b.setInsertionPointAfter(defOp);
   else
-    b.setInsertionPointToStart(cast<BlockArgument>(scalMemRef)->getOwner());
+    b.setInsertionPointToStart(scalMemRef.cast<BlockArgument>()->getOwner());
 
   auto vecMemRefEltType =
       getVectorizedType(scalMemRefType.getElementType(), vectorWidth);
@@ -2371,7 +2371,7 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
       loc = defOp->getLoc();
       rewriter.setInsertionPointAfter(defOp);
     } else {
-      auto *block = cast<BlockArgument>(scalar)->getOwner();
+      auto *block = scalar.cast<BlockArgument>()->getOwner();
       loc = block->getParentOp()->getLoc();
       rewriter.setInsertionPointToStart(block);
     }
