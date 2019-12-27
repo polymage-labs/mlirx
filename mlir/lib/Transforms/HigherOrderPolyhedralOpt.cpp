@@ -130,7 +130,7 @@ void HigherOrderPolyhedralOpt::optimizeMatmul(AffineForOp rootMatmulNest,
                                               unsigned K_C, unsigned M_R,
                                               unsigned N_R, unsigned K_U,
                                               OpBuilder &builder) {
-  Value *outputMemRef = NULL, *lhsMemRef = NULL, *rhsMemRef = NULL;
+  Value outputMemRef, lhsMemRef, rhsMemRef;
   // Identify the LHS, RHS, and output memrefs.
   rootMatmulNest.walk(
       [&](AffineStoreOp storeOp) { outputMemRef = storeOp.getMemRef(); });
@@ -177,8 +177,8 @@ void HigherOrderPolyhedralOpt::optimizeMatmul(AffineForOp rootMatmulNest,
            .cast<MemRefType>()
            .getElementType()
            .isa<VectorType>()) {
-    DenseMap<Value *, Value *> vecMemRefMap;
-    if (succeeded(loopVectorize(jjR, &vecMemRefMap))) {
+    DenseMap<Value, Value> vecMemRefMap;
+    if (succeeded(loopVectorize(jjR, /*simdWidth=*/256, &vecMemRefMap))) {
       assert(vecMemRefMap.count(rhsMemRef) > 0 && "rhs vec memref not found");
       assert(vecMemRefMap.count(outputMemRef) > 0 &&
              "output vec memref not found");
@@ -188,7 +188,7 @@ void HigherOrderPolyhedralOpt::optimizeMatmul(AffineForOp rootMatmulNest,
     }
   }
 
-  Value *lhsBuf, *rhsL3Buf, *rhsL1Buf;
+  Value lhsBuf, rhsL3Buf, rhsL1Buf;
 
   // Packing.
   if (clCopy) {
@@ -204,7 +204,7 @@ void HigherOrderPolyhedralOpt::optimizeMatmul(AffineForOp rootMatmulNest,
     auto d1 = builder.getAffineDimExpr(1);
     SmallVector<AffineExpr, 4> bufRemapExprs = {d0.floorDiv(M_R), d1, d0 % M_R};
     copyOptions.fastBufferLayout = AffineMap();
-    SmallVector<Value *, 1> fastBuf;
+    SmallVector<Value, 1> fastBuf;
     DenseSet<Operation *> copyNests;
     affineDataCopyGenerate(iC.getBody()->begin(),
                            std::prev(iC.getBody()->end()), copyOptions,

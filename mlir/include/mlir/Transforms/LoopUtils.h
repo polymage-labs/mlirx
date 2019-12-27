@@ -187,9 +187,9 @@ struct AffineCopyOptions {
 /// processing this block range.
 uint64_t affineDataCopyGenerate(Block::iterator begin, Block::iterator end,
                                 const AffineCopyOptions &copyOptions,
-                                Optional<Value *> filterMemRef,
+                                Optional<Value> filterMemRef,
                                 DenseSet<Operation *> &copyNests,
-                                SmallVectorImpl<Value *> *fastBufs = nullptr);
+                                SmallVectorImpl<Value> *fastBufs = nullptr);
 
 /// Tile a nest of standard for loops rooted at `rootForOp` by finding such
 /// parametric tile sizes that the outer loops have a fixed number of iterations
@@ -205,7 +205,8 @@ void coalesceLoops(MutableArrayRef<loop::ForOp> loops);
 /// Vectorizes a loop (either outer or inner, with a perfect or imperfectly
 /// nested body).
 LogicalResult loopVectorize(AffineForOp forOp,
-                            DenseMap<Value *, Value *> *vecMemRefs = nullptr);
+                            unsigned simdWidth,
+                            DenseMap<Value, Value> *vecMemRefs = nullptr);
 
 /// Maps `forOp` for execution on a parallel grid of virtual `processorIds` of
 /// size given by `numProcessors`. This is achieved by embedding the SSA values
