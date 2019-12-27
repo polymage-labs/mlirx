@@ -113,6 +113,8 @@ AffineMap AffineMap::getPermutationMap(ArrayRef<unsigned> permutation,
 
 AffineMap AffineMap::getMultiDimIdentityMap(unsigned numDims,
                                             MLIRContext *context) {
+  if (numDims == 0)
+    return get(context);
   SmallVector<AffineExpr, 4> dimExprs;
   dimExprs.reserve(numDims);
   for (unsigned i = 0; i < numDims; ++i)

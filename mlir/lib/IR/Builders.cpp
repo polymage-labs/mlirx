@@ -266,6 +266,8 @@ AffineMap Builder::getDimIdentityMap() {
 }
 
 AffineMap Builder::getMultiDimIdentityMap(unsigned rank) {
+  if (rank == 0)
+    return AffineMap::get(getContext());
   SmallVector<AffineExpr, 4> dimExprs;
   dimExprs.reserve(rank);
   for (unsigned i = 0; i < rank; ++i)
