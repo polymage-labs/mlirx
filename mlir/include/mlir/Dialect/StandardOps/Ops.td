@@ -253,7 +253,7 @@ def AllocaOp : Std_Op<"alloca"> {
      }]>,
     OpBuilder<
     "Builder *builder, OperationState &result, MemRefType memrefType, " #
-    "ArrayRef<Value*> operands, IntegerAttr alignment = IntegerAttr()", [{
+    "ArrayRef<Value> operands, IntegerAttr alignment = IntegerAttr()", [{
        result.addOperands(operands);
        result.types.push_back(memrefType);
        if (alignment)
@@ -281,7 +281,6 @@ def AllocaOp : Std_Op<"alloca"> {
     operand_range getDynamicSizes() { return getOperands(); }
   }];
 }
-
 
 def AndOp : IntArithmeticOp<"and", [Commutative]> {
   let summary = "integer binary and";

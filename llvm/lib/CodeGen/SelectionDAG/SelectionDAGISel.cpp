@@ -311,8 +311,9 @@ SelectionDAGISel::SelectionDAGISel(TargetMachine &tm, CodeGenOpt::Level OL)
     : MachineFunctionPass(ID), TM(tm), FuncInfo(new FunctionLoweringInfo()),
       SwiftError(new SwiftErrorValueTracking()),
       CurDAG(new SelectionDAG(tm, OL)),
-      SDB(new SelectionDAGBuilder(*CurDAG, *FuncInfo, *SwiftError, OL)), AA(),
-      GFI(), OptLevel(OL), DAGSize(0) {
+      SDB(std::make_unique<SelectionDAGBuilder>(*CurDAG, *FuncInfo, *SwiftError,
+                                                OL)),
+      AA(), GFI(), OptLevel(OL), DAGSize(0) {
   initializeGCModuleInfoPass(*PassRegistry::getPassRegistry());
   initializeBranchProbabilityInfoWrapperPassPass(
       *PassRegistry::getPassRegistry());
@@ -321,9 +322,7 @@ SelectionDAGISel::SelectionDAGISel(TargetMachine &tm, CodeGenOpt::Level OL)
 }
 
 SelectionDAGISel::~SelectionDAGISel() {
-  delete SDB;
   delete CurDAG;
-  delete FuncInfo;
   delete SwiftError;
 }
 
@@ -738,23 +737,20 @@ void SelectionDAGISel::SelectBasicBlock(BasicBlock::const_iterator Begin,
 }
 
 void SelectionDAGISel::ComputeLiveOutVRegInfo() {
-  SmallPtrSet<SDNode*, 16> VisitedNodes;
+  SmallPtrSet<SDNode *, 16> Added;
   SmallVector<SDNode*, 128> Worklist;
 
   Worklist.push_back(CurDAG->getRoot().getNode());
+  Added.insert(CurDAG->getRoot().getNode());
 
   KnownBits Known;
 
   do {
     SDNode *N = Worklist.pop_back_val();
 
-    // If we've already seen this node, ignore it.
-    if (!VisitedNodes.insert(N).second)
-      continue;
-
     // Otherwise, add all chain operands to the worklist.
     for (const SDValue &Op : N->op_values())
-      if (Op.getValueType() == MVT::Other)
+      if (Op.getValueType() == MVT::Other && Added.insert(Op.getNode()).second)
         Worklist.push_back(Op.getNode());
 
     // If this is a CopyToReg with a vreg dest, process it.
@@ -1303,20 +1299,20 @@ bool SelectionDAGISel::PrepareEHLandingPad() {
 /// side-effect free and is either dead or folded into a generated instruction.
 /// Return false if it needs to be emitted.
 static bool isFoldedOrDeadInstruction(const Instruction *I,
-                                      FunctionLoweringInfo *FuncInfo) {
+                                      const FunctionLoweringInfo &FuncInfo) {
   return !I->mayWriteToMemory() && // Side-effecting instructions aren't folded.
          !I->isTerminator() &&     // Terminators aren't folded.
-         !isa<DbgInfoIntrinsic>(I) &&  // Debug instructions aren't folded.
-         !I->isEHPad() &&              // EH pad instructions aren't folded.
-         !FuncInfo->isExportedInst(I); // Exported instrs must be computed.
+         !isa<DbgInfoIntrinsic>(I) && // Debug instructions aren't folded.
+         !I->isEHPad() &&             // EH pad instructions aren't folded.
+         !FuncInfo.isExportedInst(I); // Exported instrs must be computed.
 }
 
 /// Collect llvm.dbg.declare information. This is done after argument lowering
 /// in case the declarations refer to arguments.
-static void processDbgDeclares(FunctionLoweringInfo *FuncInfo) {
-  MachineFunction *MF = FuncInfo->MF;
+static void processDbgDeclares(FunctionLoweringInfo &FuncInfo) {
+  MachineFunction *MF = FuncInfo.MF;
   const DataLayout &DL = MF->getDataLayout();
-  for (const BasicBlock &BB : *FuncInfo->Fn) {
+  for (const BasicBlock &BB : *FuncInfo.Fn) {
     for (const Instruction &I : BB) {
       const DbgDeclareInst *DI = dyn_cast<DbgDeclareInst>(&I);
       if (!DI)
@@ -1338,11 +1334,11 @@ static void processDbgDeclares(FunctionLoweringInfo *FuncInfo) {
       // intrinsic and handle this during isel like dbg.value.
       int FI = std::numeric_limits<int>::max();
       if (const auto *AI = dyn_cast<AllocaInst>(Address)) {
-        auto SI = FuncInfo->StaticAllocaMap.find(AI);
-        if (SI != FuncInfo->StaticAllocaMap.end())
+        auto SI = FuncInfo.StaticAllocaMap.find(AI);
+        if (SI != FuncInfo.StaticAllocaMap.end())
           FI = SI->second;
       } else if (const auto *Arg = dyn_cast<Argument>(Address))
-        FI = FuncInfo->getArgumentFrameIndex(Arg);
+        FI = FuncInfo.getArgumentFrameIndex(Arg);
 
       if (FI == std::numeric_limits<int>::max())
         continue;
@@ -1376,7 +1372,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
   FuncInfo->MBB = FuncInfo->MBBMap[&Fn.getEntryBlock()];
   FuncInfo->InsertPt = FuncInfo->MBB->begin();
 
-  CurDAG->setFunctionLoweringInfo(FuncInfo);
+  CurDAG->setFunctionLoweringInfo(FuncInfo.get());
 
   if (!FastIS) {
     LowerArguments(Fn);
@@ -1416,7 +1412,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
   if (FastIS && Inserted)
     FastIS->setLastLocalValue(&*std::prev(FuncInfo->InsertPt));
 
-  processDbgDeclares(FuncInfo);
+  processDbgDeclares(*FuncInfo);
 
   // Iterate over all basic blocks in the function.
   StackProtector &SP = getAnalysis<StackProtector>();
@@ -1476,7 +1472,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
         const Instruction *Inst = &*std::prev(BI);
 
         // If we no longer require this instruction, skip it.
-        if (isFoldedOrDeadInstruction(Inst, FuncInfo) ||
+        if (isFoldedOrDeadInstruction(Inst, *FuncInfo) ||
             ElidedArgCopyInstrs.count(Inst)) {
           --NumFastIselRemaining;
           continue;
@@ -1496,7 +1492,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
           const Instruction *BeforeInst = Inst;
           while (BeforeInst != &*Begin) {
             BeforeInst = &*std::prev(BasicBlock::const_iterator(BeforeInst));
-            if (!isFoldedOrDeadInstruction(BeforeInst, FuncInfo))
+            if (!isFoldedOrDeadInstruction(BeforeInst, *FuncInfo))
               break;
           }
           if (BeforeInst != Inst && isa<LoadInst>(BeforeInst) &&
