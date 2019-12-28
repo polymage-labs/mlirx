@@ -15,26 +15,26 @@ developed libraries in a more modular, reusable, and automatable way.
 
 ## Background, Motivation, and Setup
 
-It is well-known that some of the most crucial routines that drive the
+It is well-known that the computationally demanding routines driving the
 state-of-the-art in domains such as dense linear algebra and deep learning are
-all based on carefully hand-optimized and tuned libraries but with a lot of
-engineering effort and insights over time. The techniques necessary and the
-level of attention that has to be paid optimizing for an architecture makes it
-often inaccessible to those without a deep knowledge of low level interactions
-with architecture and code optimization. In many cases, the best performing code
-comes from the hardware vendors itself. Yet, fortunately, there are published
-works such as those of [\[Goto and Van de Geijn 2008\]](
-https://dl.acm.org/citation.cfm?id=1356053) that have described in great detail
-how such close to peak performance could be obtained.  Subsequent
-[works](https://dl.acm.org/citation.cfm?id=2764454) made the process more
-modular, reusable, and accessible to a wider audience, having translated to an
-open-source project [FLAME/BLIS](https://github.com/flame/blis).
+all based on carefully hand-optimized and tuned libraries developed with
+significant engineering effort and insights over time. The techniques and the
+level of attention necessary to optimize for near-peak performance on a target
+architecture makes the process often inaccessible to those without a deep
+knowledge of code optimization and low-level interactions with hardware.  In
+many cases, the best performing code comes from the hardware vendors themselves.
+Yet, fortunately, there are published works such as those of [\[Goto and Van de
+Geijn 2008\]]( https://dl.acm.org/citation.cfm?id=1356053) that have described
+in great detail how such close to peak performance could be obtained.
+Subsequent [works](https://dl.acm.org/citation.cfm?id=2764454) made the process
+more modular, reusable, and accessible to a wider audience, having translated to
+an open-source project [FLAME/BLIS](https://github.com/flame/blis).
 
 This tutorial alludes to the fact that this process could potentially be made
 even more modular, automatable and systematic --- by hosting it on top of a real
 compiler IR that has the necessary abstractions and infrastructure. This
 completely avoids the need to write any code by hand --- be it C or inline
-assembly.  The IR infrastructure that will be used here is of course,
+assembly. The IR infrastructure that will be used here is of course,
 [MLIR](https://github.com/tensorflow/mlir), and we will try to recreate the
 OpenBLAS/BLIS' optimization approach in a compiler-oriented way using MLIR.
 
