@@ -207,7 +207,7 @@ from the
 [LinAlg](https://github.com/llvm/llvm-project/tree/master/mlir/include/mlir/Dialect/Linalg)
 dialect to initialize matrices. The rest like (addf, mulf, alloc) are all ops
 from MLIR's [standard
-dialect](https://github.com/llvm-project/llvm/tree/master/mlir/docs/Dialects/Standard.md).
+dialect](https://github.com/llvm/llvm-project/tree/master/mlir/docs/Dialects/Standard.md).
 
 ### Memref
 
@@ -975,7 +975,7 @@ semantically correct code.
 
 For Part I of this tutorial, we'll see that this layout is only needed for an
 experiment later ([Outer MLIR + inner
-BLIS](map-to-blis-micro-kernel-outer-mlir-inner-blis) further below. We'll now
+BLIS](#map-to-blis-micro-kernel-outer-mlir-inner-blis) further below. We'll now
 get back to adjusting parameters to go full throttle.
 
 ### Tweaking M_C, K_C, M_R, N_R to maximize reuse
