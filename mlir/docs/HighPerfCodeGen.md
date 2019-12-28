@@ -266,10 +266,10 @@ sets](https://github.com/llvm/llvm-project/tree/master/mlir/docs/Dialects/Affine
 Such polyhedral attributes could be used to encode powerful information and
 we'll see an example of this later.
 
-For the purpose of this tutorial, we create an -hopt pass that is able to
-expand out hop.matmul into the naive 3-d loop nest shown further above. Let's
-just execute this with MLIR without any optimization to see where we are
-starting our journey from.
+For the purpose of this tutorial, we create an -hopt pass that is able to expand
+out hop.matmul into the naive 3-d loop nest we showed further above. Let's just
+execute this with MLIR without any optimization to see where we are starting our
+journey from.
 
 ```shell
 # This is where we start. No optimizations performed in MLIR besides canonicalization.
@@ -280,8 +280,9 @@ Compilation time: 0.015995s
 This is pretty close to the execution time of `clang -O3' that we saw above,
 which makes sense, but this is equally slow (less than 1% of the machine peak)!
 But we haven't really made use of or run any of the optimization infrastructure
-in MLIR. The -hopt here just lowers this op into the canonical 3-d loop nest
-shown further above, which is then lowered to LLVM.
+in MLIR. The -hopt here just lowers this op into the canonical 3-d loop nest we
+showed further above, which is then lowered to LLVM and goes through the same
+LLVM -O3 pipeline that clang went through.
 
 ### Tiling for caches: OpenBLAS/BLIS tiling as a polyhedral schedule
 
@@ -306,20 +307,21 @@ introduction to polyhedral schedules, see
 [here](https://www.csa.iisc.ac.in/~udayb/slides/uday-polyhedral-opt.pdf) or the
 material on [polyhedral.info](https://polyhedral.info). In particular, the
 tiling and corresponding intra-tile loop orders used in the OpenBLAS/BLIS
-approach can be expressed as the following polyhedral schedule:
+approach can be expressed as the following polyhedral schedule (a
+multi-dimensional affine map / transformation),
 
 ```
-(i, j, k) -> (j / N_C, k / K_C, i / M_C, j / N_R, i / M_R, k mod K_C, j mod N_R, i mod M_R)
+(i, j, k) -> (j / N_C, k / K_C, i / M_C, j / N_R, i / M_R, k mod K_C, j mod N_R, i mod M_R),
 ```
-The innermost two loops after applying the above schedule are meant to be fully
-unrolled leading to an M_R x N_R loop body. Ignoring the last level of tiling
-(for the L3 cache), this becomes:
+where '/' is a floor division. The innermost two loops after applying the above
+schedule are meant to be fully unrolled leading to an M_R x N_R loop body.
+Ignoring the last level of tiling (for the L3 cache), this becomes:
 ```
 (i, j, k) -> (k / K_C, i / M_C, j / N_R, i / M_R, k mod K_C, j mod N_R, i mod M_R)
 ```
 
-The following from the BLIS works (source in caption) is a great illustration of
-its optimization strategy.
+The following figure from the BLIS works (source in caption) is a great
+illustration of its optimization strategy.
 
 <center> <img src="blis-gemm.png" alt="BLIS tiling" width="500"/> <br/>
 
@@ -345,8 +347,8 @@ group or the papers in [References](#References).
 
 ### Tiling in MLIR
 
-There are two ways of achieving this tiling in MLIR; one by calling
-[mlir::tile](https://github.com/llvm/llvm-project/blob/a4b11eba615c87b9253f61d9b66f02839490e12b/include/mlir/Transforms/LoopUtils.h#L139),
+There are two ways of achieving this tiling in MLIR: one by calling
+[mlir::tile](https://github.com/llvm/llvm-project/blob/a4b11eba615c87b9253f61d9b66f02839490e12b/include/mlir/Transforms/LoopUtils.h#L139)
 (which is also what the loop tiling pass in MLIR uses), and then performing the
 desired loop interchange via
 [mlir::interchangeLoops](https://github.com/llvm/llvm-project/tree/master/mlir/lib/Transforms/Utils/LoopUtils.cpp#L510).
@@ -677,7 +679,7 @@ The existing "super vectorizer" in MLIR is really not functional or complete
 for the auto-vectorization we need.  For this article, we build and use a new
 loop vectorizer (enabled by -hopt-vect or via -affine-vectorize when running
 separately). We introduce a new
-[*memref_shape_cast* op](https://github.com/bondhugula/mlir/commit/6a9822933b28aabced2c6ceef593f35c9665d1fe#diff-862f92fedaa626e6221ac920c18a6b8a) which is needed to change the elemental type on a memref.
+[*memref_shape_cast* op](https://github.com/bondhugula/llvm-project/commit/6a9822933b28aabced2c6ceef593f35c9665d1fe#diff-862f92fedaa626e6221ac920c18a6b8a) which is needed to change the elemental type on a memref.
 Here's how the vectorized MLIR looks like if we started with the naive matmul
 nest.
 
@@ -1077,7 +1079,7 @@ are named %ymm[0-15].
      ed7:       c4 42 85 b8 c6                  vfmadd231pd     %ymm14, %ymm15, %ymm8
 ```
 
-This looks as good as we may expect. The output matrix values are always in
+This looks as good as we may expect! The output matrix values are always in
 registers (no spilling). There are aligned loads for the LHS and RHS with high
 reuse at regular intervals. The LHS is being broadcast/splat (vbroadcastsd) and
 the RHS is being moved in via aligned vector loads.
@@ -1087,18 +1089,18 @@ the RHS is being moved in via aligned vector loads.
 % mlir-opt -hopt -hopt-vect -hopt-copy -hopt-unroll -hopt-scalrep -convert-linalg-to-loops -lower-affine -convert-std-to-llvm hopt.mlir | mlir-cpu-runner -O3 -e main -reps=3 -entry-point-result=void -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 Compilation time: 0.039474s
 61.843 GFLOPS
-# Without packing
+# Without packing (but with everything else)
 $ mlir-opt -hopt -hopt-vect -hopt-copy=false -hopt-unroll -hopt-scalrep -convert-linalg-to-loops -lower-affine -convert-std-to-llvm /tmp/hopt.mlir | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=../../../build/lib/libmlir_runner_utils.so,/usr/local/lib/libblis.so
 Compilation time: 0.030535s
 22.5257 GFLOPS
 # A 3x drop in performance just due to the lack of packing, while it was just
 # 1.5x on a code that was not fully optimized.
 #
-# Without unroll-and-jam (but with packing)
+# Without unroll-and-jam (but with packing and everything else)
 $ mlir-opt -hopt -hopt-vect -hopt-copy -hopt-unroll=false -hopt-scalrep -linalg-lower-to-loops -linalg-convert-to-llvm -convert-linalg-to-loops -lower-affine -convert-std-to-llvm /tmp/hopt.mlir | mlir-cpu-runner -O3 -reps=5 -e main -entry-point-result=void -shared-libs=../../../build/lib/libmlir_runner_utils.so,/usr/local/lib/libblis.so
 Compilation time: 0.0424139s
 15.5651 GFLOPS
-# Without packing and without unroll-and-jam
+# Without packing and without unroll-and-jam (but with everything else)
 $ mlir-opt -hopt -hopt-vect -hopt-copy=false -hopt-unroll=false -hopt-scalrep -linalg-lower-to-loops -linalg-convert-to-llvm -convert-linalg-to-loops -lower-affine -convert-std-to-llvm /tmp/hopt.mlir | mlir-cpu-runner -O3 -reps=5 -e main -entry-point-result=void -shared-libs=../../../build/lib/libmlir_runner_utils.so,/usr/local/lib/libblis.so
 Compilation time: 0.0228369s
 10.785 GFLOPS
@@ -1148,8 +1150,8 @@ Compilation time: 0.038455s
 10.7969 GFLOPS
 ```
 Relying on LLVM to do the scalar replacement doesn't work! We won't again go
-into why. Although the passes in LLVM could be improved here, but this is an
-optimization that MLIR is supposed to perform well esp. in the presence of
+into why. Although the passes in LLVM could be improved here, this is an
+optimization that MLIR is supposed to perform well since it has to do with
 multidimensional subscripts and loops.
 
 ### Map to BLIS micro-kernel: "Outer MLIR, Inner BLIS"
@@ -1171,19 +1173,19 @@ compilers today because many believe that (1) the performance of the
 hand-written inner kernel can't be attained through compiler generated code, (2)
 one shouldn't be subject to the vagaries of a compiler when generating such code
 where even the last ounce of performance should be extracted. Both points are
-debatable.
+debatable, and the issues involved are addressable.
 
 Over here, our experiment is also interesting because it tells us whether the
 remaining difference in performance is coming from the carefully tailored
 instruction selection and schedule used in BLIS' micro-kernel, which the
-compiler (being tasked to deal with the entire world of programs) is unable to
+compiler (having been tasked to deal with the entire world of programs) is unable to
 nail down optimally. Seeing a big difference when we swap out our inner loops
 with the BLIS kernel could be disappointing because it would mean we'll have to
 now get into LLVM to see how we could improve things as one option. OTOH, the
-lack of any significant improvement would be great news for us because we can
-now focus on the macro kernels, code and loops that we have all possible control
+lack of any significant improvement would be great news for us because we could
+then focus on the "macro kernel", code and loops that we have all possible control
 over, to go closer to the peak. It would also be a tribute to all those who have
-worked on the LLVM backends and surrounding infrastructure.
+worked on LLVM backends and surrounding infrastructure.
 
 ![](blis-micro-kernel.png)
 
@@ -1356,7 +1358,7 @@ parameters.
 
 ### SGEMM performance
 
-We can similarly now quickly benchmark SGEMM performance. All that we need to
+We can similarly now benchmark SGEMM performance quickly. All that we need to
 change on the op's operands is an s/f64/f32! In addition, we will just double
 the register tile size N_R from 16 to 32 since two times the number of f32
 elements can be held in a vector register (8 x f32 instead of 4 x f64). We would
@@ -1371,10 +1373,10 @@ double M_C to 348 for the same reason. We thus use this op to generate SGEMM.
 
 ![]( sgemm-perf.svg)
 
-The performance of purely MLIR generated code is within 2% of MKL performance
-here!, and in fact marginally better than OpenBLAS and BLIS. The outer MLIR +
-inner BLIS version here delivers the expected performance, nearly on par with
-pure MLIR here.
+Evaluating this, we find that the performance of purely MLIR generated code is
+within 2% of MKL performance here!, and in fact marginally better than OpenBLAS
+and BLIS. The outer MLIR + inner BLIS version here delivers the expected
+performance, nearly on par with pure MLIR here.
 
 
 ### What about the remaining 9%?
@@ -1446,8 +1448,8 @@ trunk](https://github.com/llvm/llvm-project).  There are some major features tha
 are pending upstream integration (memref_shape_cast op, alloca op, scalar
 replacement, a new vectorization pass/utility, and support for a few packing
 options), but these are available in the *hop* branch at
-https://github.com/bondhugula/mlir.  Please see this
-[README](https://github.com/bondhugula/mlir/blob/hop/benchmark/README.md) there
+https://github.com/bondhugula/llvm-project.  Please see this
+[README](https://github.com/bondhugula/llvm-project/blob/hop/mlir/benchmark/README.md) there
 to run most of the experiments reported herein.
 
 Software versions and setup: Fedora Linux 30 running kernel
