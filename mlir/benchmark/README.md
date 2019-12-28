@@ -1,7 +1,7 @@
 
 This information goes together with this article on high-performance code
 generation in MLIR:
-https://github.com/bondhugula/mlir/blob/hop/g3doc/HighPerfCodeGen.md
+https://github.com/bondhugula/llvm-project/blob/hop/mlir/docs/HighPerfCodeGen.md
 
 ### On running the DGEMM benchmark for experimentation
 
