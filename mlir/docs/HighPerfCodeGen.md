@@ -24,11 +24,11 @@ architecture makes the process often inaccessible to those without a deep
 knowledge of code optimization and low-level interactions with hardware.  In
 many cases, the best performing code comes from the hardware vendors themselves.
 Yet, fortunately, there are published works such as those of [\[Goto and Van de
-Geijn 2008\]]( https://dl.acm.org/citation.cfm?id=1356053) that have described
-in great detail how such close to peak performance could be obtained.
-Subsequent [works](https://dl.acm.org/citation.cfm?id=2764454) made the process
-more modular, reusable, and accessible to a wider audience, having translated to
-an open-source project [FLAME/BLIS](https://github.com/flame/blis).
+Geijn 2008\]](https://dl.acm.org/citation.cfm?id=1356053) that have described in
+great detail how such close to peak performance could be obtained.  Subsequent
+[works](https://dl.acm.org/citation.cfm?id=2764454) made the process more
+modular, reusable, and accessible to a wider audience, having translated to an
+open-source project [FLAME/BLIS](https://github.com/flame/blis).
 
 This tutorial alludes to the fact that this process could potentially be made
 even more modular, automatable and systematic --- by hosting it on top of a real
@@ -288,13 +288,13 @@ shown further above, which is then lowered to LLVM.
 Tiling and blocking has been studied for several decades, and it is now known
 how matrix-matrix multiplication should be tiled for high performance on widely
 used architectures. We are going to use the same cache tiling strategy used in
-OpenBLAS and BLIS. [This scheme](https://dl.acm.org/citation.cfm?id=13560531)
-is a very clever one that carefully tiles for multiple levels of the cache in a
-way that exploits reuse for each of the matrices involved at one level or
-another: the objective is to make sure the vector FMA/add mul pipeline remains full
-and one doesn't wait for loads. It does not blindly tile the nest multiple times
-to exploit reuse for all matrices at L1, L2, and L3, as would most polyhedral
-tools do.
+OpenBLAS and BLIS. [This scheme](https://dl.acm.org/citation.cfm?id=1356053) is
+a very clever one that carefully tiles for multiple levels of the cache in a way
+that exploits reuse for each of the matrices involved at one level or another:
+the objective is to make sure the vector FMA/add mul pipeline remains full and
+one doesn't wait for loads. It does not blindly tile the nest multiple times to
+exploit reuse for all matrices at L1, L2, and L3, as would most polyhedral tools
+do.
 
 There are various ways of describing OpenBLAS's/BLIS' tiling scheme and they are
 explained in excellent detail with illustration in the papers by [Van Zee and
