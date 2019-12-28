@@ -3,11 +3,11 @@
 - Author: [Uday Bondhugula](http://www.csa.iisc.ac.in/~udayb)
 
 This document is primarily a tutorial on using
-[MLIR](https://www.tensorflow.org/mlir) for high-performance code generation. It
+[MLIR](https://mlir.llvm.org) for high-performance code generation. It
 in particular covers
-[memrefs](https://github.com/tensorflow/mlir/blob/master/g3doc/LangRef.md#memref-type),
+[memrefs](https://github.com/llvm/llvm-project/tree/master/mlir/docs/LangRef.md#memref-type),
 the [affine
-dialect](https://github.com/tensorflow/mlir/blob/master/g3doc/Dialects/Affine.md),
+dialect](https://github.com/llvm/llvm-project/tree/master/mlir/docs/Dialects/Affine.md),
 and polyhedral utilities and pass infrastructure surrounding those. As a
 by-product, this document is also meant to show the role compiler infrastructure
 can play in generating code that is competitive with highly tuned manually
@@ -35,7 +35,7 @@ even more modular, automatable and systematic --- by hosting it on top of a real
 compiler IR that has the necessary abstractions and infrastructure. This
 completely avoids the need to write any code by hand --- be it C or inline
 assembly. The IR infrastructure that will be used here is of course,
-[MLIR](https://github.com/tensorflow/mlir), and we will try to recreate the
+[MLIR](https://github.com/llvm/llvm-project), and we will try to recreate the
 OpenBLAS/BLIS' optimization approach in a compiler-oriented way using MLIR.
 
 ### Setup
@@ -199,20 +199,20 @@ func @main() {
 func @print_memref_2d_f64(memref<2048x2048xf64>)
 ```
 
-[affine.for](https://github.com/tensorflow/mlir/blob/master/g3doc/Dialects/Affine.md#affinefor-operation)
+[affine.for](https://github.com/llvm/llvm-project/tree/master/mlir/docs/Dialects/Affine.md#affinefor-operation)
 and
-[affine.load/store](https://github.com/tensorflow/mlir/blob/master/include/mlir/Dialect/AffineOps/AffineOps.h#L398)
+[affine.load/store](https://github.com/llvm/llvm-project/tree/master/mlir/include/mlir/Dialect/AffineOps/AffineOps.h#L398)
 are ops from the Affine dialect used above. The IR above also uses a helper op
 from the
-[LinAlg](https://github.com/tensorflow/mlir/tree/master/include/mlir/Dialect/Linalg)
+[LinAlg](https://github.com/llvm/llvm-project/tree/master/mlir/include/mlir/Dialect/Linalg)
 dialect to initialize matrices. The rest like (addf, mulf, alloc) are all ops
 from MLIR's [standard
-dialect](https://github.com/tensorflow/mlir/tree/master/g3doc/Dialects/Standard.md).
+dialect](https://github.com/llvm-project/llvm/tree/master/mlir/docs/Dialects/Standard.md).
 
 ### Memref
 
 A
-[memref](https://github.com/tensorflow/mlir/blob/master/g3doc/LangRef.md#memref-type)
+[memref](https://github.com/llvm/llvm-project/tree/master/mlir/docs/LangRef.md#memref-type)
 is a reference to the in-memory representation of a tensor value in MLIR.
 Depending on its layout map, it could refer to a potentially non-contiguous
 sub-region of the underlying buffer. All memrefs in the above snippet have the
@@ -231,9 +231,9 @@ adding/creating new ops at the level of abstraction we desire. One way of
 classifying ops or IR in general in MLIR is into high-level, mid-level, and
 low-level, although there isn't a clear distinction and lowering can be
 progressive and you can have a mix. High-level ops operate on
-[tensor](https://github.com/tensorflow/mlir/blob/master/g3doc/LangRef.md#tensor-type)
+[tensor](https://github.com/llvm/llvm-project/tree/master/mlir/docs/LangRef.md#tensor-type)
 and
-[memref](https://github.com/tensorflow/mlir/blob/master/g3doc/LangRef.md#memref-type)
+[memref](https://github.com/llvm/llvm-project/tree/master/mlir/docs/LangRef.md#memref-type)
 types themselves, i.e., their inputs (operands) and results are of that type.
 affine.for and affine.if are mid-level ops -- these have nested blocks (which
 are themselves a list of ops) and a particular structure to them.  Low-level ops
@@ -245,7 +245,7 @@ If one is building a DSL and knows that they need or have a matmul, one could
 just define an op that does the matmul taking memrefs as operands. For the
 purpose of this tutorial, we will create a hop.matmul op.  An operation in MLIR
 has inputs, results, and
-[attributes](https://github.com/tensorflow/mlir/blob/master/g3doc/LangRef.md#attributes)
+[attributes](https://github.com/llvm/llvm-project/tree/master/mlir/docs/LangRef.md#attributes)
 (ones with regions have region arguments as well).
 
 ```mlir
@@ -260,9 +260,9 @@ can be defined only once. In this case, %C will be both read and written by
 this heavy op.  *some_attr* is an attribute of the op, which like with LLVM
 metadata is meant to be a constant of one of the numerous types available
 including some polyhedral types like [affine
-maps](https://github.com/tensorflow/mlir/blob/master/g3doc/Dialects/Affine.md)
+maps](https://github.com/llvm/llvm-project/tree/master/mlir/docs/Dialects/Affine.md)
 and [integer
-sets](https://github.com/tensorflow/mlir/blob/master/g3doc/Dialects/Affine.md#integer-sets).
+sets](https://github.com/llvm/llvm-project/tree/master/mlir/docs/Dialects/Affine.md#integer-sets).
 Such polyhedral attributes could be used to encode powerful information and
 we'll see an example of this later.
 
@@ -346,10 +346,10 @@ group or the papers in [References](#References).
 ### Tiling in MLIR
 
 There are two ways of achieving this tiling in MLIR; one by calling
-[mlir::tile](https://github.com/tensorflow/mlir/blob/a4b11eba615c87b9253f61d9b66f02839490e12b/include/mlir/Transforms/LoopUtils.h#L139),
+[mlir::tile](https://github.com/llvm/llvm-project/blob/a4b11eba615c87b9253f61d9b66f02839490e12b/include/mlir/Transforms/LoopUtils.h#L139),
 (which is also what the loop tiling pass in MLIR uses), and then performing the
 desired loop interchange via
-[mlir::interchangeLoops](https://github.com/tensorflow/mlir/blob/master/lib/Transforms/Utils/LoopUtils.cpp#L510).
+[mlir::interchangeLoops](https://github.com/llvm/llvm-project/tree/master/mlir/lib/Transforms/Utils/LoopUtils.cpp#L510).
 The other is by implementing a higher order polyhedral (HOP) approach based on
 domains and schedules. We use this latter approach here since MLIR's affine
 analysis machinery does not yet have the necessary simplification to get rid of
@@ -357,10 +357,10 @@ certain redundant bounds resulting from tiled code generation in advanced cases.
 The HOP approach depends on an external library,
 [ISL](http://isl.gforge.inria.fr), and we implement this as part of the -hopt
 pass. We express the tiling schedule as an MLIR [affine
-map](https://github.com/tensorflow/mlir/blob/master/g3doc/Dialects/Affine.md#affine-maps)
+map](https://github.com/llvm/llvm-project/tree/master/mlir/docs/Dialects/Affine.md#affine-maps)
 (in fact, any affine schedule could be used), perform the code generation via
 ISL, and convert the ISL AST back to MLIR. We will now use M_C, K_C, M_R, N_R as
-[attributes](https://github.com/tensorflow/mlir/blob/master/g3doc/LangRef.md#attributes)
+[attributes](https://github.com/llvm/llvm-project/tree/master/mlir/docs/LangRef.md#attributes)
 on the hop.matmul op.
 
 ```mlir
@@ -451,9 +451,9 @@ is quite clear for the tiling strategy we are using.
 
 The packing optimization is something that one would really wish a compiler
 performs automatically. MLIR has a pass
-[-affine-data-copy-generate](https://github.com/tensorflow/mlir/blob/master/lib/Transforms/AffineDataCopyGeneration.cpp)
+[-affine-data-copy-generate](https://github.com/llvm/llvm-project/tree/master/mlir/lib/Transforms/AffineDataCopyGeneration.cpp)
 and a utility
-[mlir::affineDataCopyGenerate](https://github.com/tensorflow/mlir/blob/a4b11eba615c87b9253f61d9b66f02839490e12b/include/mlir/Transforms/LoopUtils.h#L186)
+[mlir::affineDataCopyGenerate](https://github.com/llvm/llvm-project/blob/a4b11eba615c87b9253f61d9b66f02839490e12b/include/mlir/Transforms/LoopUtils.h#L186)
 that can perform explicit copying or packing.  The utility can also be called on
 a specific memref to perform the packing at a specific loop depth, and with a
 number of other options (including DMA support).
@@ -470,7 +470,7 @@ in L2, and the RHS in blue will reside in L1.*.
 
 To perform the packing automatically with MLIR, instead of calling the
 -affine-data-copy-generate pass, we will just use the underlying utility
-[mlir::affineDataCopyGenerate](https://github.com/tensorflow/mlir/blob/a4b11eba615c87b9253f61d9b66f02839490e12b/include/mlir/Transforms/LoopUtils.h#L186)
+[mlir::affineDataCopyGenerate](https://github.com/llvm/llvm-project/blob/a4b11eba615c87b9253f61d9b66f02839490e12b/include/mlir/Transforms/LoopUtils.h#L186)
 to place copies at the right depths.  For the purpose of this tutorial, we
 enabled this under the -hopt-copy option.  With -hopt-copy, now the nest looks
 like:
@@ -668,7 +668,7 @@ in LLVM, vector types in MLIR can be multi-dimensional. However, we only need
 turns memrefs of f64 into memrefs of vector of f64 besides transforming
 loops/loop bodies.  A casting op that changes the elemental type of a memref,
 and the [splat
-op](https://github.com/tensorflow/mlir/blob/master/g3doc/Dialects/Standard.md#splat-operation)
+op](https://github.com/llvm/llvm-project/tree/master/mlir/docs/Dialects/Standard.md#splat-operation)
 are also needed here. In more complex cases, the view/subview ops are also
 needed. But for this benchmark, the vectorization needed is quite
 straightforward, and is a simple outer loop vectorization along the j loop.
@@ -892,7 +892,7 @@ memref layouts.
 ### A Quick Detour into Affine Map Layouts
 
 We are going to take a quick detour here to understand how a [memref's layout
-map](https://github.com/tensorflow/mlir/blob/master/g3doc/LangRef.md#memref-type)
+map](https://github.com/llvm/llvm-project/tree/master/mlir/docs/LangRef.md#memref-type)
 works. A memref type has three pieces of information: its shape, a affine
 layout map, and a memory space.
 
@@ -938,7 +938,7 @@ memref<64x256xf64, (d0, d1) -> (d0 floordiv M_R, d1, d0 mod M_R)>
 it yields the desired layout. The rest of the IR does not need a single
 change! The mapping specifies that a (d0, d1) in the logical access space should
 be mapped to (d0 flooridv M_R, d1, d0 mod M_R) in a physical (contiguous) buffer
-of size 16x256x4.  When [mlir::normalizeMemRef](https://github.com/tensorflow/mlir/blob/331c663bd2735699267abcc850897aeaea8433eb/include/mlir/Transforms/Utils.h#L89) runs, it will turn this memref
+of size 16x256x4.  When [mlir::normalizeMemRef](https://github.com/llvm/llvm-project/blob/331c663bd2735699267abcc850897aeaea8433eb/include/mlir/Transforms/Utils.h#L89) runs, it will turn this memref
 into:
 
 ```mlir
@@ -966,9 +966,9 @@ underlying buffer can be expressed for example as:
 memref<126x100xf32, (d0, d1) -> (d0 * 128 + d1 * 2).
 ```
 
-More examples can be found [here](https://github.com/tensorflow/mlir/blob/master/test/Transforms/memref-normalize.mlir).
+More examples can be found [here](https://github.com/llvm/llvm-project/tree/master/mlir/test/Transforms/memref-normalize.mlir).
 
-The copy options supplied to [mlir::affineDataCopyGenerate](https://github.com/tensorflow/mlir/blob/a4b11eba615c87b9253f61d9b66f02839490e12b/include/mlir/Transforms/LoopUtils.h#L186) allows one to choose a
+The copy options supplied to [mlir::affineDataCopyGenerate](https://github.com/llvm/llvm-project/blob/a4b11eba615c87b9253f61d9b66f02839490e12b/include/mlir/Transforms/LoopUtils.h#L186) allows one to choose a
 custom data layout for the buffer (being copied into/from). One can choose any
 layout map as long as it's injective: any injective layout will lead to
 semantically correct code.
@@ -1279,7 +1279,7 @@ affine.for %arg1 = 0 to 4 {
 ```
 
 The hopt_dgemm_blis_kernel function is added to
-[mlir_runtime_utils](https://github.com/tensorflow/mlir/blob/master/test/mlir-cpu-runner/mlir_runner_utils.cpp),
+[mlir_runtime_utils](https://github.com/llvm/llvm-project/tree/master/mlir/test/mlir-cpu-runner/mlir_runner_utils.cpp),
 and just wraps around
 [bli_dgemm_haswell_asm_6x8](https://github.com/flame/blis/blob/b426f9e04e5499c6f9c752e49c33800bfaadda4c/kernels/haswell/3/bli_gemm_haswell_asm_d6x8.c#L926).
 
@@ -1417,7 +1417,7 @@ here. For eg. the best M_C size we used (180) does not divide 2048.
 
 3. We've primarily used the polyhedral passes in MLIR here since the generated
 code at each stage always stays affine.  The [Linalg
-dialect](https://github.com/tensorflow/mlir/blob/master/test/Transforms/memref-normalize.mlir)
+dialect](https://github.com/llvm/llvm-project/tree/master/mlir/test/Transforms/memref-normalize.mlir)
 does not have the utilities to automatically analyze and generate packing code
 for example.  Nearly all passes and utilities used here such as unroll-and-jam,
   scalar replacement, and memref normalization work on affine dialect ops.
@@ -1442,7 +1442,7 @@ like to generalize this approach beyond the domain considered here.
 ## Reproducing these Results
 
 A good part of this tutorial can be reproduced with [MLIR
-trunk](https://github.com/tensorflow/mlir).  There are some major features that
+trunk](https://github.com/llvm/llvm-project).  There are some major features that
 are pending upstream integration (memref_shape_cast op, alloca op, scalar
 replacement, a new vectorization pass/utility, and support for a few packing
 options), but these are available in the *hop* branch at
