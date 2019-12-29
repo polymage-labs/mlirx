@@ -1,7 +1,4 @@
-#K_UB = (d0) -> (480, d0 * -480 + 2048)
-#I_LB = (d0) -> (d0 * 110)
-#I_UB = (d0) -> (696, d0 * 110 + 110)
-
+// Driver for the matmul with initialization and GFLOPS reporting.
 func @main() {
   %A = alloc() : memref<2088x2048xf64>
   // Align %B and %C since these are shape cast to vector types.
@@ -42,20 +39,29 @@ func @main() {
   return
 }
 
+#K_UB = (d0) -> (480, d0 * -480 + 2048)
+#I_LB = (d0) -> (d0 * 110)
+#I_UB = (d0) -> (696, d0 * 110 + 110)
+
+// This is a pre-tiled matmul loop nest matching the OpenBLAS/BLIS
+// tiling strategy with L3 tiling being ignored:
+// (i, j, k) -> (k, i, jj, ii, kk, jjR, iiR)
+// With L3 tiling, this would have been:
+// (i, j, k) -> (j, k, i, jj, ii, kk, jjR, iiR)
 func @matmul_hop(%arg0: memref<2088x2048xf64>, %arg1: memref<2048x2048xf64>, %arg2: memref<2088x2048xf64>) {
   affine.for %k = 0 to 5 {
     affine.for %i = 0 to 7 {
-      affine.for %j = 0 to 128 {
+      affine.for %jj = 0 to 128 {
         affine.for %ii = #I_LB(%i) to min #I_UB(%i) {
           affine.for %kk = 0 to min #K_UB(%k) {
             affine.for %jjR = 0 to 16 {
               affine.for %iiR = 0 to 3 {
                 %0 = affine.load %arg0[%ii * 3 + %iiR, %k * 480 + %kk] : memref<2088x2048xf64>
-                %1 = affine.load %arg1[%k * 480 + %kk, %j * 16 + %jjR] : memref<2048x2048xf64>
-                %2 = affine.load %arg2[%ii * 3 + %iiR, %j * 16 + %jjR] : memref<2088x2048xf64>
+                %1 = affine.load %arg1[%k * 480 + %kk, %jj * 16 + %jjR] : memref<2048x2048xf64>
+                %2 = affine.load %arg2[%ii * 3 + %iiR, %jj * 16 + %jjR] : memref<2088x2048xf64>
                 %3 = mulf %0, %1 : f64
                 %4 = addf %3, %2 : f64
-                affine.store %4, %arg2[%ii * 3 + %iiR, %j * 16 + %jjR] : memref<2088x2048xf64>
+                affine.store %4, %arg2[%ii * 3 + %iiR, %jj * 16 + %jjR] : memref<2088x2048xf64>
               } {poly_codegen_name = "iiR"}
             } {poly_codegen_name = "jjR"}
           } {poly_codegen_name = "k"}
