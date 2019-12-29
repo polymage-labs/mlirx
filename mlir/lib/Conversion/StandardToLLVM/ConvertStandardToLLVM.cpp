@@ -683,7 +683,8 @@ struct OneToOneLLVMOpLowering : public LLVMLegalizationPattern<SourceOp> {
   }
 };
 
-template <typename SourceOp, unsigned OpCount> struct OpCountValidator {
+template <typename SourceOp, unsigned OpCount>
+struct OpCountValidator {
   static_assert(
       std::is_base_of<
           typename OpTrait::NOperands<OpCount>::template Impl<SourceOp>,
@@ -691,12 +692,14 @@ template <typename SourceOp, unsigned OpCount> struct OpCountValidator {
       "wrong operand count");
 };
 
-template <typename SourceOp> struct OpCountValidator<SourceOp, 1> {
+template <typename SourceOp>
+struct OpCountValidator<SourceOp, 1> {
   static_assert(std::is_base_of<OpTrait::OneOperand<SourceOp>, SourceOp>::value,
                 "expected a single operand");
 };
 
-template <typename SourceOp, unsigned OpCount> void ValidateOpCount() {
+template <typename SourceOp, unsigned OpCount>
+void ValidateOpCount() {
   OpCountValidator<SourceOp, OpCount>();
 }
 
@@ -1528,9 +1531,8 @@ struct MemRefShapeCastOpLowering
         rewriter.getIndexArrayAttr(kAllocatedPtrPosInMemRefDescriptor));
 
     Value srcBufferAligned = srcMemRefDesc.alignedPtr(rewriter, loc);
-    Value targetBufAligned =
-        rewriter.create<LLVM::BitcastOp>(op->getLoc(), targetElementPtrType,
-                                         ArrayRef<Value>(srcBufferAligned));
+    Value targetBufAligned = rewriter.create<LLVM::BitcastOp>(
+        op->getLoc(), targetElementPtrType, ArrayRef<Value>(srcBufferAligned));
     memRefDescriptor = rewriter.create<LLVM::InsertValueOp>(
         op->getLoc(), targetStructType, memRefDescriptor, targetBufAligned,
         rewriter.getIndexArrayAttr(kAlignedPtrPosInMemRefDescriptor));
