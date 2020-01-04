@@ -99,3 +99,21 @@ func @valid_symbols(%arg0: index, %arg1: index, %arg2: index) {
   }
   return
 }
+
+// -----
+
+// Test symbol restrictions with ops isolated from above.
+
+// CHECK-LABEL: func @valid_symbol_isolated_region
+func @valid_symbol_isolated_region(%n : index) {
+  test.isolated_region %n {
+    %c1 = constant 1 : index
+    %l = subi %n, %c1 : index
+    // %l, %n are valid symbols since test.isolated_region is known to be
+    // isolated from above.
+    affine.for %i = %l to %n {
+    }
+    return
+  }
+  return
+}

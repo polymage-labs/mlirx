@@ -60,20 +60,25 @@ Example:
 ### Restrictions on Dimensions and Symbols
 
 The affine dialect imposes certain restrictions on dimension and symbolic
-identifiers to enable powerful analysis and transformation. A symbolic
-identifier can be bound to an SSA value that is either an argument to the
-function, a value defined at the top level of that function (outside of all
-loops and if operations), the result of a
-[`constant` operation](Standard.md#constant-operation), or the result of an
-[`affine.apply` operation](#affineapply-operation) that recursively takes as
-arguments any symbolic identifiers, or the result of a [`dim`
+identifiers to enable powerful analysis and transformation. An SSA value is a
+valid symbol if it is either (1) a region argument for an op that is either
+"isolated from above" (like the FuncOp) or is an affine graybox op, (2) a value
+defined at the top level of (outside of all loops, if operations, or other
+operations with regions) of an affine graybox op or an op "isolated from above",
+(3) a value that dominates the closest enclosing affine graybox or an op
+"isolated from above", (4) the result of a [`constant`
+operation](Standard.md#constant-operation), (4) the result of an [`affine.apply`
+operation](#affineapply-operation) that recursively takes as arguments any
+symbolic identifiers, or (5) the result of a [`dim`
 operation](Standard.md#dim-operation) on either a memref that is a function
 argument or a memref where the corresponding dimension is either static or a
-dynamic one in turn bound to a symbolic identifier.  Dimensions may be bound not
-only to anything that a symbol is bound to, but also to induction variables of
-enclosing [`affine.for` operations](#affinefor-operation), and the result of an
-[`affine.apply` operation](#affineapply-operation) (which recursively may use
-other dimensions and symbols).
+dynamic one in turn bound to a symbolic identifier. Note that as a result of
+(3), symbol validity is sensitive to the location at which the value binds to
+the symbol. Dimensions may be bound not only to anything that a symbol is bound
+to, but also to induction variables of enclosing [`affine.for`
+operations](#affinefor-operation), and the result of an [`affine.apply`
+operation](#affineapply-operation) (which recursively may use other dimensions
+and symbols).
 
 ### Affine Expressions
 
@@ -587,6 +592,76 @@ Example:
 
 %0 = affine.min affine_map<(d0)[s0] -> (1000, d0 + 512, s0)> (%arg0)[%arg1]
 
+```
+
+#### 'affine.graybox' operation
+
+Syntax:
+
+```
+operation ::= (ssa-id `=`)? `affine.graybox` `[` memref-region-arg-list `]` `=` `(` memref-use-list `)`
+              `:` memref-type-list-parens `->` function-result-type `{`
+                 block+
+              `}`
+```
+
+The `affine graybox` operation introduces a new symbol context for affine
+operations.  It holds a single region,  which can be a list of one or more
+blocks. The op's region can have zero or more arguments, each of which can only
+be a *memref*.  The operands bind 1:1 to its region's arguments.  The op can't
+use any memrefs defined outside of it, but can use any other SSA values that
+dominate it. Its region's blocks can have terminators the same way as current
+MLIR functions (FuncOp) can.  Control from any *return* ops from the top level
+of its region returns to right after the *affine.graybox* op.  Its control flow
+thus conforms to the control flow semantics of regions, i.e., control always
+returns to the immediate enclosing (parent) op. The results of a graybox op
+match 1:1 with the return values from its region's blocks.
+
+Examples:
+
+```mlir
+affine.for %i = 0 to %n {
+  affine.graybox [] = () : () -> () {
+    // %pow can now be used as a loop bound.
+    %pow = call @powi(%i) : (index) ->  index
+    affine.for %j = 0 to %pow {
+      "foo"() : () -> ()
+    }
+    return
+  }
+}
+```
+
+
+```mlir
+affine.for %i = 0 to %ni {
+  affine.graybox [%rA, %rS] = (%A, %S) : (memref<?x?xi32>, memref<?xi32>) -> (){
+    %c0 = constant 0 : index
+    %nj = dim %rA, 1 : memref<?x?xi32>
+    br ^bb1(%c0 : index)
+
+  ^bb1(%j: index):
+    %p1 = cmpi "slt", %j, %nj : index
+    cond_br %p1, ^bb2(%j : index), ^bb5
+
+  ^bb2(%j_arg : index):
+    %v = affine.load %rA[%i, %j_arg] : memref<?x?xi32>
+    %p2 = cmpi "eq", %v, %key : i32
+  cond_br %p2, ^bb3(%j_arg : index), ^bb4(%j_arg : index)
+
+  ^bb3(%j_arg2: index):
+    %j_int = index_cast %j_arg2 : index to i32
+    affine.store %j_int, %rS[%i] : memref<?xi32>
+    br ^bb5
+
+  ^bb4(%j_arg3 : index):
+    %jinc = addi %j_arg3, %c1 : index
+    br ^bb1(%jinc : index)
+
+  ^bb5:
+    return
+  }
+}
 ```
 
 #### `affine.terminator` operation
