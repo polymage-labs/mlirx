@@ -570,6 +570,18 @@ func @calls(%arg0: i32) {
   // CHECK: %4 = call_indirect %f_0(%arg0) : (i32) -> i32
   %3 = "std.call_indirect"(%f_0, %arg0) : ((i32) -> i32, i32) -> i32
 
+  "std.inlined_call"() ({
+  ^bb0:
+    br ^bb1
+  ^bb1:
+    return
+  }) : () -> ()
+
+  %5 = inlined_call -> i64 {
+    %c1 = constant 1 : i64
+    return %c1 : i64
+  }
+
   return
 }
 

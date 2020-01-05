@@ -1694,6 +1694,52 @@ bool IndexCastOp::areCastCompatible(Type a, Type b) {
          (a.isa<IntegerType>() && b.isIndex());
 }
 
+
+//===----------------------------------------------------------------------===//
+// InlinedCallOp
+//===----------------------------------------------------------------------===//
+
+//
+// (ssa-id `=`)? `inlined_call` `->` function-result-type `{`
+//    block+
+// `}`
+//
+// Ex:
+//    std.inlined_call -> i32 {
+//      %idx = load %rI[%i] : memref<128xi32>
+//      return %idx : i32
+//    }
+//
+static ParseResult parseInlinedCallOp(OpAsmParser &parser,
+                                      OperationState &result) {
+  if (parser.parseOptionalArrowTypeList(result.types))
+    return failure();
+
+  // Introduce the body region and parse it.
+  Region *body = result.addRegion();
+  if (parser.parseRegion(*body, /*arguments=*/{}, /*argTypes=*/{}) ||
+      parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  // Parse the optional attribute list.
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  return success();
+}
+
+static void print(OpAsmPrinter &p, InlinedCallOp op) {
+  p << InlinedCallOp::getOperationName();
+  if (op.getNumResults() > 0)
+    p << " -> " << op.getResultTypes();
+
+  p.printRegion(op.region(),
+                /*printEntryBlockArgs=*/false,
+                /*printBlockTerminators=*/true);
+
+  p.printOptionalAttrDict(op.getAttrs());
+}
+
 //===----------------------------------------------------------------------===//
 // LoadOp
 //===----------------------------------------------------------------------===//
