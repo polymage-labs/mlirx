@@ -1,4 +1,4 @@
-//===-- CommandObjectExpression.cpp -----------------------------*- C++ -*-===//
+//===-- CommandObjectExpression.cpp ---------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -535,7 +535,7 @@ void CommandObjectExpression::GetMultilineExpression() {
         "Enter expressions, then terminate with an empty line to evaluate:\n");
     output_sp->Flush();
   }
-  debugger.PushIOHandler(io_handler_sp);
+  debugger.RunIOHandlerAsync(io_handler_sp);
 }
 
 static EvaluateExpressionOptions
@@ -622,10 +622,8 @@ bool CommandObjectExpression::DoExecute(llvm::StringRef command,
           }
 
           IOHandlerSP io_handler_sp(repl_sp->GetIOHandler());
-
           io_handler_sp->SetIsDone(false);
-
-          debugger.PushIOHandler(io_handler_sp);
+          debugger.RunIOHandlerAsync(io_handler_sp);
         } else {
           repl_error.SetErrorStringWithFormat(
               "Couldn't create a REPL for %s",

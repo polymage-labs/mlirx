@@ -1,4 +1,4 @@
-//===-- SymbolFileDWARFDwo.cpp ----------------------------------*- C++ -*-===//
+//===-- SymbolFileDWARFDwo.cpp --------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -135,13 +135,6 @@ lldb::TypeSP SymbolFileDWARFDwo::FindCompleteObjCDefinitionTypeForDIE(
 
 SymbolFileDWARF &SymbolFileDWARFDwo::GetBaseSymbolFile() {
   return m_base_dwarf_cu.GetSymbolFileDWARF();
-}
-
-DWARFExpression::LocationListFormat
-SymbolFileDWARFDwo::GetLocationListFormat() const {
-  return m_base_dwarf_cu.GetVersion() >= 5
-             ? DWARFExpression::LocLists
-             : DWARFExpression::SplitDwarfLocationList;
 }
 
 llvm::Expected<TypeSystem &>

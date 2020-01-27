@@ -1,4 +1,4 @@
-//===-- ObjectFileMachO.cpp -------------------------------------*- C++ -*-===//
+//===-- ObjectFileMachO.cpp -----------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -1133,7 +1133,9 @@ AddressClass ObjectFileMachO::GetAddressClass(lldb::addr_t file_addr) {
         case eSectionTypeDWARFDebugLine:
         case eSectionTypeDWARFDebugLineStr:
         case eSectionTypeDWARFDebugLoc:
+        case eSectionTypeDWARFDebugLocDwo:
         case eSectionTypeDWARFDebugLocLists:
+        case eSectionTypeDWARFDebugLocListsDwo:
         case eSectionTypeDWARFDebugMacInfo:
         case eSectionTypeDWARFDebugMacro:
         case eSectionTypeDWARFDebugNames:

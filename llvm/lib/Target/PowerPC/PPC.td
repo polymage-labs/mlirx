@@ -166,6 +166,9 @@ def FeatureHTM : SubtargetFeature<"htm", "HasHTM", "true",
                                   "Enable Hardware Transactional Memory instructions">;
 def FeatureMFTB   : SubtargetFeature<"", "FeatureMFTB", "true",
                                         "Implement mftb using the mfspr instruction">;
+def FeatureUnalignedFloats :
+  SubtargetFeature<"allow-unaligned-fp-access", "AllowsUnalignedFPAccess",
+                   "true", "CPU does not trap on unaligned FP access">;
 def FeaturePPCPreRASched:
   SubtargetFeature<"ppc-prera-sched", "UsePPCPreRASchedStrategy", "true",
                    "Use PowerPC pre-RA scheduling strategy">;
@@ -206,6 +209,11 @@ def FeatureVectorsUseTwoUnits : SubtargetFeature<"vectors-use-two-units",
                                                  "VectorsUseTwoUnits",
                                                  "true",
                                                  "Vectors use two units">;
+def FeaturePrefixInstrs : SubtargetFeature<"prefix-instrs", "HasPrefixInstrs",
+                                           "true",
+                                           "Enable prefixed instructions",
+                                           [FeatureISA3_0, FeatureP8Vector,
+                                            FeatureP9Altivec]>;
 
 // Since new processors generally contain a superset of features of those that
 // came before them, the idea is to make implementations of new processors
@@ -252,7 +260,8 @@ def ProcessorFeatures {
                                                   FeatureExtDiv,
                                                   FeatureMFTB,
                                                   DeprecatedDST,
-                                                  FeatureTwoConstNR];
+                                                  FeatureTwoConstNR,
+                                                  FeatureUnalignedFloats];
   list<SubtargetFeature> P7SpecificFeatures = [];
   list<SubtargetFeature> P7Features =
     !listconcat(P7InheritableFeatures, P7SpecificFeatures);
@@ -294,7 +303,7 @@ def ProcessorFeatures {
   // For future CPU we assume that all of the existing features from Power 9
   // still exist with the exception of those we know are Power 9 specific.
   list<SubtargetFeature> FutureAdditionalFeatures = [];
-  list<SubtargetFeature> FutureSpecificFeatures = [];
+  list<SubtargetFeature> FutureSpecificFeatures = [FeaturePrefixInstrs];
   list<SubtargetFeature> FutureInheritableFeatures =
     !listconcat(P9InheritableFeatures, FutureAdditionalFeatures);
   list<SubtargetFeature> FutureFeatures =
@@ -438,7 +447,7 @@ def : ProcessorModel<"g5", G5Model,
 def : ProcessorModel<"e500", PPCE500Model,
                   [DirectiveE500,
                    FeatureICBT, FeatureBookE,
-                   FeatureISEL, FeatureMFTB]>;
+                   FeatureISEL, FeatureMFTB, FeatureSPE]>;
 def : ProcessorModel<"e500mc", PPCE500mcModel,
                   [DirectiveE500mc,
                    FeatureSTFIWX, FeatureICBT, FeatureBookE,

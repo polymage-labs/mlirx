@@ -6,7 +6,7 @@ entry:
 ; CHECK: [[MOVSX32rm8_:%[0-9]+]]:gr32 = MOVSX32rm8 %fixed-stack.0, 1, $noreg, 0, $noreg :: (load 1 from %fixed-stack.0, align 16)
 ; CHECK: [[CVTSI2SDrr:%[0-9]+]]:fr64 = CVTSI2SDrr killed [[MOVSX32rm8_]]
 ; CHECK: MOVSDmr %stack.0, 1, $noreg, 0, $noreg, killed [[CVTSI2SDrr]] :: (store 8 into %stack.0, align 4)
-; CHECK: [[LD_Fp64m80_:%[0-9]+]]:rfp80 = LD_Fp64m80 %stack.0, 1, $noreg, 0, $noreg, implicit-def dead $fpsw, implicit $fpcw :: (load 8 from %stack.0, align 4)
+; CHECK: [[LD_Fp64m80_:%[0-9]+]]:rfp80 = nofpexcept LD_Fp64m80 %stack.0, 1, $noreg, 0, $noreg, implicit-def dead $fpsw, implicit $fpcw :: (load 8 from %stack.0, align 4)
 ; CHECK: RET 0, killed [[LD_Fp64m80_]]
   %result = call double @llvm.experimental.constrained.sitofp.f64.i8(i8 %x, metadata !"round.dynamic", metadata !"fpexcept.strict") #0
   ret double %result
@@ -18,7 +18,7 @@ entry:
 ; CHECK: [[MOVSX32rm16_:%[0-9]+]]:gr32 = MOVSX32rm16 %fixed-stack.0, 1, $noreg, 0, $noreg :: (load 2 from %fixed-stack.0, align 16)
 ; CHECK: [[CVTSI2SDrr:%[0-9]+]]:fr64 = CVTSI2SDrr killed [[MOVSX32rm16_]]
 ; CHECK: MOVSDmr %stack.0, 1, $noreg, 0, $noreg, killed [[CVTSI2SDrr]] :: (store 8 into %stack.0, align 4)
-; CHECK: [[LD_Fp64m80_:%[0-9]+]]:rfp80 = LD_Fp64m80 %stack.0, 1, $noreg, 0, $noreg, implicit-def dead $fpsw, implicit $fpcw :: (load 8 from %stack.0, align 4)
+; CHECK: [[LD_Fp64m80_:%[0-9]+]]:rfp80 = nofpexcept LD_Fp64m80 %stack.0, 1, $noreg, 0, $noreg, implicit-def dead $fpsw, implicit $fpcw :: (load 8 from %stack.0, align 4)
 ; CHECK: RET 0, killed [[LD_Fp64m80_]]
   %result = call double @llvm.experimental.constrained.sitofp.f64.i16(i16 %x, metadata !"round.dynamic", metadata !"fpexcept.strict") #0
   ret double %result

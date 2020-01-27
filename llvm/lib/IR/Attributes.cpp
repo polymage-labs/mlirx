@@ -143,7 +143,7 @@ Attribute Attribute::get(LLVMContext &Context, Attribute::AttrKind Kind,
 }
 
 Attribute Attribute::getWithAlignment(LLVMContext &Context, Align A) {
-  assert(A <= 0x40000000 && "Alignment too large.");
+  assert(A <= llvm::Value::MaximumAlignment && "Alignment too large.");
   return get(Context, Alignment, A.value());
 }
 
@@ -489,6 +489,10 @@ bool Attribute::operator<(Attribute A) const {
   if (!pImpl) return true;
   if (!A.pImpl) return false;
   return *pImpl < *A.pImpl;
+}
+
+void Attribute::Profile(FoldingSetNodeID &ID) const {
+  ID.AddPointer(pImpl);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1521,7 +1525,7 @@ AttrBuilder &AttrBuilder::addAlignmentAttr(MaybeAlign Align) {
   if (!Align)
     return *this;
 
-  assert(*Align <= 0x40000000 && "Alignment too large.");
+  assert(*Align <= llvm::Value::MaximumAlignment && "Alignment too large.");
 
   Attrs[Attribute::Alignment] = true;
   Alignment = Align;

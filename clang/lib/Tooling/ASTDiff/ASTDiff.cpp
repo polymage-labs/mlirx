@@ -12,6 +12,7 @@
 
 #include "clang/Tooling/ASTDiff/ASTDiff.h"
 
+#include "clang/AST/ParentMapContext.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Lex/Lexer.h"
 #include "llvm/ADT/PriorityQueue.h"
@@ -787,7 +788,7 @@ void ASTDiff::Impl::addOptimalMapping(Mapping &M, NodeId Id1,
     return;
   ZhangShashaMatcher Matcher(*this, T1, T2, Id1, Id2);
   std::vector<std::pair<NodeId, NodeId>> R = Matcher.getMatchingNodes();
-  for (const auto Tuple : R) {
+  for (const auto &Tuple : R) {
     NodeId Src = Tuple.first;
     NodeId Dst = Tuple.second;
     if (!M.hasSrc(Src) && !M.hasDst(Dst))

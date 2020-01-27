@@ -1,4 +1,4 @@
-//===-- CommandObjectTarget.cpp ---------------------------------*- C++ -*-===//
+//===-- CommandObjectTarget.cpp -------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -4686,12 +4686,8 @@ protected:
                                      new_hook_sp->GetID());
     } else {
       m_stop_hook_sp = new_hook_sp;
-      m_interpreter.GetLLDBCommandsFromIOHandler(
-          "> ",     // Prompt
-          *this,    // IOHandlerDelegate
-          true,     // Run IOHandler in async mode
-          nullptr); // Baton for the "io_handler" that will be passed back
-                    // into our IOHandlerDelegate functions
+      m_interpreter.GetLLDBCommandsFromIOHandler("> ",   // Prompt
+                                                 *this); // IOHandlerDelegate
     }
     result.SetStatus(eReturnStatusSuccessFinishNoResult);
 

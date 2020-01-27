@@ -1,6 +1,6 @@
 //===- OperationSupport.h ---------------------------------------*- C++ -*-===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -90,8 +90,8 @@ public:
   /// This is the dialect that this operation belongs to.
   Dialect &dialect;
 
-  /// Return true if this "op class" can match against the specified operation.
-  bool (&classof)(Operation *op);
+  /// The unique identifier of the derived Op class.
+  ClassID *classID;
 
   /// Use the specified object to parse this ops custom assembly format.
   ParseResult (&parseAssembly)(OpAsmParser &parser, OperationState &result);
@@ -158,15 +158,16 @@ public:
   /// operations they contain.
   template <typename T> static AbstractOperation get(Dialect &dialect) {
     return AbstractOperation(
-        T::getOperationName(), dialect, T::getOperationProperties(), T::classof,
-        T::parseAssembly, T::printAssembly, T::verifyInvariants, T::foldHook,
-        T::getCanonicalizationPatterns, T::getRawInterface, T::hasTrait);
+        T::getOperationName(), dialect, T::getOperationProperties(),
+        ClassID::getID<T>(), T::parseAssembly, T::printAssembly,
+        T::verifyInvariants, T::foldHook, T::getCanonicalizationPatterns,
+        T::getRawInterface, T::hasTrait);
   }
 
 private:
   AbstractOperation(
       StringRef name, Dialect &dialect, OperationProperties opProperties,
-      bool (&classof)(Operation *op),
+      ClassID *classID,
       ParseResult (&parseAssembly)(OpAsmParser &parser, OperationState &result),
       void (&printAssembly)(Operation *op, OpAsmPrinter &p),
       LogicalResult (&verifyInvariants)(Operation *op),
@@ -176,7 +177,7 @@ private:
                                           MLIRContext *context),
       void *(&getRawInterface)(ClassID *interfaceID),
       bool (&hasTrait)(ClassID *traitID))
-      : name(name), dialect(dialect), classof(classof),
+      : name(name), dialect(dialect), classID(classID),
         parseAssembly(parseAssembly), printAssembly(printAssembly),
         verifyInvariants(verifyInvariants), foldHook(foldHook),
         getCanonicalizationPatterns(getCanonicalizationPatterns),
@@ -453,6 +454,19 @@ private:
 } // end namespace detail
 
 //===----------------------------------------------------------------------===//
+// TrailingOpResult
+//===----------------------------------------------------------------------===//
+
+namespace detail {
+/// This class provides the implementation for a trailing operation result.
+struct TrailingOpResult {
+  /// The only element is the trailing result number, or the offset from the
+  /// beginning of the trailing array.
+  uint64_t trailingResultNumber;
+};
+} // end namespace detail
+
+//===----------------------------------------------------------------------===//
 // OpPrintingFlags
 //===----------------------------------------------------------------------===//
 
@@ -573,10 +587,11 @@ private:
 
 /// This class implements the result iterators for the Operation class.
 class ResultRange final
-    : public detail::indexed_accessor_range_base<ResultRange, OpResult *, Value,
-                                                 Value, Value> {
+    : public indexed_accessor_range<ResultRange, Operation *, OpResult,
+                                    OpResult, OpResult> {
 public:
-  using RangeBaseT::RangeBaseT;
+  using indexed_accessor_range<ResultRange, Operation *, OpResult, OpResult,
+                               OpResult>::indexed_accessor_range;
   ResultRange(Operation *op);
 
   /// Returns the types of the values within this range.
@@ -584,21 +599,39 @@ public:
   iterator_range<type_iterator> getTypes() const { return {begin(), end()}; }
 
 private:
-  /// See `detail::indexed_accessor_range_base` for details.
-  static OpResult *offset_base(OpResult *object, ptrdiff_t index) {
-    return object + index;
-  }
-  /// See `detail::indexed_accessor_range_base` for details.
-  static Value dereference_iterator(OpResult *object, ptrdiff_t index) {
-    return object[index];
-  }
+  /// See `indexed_accessor_range` for details.
+  static OpResult dereference(Operation *op, ptrdiff_t index);
 
-  /// Allow access to `offset_base` and `dereference_iterator`.
-  friend RangeBaseT;
+  /// Allow access to `dereference_iterator`.
+  friend indexed_accessor_range<ResultRange, Operation *, OpResult, OpResult,
+                                OpResult>;
 };
 
 //===----------------------------------------------------------------------===//
 // ValueRange
+
+namespace detail {
+/// The type representing the owner of a ValueRange. This is either a list of
+/// values, operands, or an Operation+start index for results.
+struct ValueRangeOwner {
+  ValueRangeOwner(const Value *owner) : ptr(owner), startIndex(0) {}
+  ValueRangeOwner(OpOperand *owner) : ptr(owner), startIndex(0) {}
+  ValueRangeOwner(Operation *owner, unsigned startIndex)
+      : ptr(owner), startIndex(startIndex) {}
+  bool operator==(const ValueRangeOwner &rhs) const { return ptr == rhs.ptr; }
+
+  /// The owner pointer of the range. The owner has represents three distinct
+  /// states:
+  /// const Value *: The owner is the base to a contiguous array of Value.
+  /// OpOperand *  : The owner is the base to a contiguous array of operands.
+  /// void*        : This owner is an Operation*. It is marked as void* here
+  ///                because the definition of Operation is not visible here.
+  PointerUnion<const Value *, OpOperand *, void *> ptr;
+
+  /// Ths start index into the range. This is only used for Operation* owners.
+  unsigned startIndex;
+};
+} // end namespace detail
 
 /// This class provides an abstraction over the different types of ranges over
 /// Values. In many cases, this prevents the need to explicitly materialize a
@@ -607,8 +640,7 @@ private:
 /// parameter.
 class ValueRange final
     : public detail::indexed_accessor_range_base<
-          ValueRange, PointerUnion<const Value *, OpOperand *, OpResult *>,
-          Value, Value, Value> {
+          ValueRange, detail::ValueRangeOwner, Value, Value, Value> {
 public:
   using RangeBaseT::RangeBaseT;
 
@@ -633,9 +665,7 @@ public:
   iterator_range<type_iterator> getTypes() const { return {begin(), end()}; }
 
 private:
-  /// The type representing the owner of this range. This is either a list of
-  /// values, operands, or results.
-  using OwnerT = PointerUnion<const Value *, OpOperand *, OpResult *>;
+  using OwnerT = detail::ValueRangeOwner;
 
   /// See `detail::indexed_accessor_range_base` for details.
   static OwnerT offset_base(const OwnerT &owner, ptrdiff_t index);
@@ -677,10 +707,8 @@ public:
   static inline mlir::OperationName getFromVoidPointer(void *P) {
     return mlir::OperationName::getFromOpaquePointer(P);
   }
-  enum {
-    NumLowBitsAvailable = PointerLikeTypeTraits<
-        mlir::OperationName::RepresentationUnion>::NumLowBitsAvailable
-  };
+  static constexpr int NumLowBitsAvailable = PointerLikeTypeTraits<
+      mlir::OperationName::RepresentationUnion>::NumLowBitsAvailable;
 };
 
 } // end namespace llvm

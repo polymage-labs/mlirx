@@ -453,8 +453,13 @@ void DWARFContext::dump(
     uint64_t offset = 0;
     DataExtractor arangesData(DObj->getArangesSection(), isLittleEndian(), 0);
     DWARFDebugArangeSet set;
-    while (set.extract(arangesData, &offset))
+    while (arangesData.isValidOffset(offset)) {
+      if (Error E = set.extract(arangesData, &offset)) {
+        WithColor::error() << toString(std::move(E)) << '\n';
+        break;
+      }
       set.dump(OS);
+    }
   }
 
   auto DumpLineSection = [&](DWARFDebugLine::SectionParser Parser,
@@ -874,7 +879,7 @@ DWARFContext::getLineTableForUnit(DWARFUnit *U) {
 }
 
 Expected<const DWARFDebugLine::LineTable *> DWARFContext::getLineTableForUnit(
-    DWARFUnit *U, std::function<void(Error)> RecoverableErrorCallback) {
+    DWARFUnit *U, function_ref<void(Error)> RecoverableErrorCallback) {
   if (!Line)
     Line.reset(new DWARFDebugLine);
 

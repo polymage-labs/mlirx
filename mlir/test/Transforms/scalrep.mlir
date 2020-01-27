@@ -139,13 +139,13 @@ func @abc(%B : memref<100x100xf32>) -> memref<100xf32> {
 // different order.
 // CHECK-LABEL: func @ref_non_trivial_equality
 func @ref_non_trivial_equality(%A : memref<100 x 100 x f32>, %M : index) {
-  %N = affine.apply (d0) -> (d0 + 1) (%M)
+  %N = affine.apply affine_map<(d0) -> (d0 + 1)> (%M)
   affine.for %i = 0 to 100 {
     affine.for %j = 0 to 100 {
       %u = affine.load %A[%i, %j] : memref<100x100xf32>
       %v = affine.load %A[%j, %i] : memref<100x100xf32>
-      %idx = affine.apply (d0) -> (d0 + 1)(%i)
-      %idy = affine.apply (d0) -> (d0 - 1)(%j)
+      %idx = affine.apply affine_map<(d0) -> (d0 + 1)>(%i)
+      %idy = affine.apply affine_map<(d0) -> (d0 - 1)>(%j)
       %w = affine.load %A[%idy + 1, %idx - 1] : memref<100x100xf32>
       %x = affine.load %A[%j mod 2 + %i - %j mod 2, %j] : memref<100x100xf32>
       %y = affine.load %A[%i, %j] : memref<100x100xf32>
@@ -168,7 +168,7 @@ func @ref_non_trivial_equality(%A : memref<100 x 100 x f32>, %M : index) {
 // The loads on A[i, j] can't be replaced since there is a store to A[j, i].
 // CHECK-LABEL: func @refs_not_known_to_be_equal
 func @refs_not_known_to_be_equal(%A : memref<100 x 100 x f32>, %M : index) {
-  %N = affine.apply (d0) -> (d0 + 1) (%M)
+  %N = affine.apply affine_map<(d0) -> (d0 + 1)> (%M)
   %cf1 = constant 1.0 : f32
   // CHECK: affine.for %[[I:.*]] =
   affine.for %i = 0 to 100 {

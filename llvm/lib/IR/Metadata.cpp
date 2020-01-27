@@ -1262,6 +1262,7 @@ void Instruction::setMetadata(unsigned KindID, MDNode *Node) {
 
 void Instruction::setAAMetadata(const AAMDNodes &N) {
   setMetadata(LLVMContext::MD_tbaa, N.TBAA);
+  setMetadata(LLVMContext::MD_tbaa_struct, N.TBAAStruct);
   setMetadata(LLVMContext::MD_alias_scope, N.Scope);
   setMetadata(LLVMContext::MD_noalias, N.NoAlias);
 }
@@ -1499,7 +1500,10 @@ void GlobalObject::addTypeMetadata(unsigned Offset, Metadata *TypeID) {
                      TypeID}));
 }
 
-void GlobalObject::addVCallVisibilityMetadata(VCallVisibility Visibility) {
+void GlobalObject::setVCallVisibilityMetadata(VCallVisibility Visibility) {
+  // Remove any existing vcall visibility metadata first in case we are
+  // updating.
+  eraseMetadata(LLVMContext::MD_vcall_visibility);
   addMetadata(LLVMContext::MD_vcall_visibility,
               *MDNode::get(getContext(),
                            {ConstantAsMetadata::get(ConstantInt::get(

@@ -13,6 +13,7 @@
 #include "mlir/Dialect/SPIRV/SPIRVDialect.h"
 #include "mlir/Dialect/SPIRV/SPIRVOps.h"
 #include "mlir/Dialect/SPIRV/SPIRVTypes.h"
+#include "mlir/Dialect/SPIRV/TargetAndABI.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/MLIRContext.h"
@@ -103,7 +104,7 @@ struct SPIRVInlinerInterface : public DialectInlinerInterface {
     // Replace the values directly with the return operands.
     assert(valuesToRepl.size() == 1 &&
            "spv.ReturnValue expected to only handle one result");
-    valuesToRepl.front()->replaceAllUsesWith(retValOp.value());
+    valuesToRepl.front().replaceAllUsesWith(retValOp.value());
   }
 };
 } // namespace
@@ -374,6 +375,7 @@ Optional<uint64_t> parseAndVerify<uint64_t>(SPIRVDialect const &dialect,
   return parseAndVerifyInteger<uint64_t>(dialect, parser);
 }
 
+namespace {
 // Functor object to parse a comma separated list of specs. The function
 // parseAndVerify does the actual parsing and verification of individual
 // elements. This is a functor since parsing the last element of the list
@@ -406,6 +408,7 @@ template <typename ParseType> struct parseCommaSeparatedList<ParseType> {
     return llvm::None;
   }
 };
+} // namespace
 
 // dim ::= `1D` | `2D` | `3D` | `Cube` | <and other SPIR-V Dim specifiers...>
 //
@@ -636,4 +639,74 @@ Operation *SPIRVDialect::materializeConstant(OpBuilder &builder,
     return nullptr;
 
   return builder.create<spirv::ConstantOp>(loc, type, value);
+}
+
+//===----------------------------------------------------------------------===//
+// Shader Interface ABI
+//===----------------------------------------------------------------------===//
+
+LogicalResult SPIRVDialect::verifyOperationAttribute(Operation *op,
+                                                     NamedAttribute attribute) {
+  StringRef symbol = attribute.first.strref();
+  Attribute attr = attribute.second;
+
+  // TODO(antiagainst): figure out a way to generate the description from the
+  // StructAttr definition.
+  if (symbol == spirv::getEntryPointABIAttrName()) {
+    if (!attr.isa<spirv::EntryPointABIAttr>())
+      return op->emitError("'")
+             << symbol
+             << "' attribute must be a dictionary attribute containing one "
+                "32-bit integer elements attribute: 'local_size'";
+  } else if (symbol == spirv::getTargetEnvAttrName()) {
+    if (!attr.isa<spirv::TargetEnvAttr>())
+      return op->emitError("'")
+             << symbol
+             << "' must be a dictionary attribute containing one 32-bit "
+                "integer attribute 'version', one string array attribute "
+                "'extensions', and one 32-bit integer array attribute "
+                "'capabilities'";
+  } else {
+    return op->emitError("found unsupported '")
+           << symbol << "' attribute on operation";
+  }
+
+  return success();
+}
+
+// Verifies the given SPIR-V `attribute` attached to a region's argument or
+// result and reports error to the given location if invalid.
+static LogicalResult
+verifyRegionAttribute(Location loc, NamedAttribute attribute, bool forArg) {
+  StringRef symbol = attribute.first.strref();
+  Attribute attr = attribute.second;
+
+  if (symbol != spirv::getInterfaceVarABIAttrName())
+    return emitError(loc, "found unsupported '")
+           << symbol << "' attribute on region "
+           << (forArg ? "argument" : "result");
+
+  if (!attr.isa<spirv::InterfaceVarABIAttr>())
+    return emitError(loc, "'")
+           << symbol
+           << "' attribute must be a dictionary attribute containing three "
+              "32-bit integer attributes: 'descriptor_set', 'binding', and "
+              "'storage_class'";
+
+  return success();
+}
+
+LogicalResult SPIRVDialect::verifyRegionArgAttribute(Operation *op,
+                                                     unsigned /*regionIndex*/,
+                                                     unsigned /*argIndex*/,
+                                                     NamedAttribute attribute) {
+  return verifyRegionAttribute(op->getLoc(), attribute,
+                               /*forArg=*/true);
+}
+
+LogicalResult SPIRVDialect::verifyRegionResultAttribute(
+    Operation *op, unsigned /*regionIndex*/, unsigned /*resultIndex*/,
+    NamedAttribute attribute) {
+  return verifyRegionAttribute(op->getLoc(), attribute,
+                               /*forArg=*/false);
 }

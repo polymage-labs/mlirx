@@ -1,6 +1,6 @@
 //===-- SPIRVAtomicOps.td - MLIR SPIR-V Atomic Ops ---------*- tablegen -*-===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -119,6 +119,13 @@ def SPV_AtomicCompareExchangeWeakOp : SPV_Op<"AtomicCompareExchangeWeak", []> {
                                        : !spv.ptr<i32, WorkGroup>
     ```
   }];
+
+  let availability = [
+    MinVersion<SPV_V_1_0>,
+    MaxVersion<SPV_V_1_3>,
+    Extension<[]>,
+    Capability<[SPV_C_Kernel]>
+  ];
 
   let arguments = (ins
     SPV_AnyPtr:$pointer,

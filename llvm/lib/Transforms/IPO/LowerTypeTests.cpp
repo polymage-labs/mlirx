@@ -1269,7 +1269,7 @@ void LowerTypeTestsModule::moveInitializerToModuleConstructor(
 
   IRBuilder<> IRB(WeakInitializerFn->getEntryBlock().getTerminator());
   GV->setConstant(false);
-  IRB.CreateAlignedStore(GV->getInitializer(), GV, GV->getAlignment());
+  IRB.CreateAlignedStore(GV->getInitializer(), GV, GV->getAlign());
   GV->setInitializer(Constant::getNullValue(GV->getValueType()));
 }
 
@@ -1811,7 +1811,7 @@ bool LowerTypeTestsModule::lower() {
   // reference them. This is used to partition the set of type identifiers in
   // the module into disjoint sets.
   using GlobalClassesTy = EquivalenceClasses<
-      PointerUnion3<GlobalTypeMember *, Metadata *, ICallBranchFunnel *>>;
+      PointerUnion<GlobalTypeMember *, Metadata *, ICallBranchFunnel *>>;
   GlobalClassesTy GlobalClasses;
 
   // Verify the type metadata and build a few data structures to let us

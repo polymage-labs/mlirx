@@ -1,6 +1,6 @@
 //===- OpImplementation.h - Classes for implementing Op types ---*- C++ -*-===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -114,14 +114,14 @@ public:
     os << "(";
     interleaveComma(op->getNonSuccessorOperands(), os, [&](Value operand) {
       if (operand)
-        printType(operand->getType());
+        printType(operand.getType());
       else
         os << "<<NULL>";
     });
     os << ") -> ";
     if (op->getNumResults() == 1 &&
-        !op->getResult(0)->getType().isa<FunctionType>()) {
-      printType(op->getResult(0)->getType());
+        !op->getResult(0).getType().isa<FunctionType>()) {
+      printType(op->getResult(0).getType());
     } else {
       os << '(';
       interleaveComma(op->getResultTypes(), os);
@@ -378,6 +378,12 @@ public:
   /// present.
   virtual ParseResult
   parseOptionalAttrDictWithKeyword(SmallVectorImpl<NamedAttribute> &result) = 0;
+
+  /// Parse an affine map instance into 'map'.
+  virtual ParseResult parseAffineMap(AffineMap &map) = 0;
+
+  /// Parse an integer set instance into 'set'.
+  virtual ParseResult printIntegerSet(IntegerSet &set) = 0;
 
   //===--------------------------------------------------------------------===//
   // Identifier Parsing

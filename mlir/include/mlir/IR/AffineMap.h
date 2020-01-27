@@ -1,6 +1,6 @@
 //===- AffineMap.h - MLIR Affine Map Class ----------------------*- C++ -*-===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -38,10 +38,8 @@ class AffineMap {
 public:
   using ImplType = detail::AffineMapStorage;
 
-  AffineMap() : map(nullptr) {}
+  constexpr AffineMap() : map(nullptr) {}
   explicit AffineMap(ImplType *map) : map(map) {}
-  AffineMap(const AffineMap &other) : map(other.map) {}
-  AffineMap &operator=(const AffineMap &other) = default;
 
   /// Returns a zero result affine map with no dimensions or symbols: () -> ().
   static AffineMap get(MLIRContext *context);

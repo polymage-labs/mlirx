@@ -1,4 +1,4 @@
-//===-- AdbClient.cpp -------------------------------------------*- C++ -*-===//
+//===-- AdbClient.cpp -----------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -165,7 +165,7 @@ Status AdbClient::GetDevices(DeviceIDList &device_list) {
   llvm::SmallVector<llvm::StringRef, 4> devices;
   response.split(devices, "\n", -1, false);
 
-  for (const auto device : devices)
+  for (const auto &device : devices)
     device_list.push_back(device.split('\t').first);
 
   // Force disconnect since ADB closes connection after host:devices response

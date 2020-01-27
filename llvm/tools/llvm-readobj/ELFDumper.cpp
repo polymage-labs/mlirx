@@ -3061,8 +3061,8 @@ template <class ELFT> void GNUStyle<ELFT>::printFileHeaders(const ELFO *Obj) {
   OS << "\n";
   Str = printEnum(e->e_ident[ELF::EI_OSABI], makeArrayRef(ElfOSABI));
   printFields(OS, "OS/ABI:", Str);
-  Str = "0x" + to_hexString(e->e_ident[ELF::EI_ABIVERSION]);
-  printFields(OS, "ABI Version:", Str);
+  printFields(OS,
+              "ABI Version:", std::to_string(e->e_ident[ELF::EI_ABIVERSION]));
   Str = printEnum(e->e_type, makeArrayRef(ElfObjectFileType));
   printFields(OS, "Type:", Str);
   Str = printEnum(e->e_machine, makeArrayRef(ElfMachineType));
@@ -3515,11 +3515,17 @@ void GNUStyle<ELFT>::printSectionHeaders(const ELFO *Obj) {
   OS << "\n";
 
   const ELFObjectFile<ELFT> *ElfObj = this->dumper()->getElfObject();
+  StringRef SecStrTable = unwrapOrError<StringRef>(
+      ElfObj->getFileName(),
+      Obj->getSectionStringTable(Sections, this->WarningHandler));
   size_t SectionIndex = 0;
   for (const Elf_Shdr &Sec : Sections) {
     Fields[0].Str = to_string(SectionIndex);
-    Fields[1].Str = unwrapOrError<StringRef>(
-        ElfObj->getFileName(), Obj->getSectionName(&Sec, this->WarningHandler));
+    if (SecStrTable.empty())
+      Fields[1].Str = "<no-strings>";
+    else
+      Fields[1].Str = unwrapOrError<StringRef>(
+          ElfObj->getFileName(), Obj->getSectionName(&Sec, SecStrTable));
     Fields[2].Str =
         getSectionTypeString(Obj->getHeader()->e_machine, Sec.sh_type);
     Fields[3].Str =
@@ -3971,6 +3977,15 @@ void GNUStyle<ELFT>::printDynamicRelocation(const ELFO *Obj, Elf_Rela R,
   printRelocation(Obj, S.Sym, S.Name, R, IsRela);
 }
 
+template <class ELFT>
+static size_t getMaxDynamicTagSize(const ELFFile<ELFT> *Obj,
+                                   typename ELFT::DynRange Tags) {
+  size_t Max = 0;
+  for (const typename ELFT::Dyn &Dyn : Tags)
+    Max = std::max(Max, Obj->getDynamicTagAsString(Dyn.d_tag).size());
+  return Max;
+}
+
 template <class ELFT> void GNUStyle<ELFT>::printDynamic(const ELFO *Obj) {
   Elf_Dyn_Range Table = this->dumper()->dynamic_table();
   if (Table.empty())
@@ -3985,17 +4000,21 @@ template <class ELFT> void GNUStyle<ELFT>::printDynamic(const ELFO *Obj) {
                    1)
      << " contains " << Table.size() << " entries:\n";
 
-  bool Is64 = ELFT::Is64Bits;
-  if (Is64)
-    OS << "  Tag                Type                 Name/Value\n";
-  else
-    OS << "  Tag        Type                 Name/Value\n";
+  // The type name is surrounded with round brackets, hence add 2.
+  size_t MaxTagSize = getMaxDynamicTagSize(Obj, Table) + 2;
+  // The "Name/Value" column should be indented from the "Type" column by N
+  // spaces, where N = MaxTagSize - length of "Type" (4) + trailing
+  // space (1) = 3.
+  OS << "  Tag" + std::string(ELFT::Is64Bits ? 16 : 8, ' ') + "Type"
+     << std::string(MaxTagSize - 3, ' ') << "Name/Value\n";
+
+  std::string ValueFmt = " %-" + std::to_string(MaxTagSize) + "s ";
   for (auto Entry : Table) {
     uintX_t Tag = Entry.getTag();
     std::string TypeString =
         std::string("(") + Obj->getDynamicTagAsString(Tag).c_str() + ")";
-    OS << "  " << format_hex(Tag, Is64 ? 18 : 10)
-       << format(" %-20s ", TypeString.c_str());
+    OS << "  " << format_hex(Tag, ELFT::Is64Bits ? 18 : 10)
+       << format(ValueFmt.c_str(), TypeString.c_str());
     this->dumper()->printDynamicEntry(OS, Tag, Entry.getVal());
     OS << "\n";
   }
@@ -5788,15 +5807,20 @@ template <class ELFT> void LLVMStyle<ELFT>::printDynamic(const ELFFile<ELFT> *Ob
   raw_ostream &OS = W.getOStream();
   W.startLine() << "DynamicSection [ (" << Table.size() << " entries)\n";
 
-  bool Is64 = ELFT::Is64Bits;
-  if (Is64)
-    W.startLine() << "  Tag                Type                 Name/Value\n";
-  else
-    W.startLine() << "  Tag        Type                 Name/Value\n";
+  size_t MaxTagSize = getMaxDynamicTagSize(Obj, Table);
+  // The "Name/Value" column should be indented from the "Type" column by N
+  // spaces, where N = MaxTagSize - length of "Type" (4) + trailing
+  // space (1) = -3.
+  W.startLine() << "  Tag" << std::string(ELFT::Is64Bits ? 16 : 8, ' ')
+                << "Type" << std::string(MaxTagSize - 3, ' ') << "Name/Value\n";
+
+  std::string ValueFmt = "%-" + std::to_string(MaxTagSize) + "s ";
   for (auto Entry : Table) {
     uintX_t Tag = Entry.getTag();
-    W.startLine() << "  " << format_hex(Tag, Is64 ? 18 : 10, true) << " "
-                  << format("%-21s", Obj->getDynamicTagAsString(Tag).c_str());
+    W.startLine() << "  " << format_hex(Tag, ELFT::Is64Bits ? 18 : 10, true)
+                  << " "
+                  << format(ValueFmt.c_str(),
+                            Obj->getDynamicTagAsString(Tag).c_str());
     this->dumper()->printDynamicEntry(OS, Tag, Entry.getVal());
     OS << "\n";
   }

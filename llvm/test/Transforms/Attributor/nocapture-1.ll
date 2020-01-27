@@ -288,7 +288,7 @@ define i1 @captureICmpRev(i32* %x) {
   ret i1 %1
 }
 
-; ATTRIBUTOR: define i1 @nocaptureInboundsGEPICmp(i32* nocapture nofree nonnull readnone %x)
+; ATTRIBUTOR: define i1 @nocaptureInboundsGEPICmp(i32* nocapture nofree readnone %x)
 define i1 @nocaptureInboundsGEPICmp(i32* %x) {
   %1 = getelementptr inbounds i32, i32* %x, i32 5
   %2 = bitcast i32* %1 to i8*
@@ -296,7 +296,7 @@ define i1 @nocaptureInboundsGEPICmp(i32* %x) {
   ret i1 %3
 }
 
-; ATTRIBUTOR: define i1 @nocaptureInboundsGEPICmpRev(i32* nocapture nofree nonnull readnone %x)
+; ATTRIBUTOR: define i1 @nocaptureInboundsGEPICmpRev(i32* nocapture nofree readnone %x)
 define i1 @nocaptureInboundsGEPICmpRev(i32* %x) {
   %1 = getelementptr inbounds i32, i32* %x, i32 5
   %2 = bitcast i32* %1 to i8*
@@ -322,7 +322,7 @@ declare void @unknown(i8*)
 define void @test_callsite() {
 entry:
 ; We know that 'null' in AS 0 does not alias anything and cannot be captured. Though the latter is not qurried -> derived atm.
-; ATTRIBUTOR: call void @unknown(i8* noalias null)
+; ATTRIBUTOR: call void @unknown(i8* noalias align 536870912 null)
   call void @unknown(i8* null)
   ret void
 }
@@ -340,6 +340,20 @@ define i8* @test_returned2(i8* %A, i8* %B) {
 entry:
   %p = call i8* @unknownpi8pi8(i8* %A, i8* %B) nounwind readonly
   ret i8* %p
+}
+
+declare i8* @maybe_returned_ptr(i8* readonly %ptr) readonly nounwind
+declare i8 @maybe_returned_val(i8* %ptr) readonly nounwind
+declare void @val_use(i8 %ptr) readonly nounwind
+
+; FIXME: Both pointers should be nocapture
+define void @ptr_uses(i8* %ptr, i8* %wptr) {
+; CHECK: define void @ptr_uses(i8* %ptr, i8* nocapture nonnull writeonly dereferenceable(1) %wptr)
+  %call_ptr = call i8* @maybe_returned_ptr(i8* %ptr)
+  %call_val = call i8 @maybe_returned_val(i8* %call_ptr)
+  call void @val_use(i8 %call_val)
+  store i8 0, i8* %wptr
+  ret void
 }
 
 declare i8* @llvm.launder.invariant.group.p0i8(i8*)

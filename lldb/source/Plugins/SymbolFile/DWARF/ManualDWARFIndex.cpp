@@ -1,4 +1,4 @@
-//===-- ManualDWARFIndex.cpp -----------------------------------*- C++ -*-===//
+//===-- ManualDWARFIndex.cpp ----------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -401,8 +401,6 @@ void ManualDWARFIndex::GetFunctions(ConstString name, SymbolFileDWARF &dwarf,
 
   if (name_type_mask & eFunctionNameTypeFull) {
     DIEArray offsets;
-    m_set.function_basenames.Find(name, offsets);
-    m_set.function_methods.Find(name, offsets);
     m_set.function_fullnames.Find(name, offsets);
     for (const DIERef &die_ref: offsets) {
       DWARFDIE die = dwarf.GetDIE(die_ref);

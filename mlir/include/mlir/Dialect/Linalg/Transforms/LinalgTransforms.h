@@ -1,6 +1,6 @@
 //===- LinalgTransforms.h - Linalg transformations as patterns --*- C++ -*-===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -49,7 +49,7 @@ bool isProducedByOpOfType(Operation *consumerOp, Value consumedView) {
 // success.
 ////////////////////////////////////////////////////////////////////////////////
 
-/// Tiles `op` by `sizes` permuting the looops according to `permutation`
+/// Tiles `op` by `sizes` permuting the loops according to `permutation`
 /// and sets the attribute `kLinalgTransformMarker` to `linalgMarker`.
 /// The permutation is expressed as a list of integers that specify
 /// the new ordering of the loop nest. The length of `permutation`
@@ -79,16 +79,24 @@ template <typename ConcreteOp>
 LogicalResult linalgOpToAffineLoops(PatternRewriter &rewriter, Operation *op);
 
 /// Rewrite a linalg.generic into a suitable vector.contraction op.
-LogicalResult vectorizeGenericOp(PatternRewriter &rewriter, Operation *op);
+LogicalResult vectorizeLinalgOpPrecondition(Operation *op);
+SmallVector<Value, 0> vectorizeLinalgOp(PatternRewriter &rewriter,
+                                        Operation *op);
 
 /// Emits a `generic` or `indexed_generic` operation with the `indexing_maps`
 /// and `iterator_types` permutated according to `permutation`.
-LogicalResult permuteGenericLinalgOp(PatternRewriter &rewriter, Operation *op,
-                                     ArrayRef<unsigned> permutation,
-                                     StringRef linalgMarker);
+LogicalResult
+permuteGenericLinalgOpPrecondition(Operation *op,
+                                   ArrayRef<unsigned> permutation);
+SmallVector<Value, 0> permuteGenericLinalgOp(PatternRewriter &rewriter,
+                                             Operation *op,
+                                             ArrayRef<unsigned> permutation,
+                                             StringRef linalgMarker);
 
-/// Promote std.subviews feeding linalg operations
-LogicalResult linalgOpPromoteSubviews(PatternRewriter &rewriter, Operation *op);
+/// Promote std.subviews feeding linalg operations.
+LogicalResult promoteSubviewsLinalgOpPrecondition(Operation *op);
+SmallVector<Value, 0> promoteSubviewsLinalgOp(PatternRewriter &rewriter,
+                                              Operation *op);
 
 } // namespace linalg
 } // namespace mlir

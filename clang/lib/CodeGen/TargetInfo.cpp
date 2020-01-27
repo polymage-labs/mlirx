@@ -22,6 +22,7 @@
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/CodeGen/CGFunctionInfo.h"
 #include "clang/CodeGen/SwiftCallingConv.h"
+#include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Triple.h"
@@ -996,11 +997,13 @@ static ABIArgInfo getDirectX86Hva(llvm::Type* T = nullptr) {
 
 /// Similar to llvm::CCState, but for Clang.
 struct CCState {
-  CCState(unsigned CC) : CC(CC), FreeRegs(0), FreeSSERegs(0) {}
+  CCState(CGFunctionInfo &FI)
+      : IsPreassigned(FI.arg_size()), CC(FI.getCallingConvention()) {}
 
-  unsigned CC;
-  unsigned FreeRegs;
-  unsigned FreeSSERegs;
+  llvm::SmallBitVector IsPreassigned;
+  unsigned CC = CallingConv::CC_C;
+  unsigned FreeRegs = 0;
+  unsigned FreeSSERegs = 0;
 };
 
 enum {
@@ -1071,8 +1074,7 @@ class X86_32ABIInfo : public SwiftABIInfo {
   void addFieldToArgStruct(SmallVector<llvm::Type *, 6> &FrameFields,
                            CharUnits &StackOffset, ABIArgInfo &Info,
                            QualType Type) const;
-  void computeVectorCallArgs(CGFunctionInfo &FI, CCState &State,
-                             bool &UsedInAlloca) const;
+  void runVectorCallFirstPass(CGFunctionInfo &FI, CCState &State) const;
 
 public:
 
@@ -1640,11 +1642,41 @@ bool X86_32ABIInfo::shouldPrimitiveUseInReg(QualType Ty, CCState &State) const {
   return true;
 }
 
+void X86_32ABIInfo::runVectorCallFirstPass(CGFunctionInfo &FI, CCState &State) const {
+  // Vectorcall x86 works subtly different than in x64, so the format is
+  // a bit different than the x64 version.  First, all vector types (not HVAs)
+  // are assigned, with the first 6 ending up in the [XYZ]MM0-5 registers.
+  // This differs from the x64 implementation, where the first 6 by INDEX get
+  // registers.
+  // In the second pass over the arguments, HVAs are passed in the remaining
+  // vector registers if possible, or indirectly by address. The address will be
+  // passed in ECX/EDX if available. Any other arguments are passed according to
+  // the usual fastcall rules.
+  MutableArrayRef<CGFunctionInfoArgInfo> Args = FI.arguments();
+  for (int I = 0, E = Args.size(); I < E; ++I) {
+    const Type *Base = nullptr;
+    uint64_t NumElts = 0;
+    const QualType &Ty = Args[I].type;
+    if ((Ty->isVectorType() || Ty->isBuiltinType()) &&
+        isHomogeneousAggregate(Ty, Base, NumElts)) {
+      if (State.FreeSSERegs >= NumElts) {
+        State.FreeSSERegs -= NumElts;
+        Args[I].info = ABIArgInfo::getDirect();
+        State.IsPreassigned.set(I);
+      }
+    }
+  }
+}
+
 ABIArgInfo X86_32ABIInfo::classifyArgumentType(QualType Ty,
                                                CCState &State) const {
   // FIXME: Set alignment on indirect arguments.
+  bool IsFastCall = State.CC == llvm::CallingConv::X86_FastCall;
+  bool IsRegCall = State.CC == llvm::CallingConv::X86_RegCall;
+  bool IsVectorCall = State.CC == llvm::CallingConv::X86_VectorCall;
 
   Ty = useFirstFieldIfTransparentUnion(Ty);
+  TypeInfo TI = getContext().getTypeInfo(Ty);
 
   // Check with the C++ ABI first.
   const RecordType *RT = Ty->getAs<RecordType>();
@@ -1662,11 +1694,16 @@ ABIArgInfo X86_32ABIInfo::classifyArgumentType(QualType Ty,
   // to other targets.
   const Type *Base = nullptr;
   uint64_t NumElts = 0;
-  if (State.CC == llvm::CallingConv::X86_RegCall &&
+  if ((IsRegCall || IsVectorCall) &&
       isHomogeneousAggregate(Ty, Base, NumElts)) {
-
     if (State.FreeSSERegs >= NumElts) {
       State.FreeSSERegs -= NumElts;
+
+      // Vectorcall passes HVAs directly and does not flatten them, but regcall
+      // does.
+      if (IsVectorCall)
+        return getDirectX86Hva();
+
       if (Ty->isBuiltinType() || Ty->isVectorType())
         return ABIArgInfo::getDirect();
       return ABIArgInfo::getExpand();
@@ -1689,7 +1726,7 @@ ABIArgInfo X86_32ABIInfo::classifyArgumentType(QualType Ty,
     bool NeedsPadding = false;
     bool InReg;
     if (shouldAggregateUseDirect(Ty, State, InReg, NeedsPadding)) {
-      unsigned SizeInRegs = (getContext().getTypeSize(Ty) + 31) / 32;
+      unsigned SizeInRegs = (TI.Width + 31) / 32;
       SmallVector<llvm::Type*, 3> Elements(SizeInRegs, Int32);
       llvm::Type *Result = llvm::StructType::get(LLVMContext, Elements);
       if (InReg)
@@ -1699,32 +1736,44 @@ ABIArgInfo X86_32ABIInfo::classifyArgumentType(QualType Ty,
     }
     llvm::IntegerType *PaddingType = NeedsPadding ? Int32 : nullptr;
 
+    // Pass over-aligned aggregates on Windows indirectly. This behavior was
+    // added in MSVC 2015.
+    if (IsWin32StructABI && TI.AlignIsRequired && TI.Align > 32)
+      return getIndirectResult(Ty, /*ByVal=*/false, State);
+
     // Expand small (<= 128-bit) record types when we know that the stack layout
     // of those arguments will match the struct. This is important because the
     // LLVM backend isn't smart enough to remove byval, which inhibits many
     // optimizations.
     // Don't do this for the MCU if there are still free integer registers
     // (see X86_64 ABI for full explanation).
-    if (getContext().getTypeSize(Ty) <= 4 * 32 &&
-        (!IsMCUABI || State.FreeRegs == 0) && canExpandIndirectArgument(Ty))
+    if (TI.Width <= 4 * 32 && (!IsMCUABI || State.FreeRegs == 0) &&
+        canExpandIndirectArgument(Ty))
       return ABIArgInfo::getExpandWithPadding(
-          State.CC == llvm::CallingConv::X86_FastCall ||
-              State.CC == llvm::CallingConv::X86_VectorCall ||
-              State.CC == llvm::CallingConv::X86_RegCall,
-          PaddingType);
+          IsFastCall || IsVectorCall || IsRegCall, PaddingType);
 
     return getIndirectResult(Ty, true, State);
   }
 
   if (const VectorType *VT = Ty->getAs<VectorType>()) {
+    // On Windows, vectors are passed directly if registers are available, or
+    // indirectly if not. This avoids the need to align argument memory. Pass
+    // user-defined vector types larger than 512 bits indirectly for simplicity.
+    if (IsWin32StructABI) {
+      if (TI.Width <= 512 && State.FreeSSERegs > 0) {
+        --State.FreeSSERegs;
+        return ABIArgInfo::getDirectInReg();
+      }
+      return getIndirectResult(Ty, /*ByVal=*/false, State);
+    }
+
     // On Darwin, some vectors are passed in memory, we handle this by passing
     // it as an i8/i16/i32/i64.
     if (IsDarwinVectorABI) {
-      uint64_t Size = getContext().getTypeSize(Ty);
-      if ((Size == 8 || Size == 16 || Size == 32) ||
-          (Size == 64 && VT->getNumElements() == 1))
-        return ABIArgInfo::getDirect(llvm::IntegerType::get(getVMContext(),
-                                                            Size));
+      if ((TI.Width == 8 || TI.Width == 16 || TI.Width == 32) ||
+          (TI.Width == 64 && VT->getNumElements() == 1))
+        return ABIArgInfo::getDirect(
+            llvm::IntegerType::get(getVMContext(), TI.Width));
     }
 
     if (IsX86_MMXType(CGT.ConvertType(Ty)))
@@ -1750,65 +1799,14 @@ ABIArgInfo X86_32ABIInfo::classifyArgumentType(QualType Ty,
   return ABIArgInfo::getDirect();
 }
 
-void X86_32ABIInfo::computeVectorCallArgs(CGFunctionInfo &FI, CCState &State,
-                                          bool &UsedInAlloca) const {
-  // Vectorcall x86 works subtly different than in x64, so the format is
-  // a bit different than the x64 version.  First, all vector types (not HVAs)
-  // are assigned, with the first 6 ending up in the YMM0-5 or XMM0-5 registers.
-  // This differs from the x64 implementation, where the first 6 by INDEX get
-  // registers.
-  // After that, integers AND HVAs are assigned Left to Right in the same pass.
-  // Integers are passed as ECX/EDX if one is available (in order).  HVAs will
-  // first take up the remaining YMM/XMM registers. If insufficient registers
-  // remain but an integer register (ECX/EDX) is available, it will be passed
-  // in that, else, on the stack.
-  for (auto &I : FI.arguments()) {
-    // First pass do all the vector types.
-    const Type *Base = nullptr;
-    uint64_t NumElts = 0;
-    const QualType& Ty = I.type;
-    if ((Ty->isVectorType() || Ty->isBuiltinType()) &&
-        isHomogeneousAggregate(Ty, Base, NumElts)) {
-      if (State.FreeSSERegs >= NumElts) {
-        State.FreeSSERegs -= NumElts;
-        I.info = ABIArgInfo::getDirect();
-      } else {
-        I.info = classifyArgumentType(Ty, State);
-      }
-      UsedInAlloca |= (I.info.getKind() == ABIArgInfo::InAlloca);
-    }
-  }
-
-  for (auto &I : FI.arguments()) {
-    // Second pass, do the rest!
-    const Type *Base = nullptr;
-    uint64_t NumElts = 0;
-    const QualType& Ty = I.type;
-    bool IsHva = isHomogeneousAggregate(Ty, Base, NumElts);
-
-    if (IsHva && !Ty->isVectorType() && !Ty->isBuiltinType()) {
-      // Assign true HVAs (non vector/native FP types).
-      if (State.FreeSSERegs >= NumElts) {
-        State.FreeSSERegs -= NumElts;
-        I.info = getDirectX86Hva();
-      } else {
-        I.info = getIndirectResult(Ty, /*ByVal=*/false, State);
-      }
-    } else if (!IsHva) {
-      // Assign all Non-HVAs, so this will exclude Vector/FP args.
-      I.info = classifyArgumentType(Ty, State);
-      UsedInAlloca |= (I.info.getKind() == ABIArgInfo::InAlloca);
-    }
-  }
-}
-
 void X86_32ABIInfo::computeInfo(CGFunctionInfo &FI) const {
-  CCState State(FI.getCallingConvention());
+  CCState State(FI);
   if (IsMCUABI)
     State.FreeRegs = 3;
-  else if (State.CC == llvm::CallingConv::X86_FastCall)
+  else if (State.CC == llvm::CallingConv::X86_FastCall) {
     State.FreeRegs = 2;
-  else if (State.CC == llvm::CallingConv::X86_VectorCall) {
+    State.FreeSSERegs = 3;
+  } else if (State.CC == llvm::CallingConv::X86_VectorCall) {
     State.FreeRegs = 2;
     State.FreeSSERegs = 6;
   } else if (FI.getHasRegParm())
@@ -1816,6 +1814,11 @@ void X86_32ABIInfo::computeInfo(CGFunctionInfo &FI) const {
   else if (State.CC == llvm::CallingConv::X86_RegCall) {
     State.FreeRegs = 5;
     State.FreeSSERegs = 8;
+  } else if (IsWin32StructABI) {
+    // Since MSVC 2015, the first three SSE vectors have been passed in
+    // registers. The rest are passed indirectly.
+    State.FreeRegs = DefaultNumRegisterParameters;
+    State.FreeSSERegs = 3;
   } else
     State.FreeRegs = DefaultNumRegisterParameters;
 
@@ -1835,15 +1838,20 @@ void X86_32ABIInfo::computeInfo(CGFunctionInfo &FI) const {
   if (FI.isChainCall())
     ++State.FreeRegs;
 
+  // For vectorcall, do a first pass over the arguments, assigning FP and vector
+  // arguments to XMM registers as available.
+  if (State.CC == llvm::CallingConv::X86_VectorCall)
+    runVectorCallFirstPass(FI, State);
+
   bool UsedInAlloca = false;
-  if (State.CC == llvm::CallingConv::X86_VectorCall) {
-    computeVectorCallArgs(FI, State, UsedInAlloca);
-  } else {
-    // If not vectorcall, revert to normal behavior.
-    for (auto &I : FI.arguments()) {
-      I.info = classifyArgumentType(I.type, State);
-      UsedInAlloca |= (I.info.getKind() == ABIArgInfo::InAlloca);
-    }
+  MutableArrayRef<CGFunctionInfoArgInfo> Args = FI.arguments();
+  for (int I = 0, E = Args.size(); I < E; ++I) {
+    // Skip arguments that have already been assigned.
+    if (State.IsPreassigned.test(I))
+      continue;
+
+    Args[I].info = classifyArgumentType(Args[I].type, State);
+    UsedInAlloca |= (Args[I].info.getKind() == ABIArgInfo::InAlloca);
   }
 
   // If we needed to use inalloca for any argument, do a second pass and rewrite
@@ -1857,16 +1865,25 @@ X86_32ABIInfo::addFieldToArgStruct(SmallVector<llvm::Type *, 6> &FrameFields,
                                    CharUnits &StackOffset, ABIArgInfo &Info,
                                    QualType Type) const {
   // Arguments are always 4-byte-aligned.
-  CharUnits FieldAlign = CharUnits::fromQuantity(4);
+  CharUnits WordSize = CharUnits::fromQuantity(4);
+  assert(StackOffset.isMultipleOf(WordSize) && "unaligned inalloca struct");
 
-  assert(StackOffset.isMultipleOf(FieldAlign) && "unaligned inalloca struct");
-  Info = ABIArgInfo::getInAlloca(FrameFields.size());
-  FrameFields.push_back(CGT.ConvertTypeForMem(Type));
-  StackOffset += getContext().getTypeSizeInChars(Type);
+  // sret pointers and indirect things will require an extra pointer
+  // indirection, unless they are byval. Most things are byval, and will not
+  // require this indirection.
+  bool IsIndirect = false;
+  if (Info.isIndirect() && !Info.getIndirectByVal())
+    IsIndirect = true;
+  Info = ABIArgInfo::getInAlloca(FrameFields.size(), IsIndirect);
+  llvm::Type *LLTy = CGT.ConvertTypeForMem(Type);
+  if (IsIndirect)
+    LLTy = LLTy->getPointerTo(0);
+  FrameFields.push_back(LLTy);
+  StackOffset += IsIndirect ? WordSize : getContext().getTypeSizeInChars(Type);
 
   // Insert padding bytes to respect alignment.
   CharUnits FieldEnd = StackOffset;
-  StackOffset = FieldEnd.alignTo(FieldAlign);
+  StackOffset = FieldEnd.alignTo(WordSize);
   if (StackOffset != FieldEnd) {
     CharUnits NumBytes = StackOffset - FieldEnd;
     llvm::Type *Ty = llvm::Type::getInt8Ty(getVMContext());
@@ -1880,16 +1897,12 @@ static bool isArgInAlloca(const ABIArgInfo &Info) {
   switch (Info.getKind()) {
   case ABIArgInfo::InAlloca:
     return true;
-  case ABIArgInfo::Indirect:
-    assert(Info.getIndirectByVal());
-    return true;
   case ABIArgInfo::Ignore:
     return false;
+  case ABIArgInfo::Indirect:
   case ABIArgInfo::Direct:
   case ABIArgInfo::Extend:
-    if (Info.getInReg())
-      return false;
-    return true;
+    return !Info.getInReg();
   case ABIArgInfo::Expand:
   case ABIArgInfo::CoerceAndExpand:
     // These are aggregate types which are never passed in registers when
@@ -1923,8 +1936,7 @@ void X86_32ABIInfo::rewriteWithInAlloca(CGFunctionInfo &FI) const {
 
   // Put the sret parameter into the inalloca struct if it's in memory.
   if (Ret.isIndirect() && !Ret.getInReg()) {
-    CanQualType PtrTy = getContext().getPointerType(FI.getReturnType());
-    addFieldToArgStruct(FrameFields, StackOffset, Ret, PtrTy);
+    addFieldToArgStruct(FrameFields, StackOffset, Ret, FI.getReturnType());
     // On Windows, the hidden sret parameter is always returned in eax.
     Ret.setInAllocaSRet(IsWin32StructABI);
   }
@@ -7594,7 +7606,7 @@ public:
   bool shouldUseInReg(QualType Ty, CCState &State) const;
 
   void computeInfo(CGFunctionInfo &FI) const override {
-    CCState State(FI.getCallingConvention());
+    CCState State(FI);
     // Lanai uses 4 registers to pass arguments unless the function has the
     // regparm attribute set.
     if (FI.getHasRegParm()) {
@@ -8072,8 +8084,11 @@ void AMDGPUTargetCodeGenInfo::setTargetAttributes(
     } else
       assert(Max == 0 && "Max must be zero");
   } else if (IsOpenCLKernel || IsHIPKernel) {
-    // By default, restrict the maximum size to 256.
-    F->addFnAttr("amdgpu-flat-work-group-size", "1,256");
+    // By default, restrict the maximum size to a value specified by
+    // --gpu-max-threads-per-block=n or its default value.
+    std::string AttrVal =
+        std::string("1,") + llvm::utostr(M.getLangOpts().GPUMaxThreadsPerBlock);
+    F->addFnAttr("amdgpu-flat-work-group-size", AttrVal);
   }
 
   if (const auto *Attr = FD->getAttr<AMDGPUWavesPerEUAttr>()) {
@@ -8567,7 +8582,7 @@ private:
   }
 
   void computeInfo(CGFunctionInfo &FI) const override {
-    CCState State(FI.getCallingConvention());
+    CCState State(FI);
     // ARC uses 8 registers to pass arguments.
     State.FreeRegs = 8;
 
@@ -9374,11 +9389,21 @@ void RISCVABIInfo::computeInfo(CGFunctionInfo &FI) const {
     FI.getReturnInfo() = classifyReturnType(RetTy);
 
   // IsRetIndirect is true if classifyArgumentType indicated the value should
-  // be passed indirect or if the type size is greater than 2*xlen. e.g. fp128
-  // is passed direct in LLVM IR, relying on the backend lowering code to
-  // rewrite the argument list and pass indirectly on RV32.
-  bool IsRetIndirect = FI.getReturnInfo().getKind() == ABIArgInfo::Indirect ||
-                       getContext().getTypeSize(RetTy) > (2 * XLen);
+  // be passed indirect, or if the type size is a scalar greater than 2*XLen
+  // and not a complex type with elements <= FLen. e.g. fp128 is passed direct
+  // in LLVM IR, relying on the backend lowering code to rewrite the argument
+  // list and pass indirectly on RV32.
+  bool IsRetIndirect = FI.getReturnInfo().getKind() == ABIArgInfo::Indirect;
+  if (!IsRetIndirect && RetTy->isScalarType() &&
+      getContext().getTypeSize(RetTy) > (2 * XLen)) {
+    if (RetTy->isComplexType() && FLen) {
+      QualType EltTy = RetTy->getAs<ComplexType>()->getElementType();
+      IsRetIndirect = getContext().getTypeSize(EltTy) > FLen;
+    } else {
+      // This is a normal scalar > 2*XLen, such as fp128 on RV32.
+      IsRetIndirect = true;
+    }
+  }
 
   // We must track the number of GPRs used in order to conform to the RISC-V
   // ABI, as integer scalars passed in registers should have signext/zeroext
@@ -10043,9 +10068,9 @@ llvm::Function *AMDGPUTargetCodeGenInfo::createEnqueuedBlockKernel(
   auto IP = CGF.Builder.saveIP();
   auto *BB = llvm::BasicBlock::Create(C, "entry", F);
   Builder.SetInsertPoint(BB);
-  unsigned BlockAlign = CGF.CGM.getDataLayout().getPrefTypeAlignment(BlockTy);
+  const auto BlockAlign = CGF.CGM.getDataLayout().getPrefTypeAlign(BlockTy);
   auto *BlockPtr = Builder.CreateAlloca(BlockTy, nullptr);
-  BlockPtr->setAlignment(llvm::MaybeAlign(BlockAlign));
+  BlockPtr->setAlignment(BlockAlign);
   Builder.CreateAlignedStore(F->arg_begin(), BlockPtr, BlockAlign);
   auto *Cast = Builder.CreatePointerCast(BlockPtr, InvokeFT->getParamType(0));
   llvm::SmallVector<llvm::Value *, 2> Args;

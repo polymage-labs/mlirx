@@ -1,6 +1,6 @@
 //===- OpToFuncCallLowering.h - GPU ops lowering to custom calls *- C++ -*-===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -44,7 +44,7 @@ public:
         std::is_base_of<OpTrait::OneResult<SourceOp>, SourceOp>::value,
         "expected single result op");
 
-    LLVMType resultType = lowering.convertType(op->getResult(0)->getType())
+    LLVMType resultType = lowering.convertType(op->getResult(0).getType())
                               .template cast<LLVM::LLVMType>();
     LLVMType funcType = getFunctionType(resultType, operands);
     StringRef funcName = getFunctionName(resultType);
@@ -64,7 +64,7 @@ private:
     using LLVM::LLVMType;
     SmallVector<LLVMType, 1> operandTypes;
     for (Value operand : operands) {
-      operandTypes.push_back(operand->getType().cast<LLVMType>());
+      operandTypes.push_back(operand.getType().cast<LLVMType>());
     }
     return LLVMType::getFunctionTy(resultType, operandTypes,
                                    /*isVarArg=*/false);

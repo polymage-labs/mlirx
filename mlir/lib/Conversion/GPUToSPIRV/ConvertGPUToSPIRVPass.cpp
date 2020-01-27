@@ -1,6 +1,6 @@
 //===- ConvertGPUToSPIRVPass.cpp - GPU to SPIR-V dialect lowering passes --===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -55,20 +55,17 @@ private:
 } // namespace
 
 void GPUToSPIRVPass::runOnModule() {
-  auto context = &getContext();
-  auto module = getModule();
+  MLIRContext *context = &getContext();
+  ModuleOp module = getModule();
 
   SmallVector<Operation *, 1> kernelModules;
   OpBuilder builder(context);
-  module.walk([&builder, &kernelModules](ModuleOp moduleOp) {
-    if (moduleOp.getAttrOfType<UnitAttr>(
-            gpu::GPUDialect::getKernelModuleAttrName())) {
-      // For each kernel module (should be only 1 for now, but that is not a
-      // requirement here), clone the module for conversion because the
-      // gpu.launch function still needs the kernel module.
-      builder.setInsertionPoint(moduleOp.getOperation());
-      kernelModules.push_back(builder.clone(*moduleOp.getOperation()));
-    }
+  module.walk([&builder, &kernelModules](gpu::GPUModuleOp moduleOp) {
+    // For each kernel module (should be only 1 for now, but that is not a
+    // requirement here), clone the module for conversion because the
+    // gpu.launch function still needs the kernel module.
+    builder.setInsertionPoint(moduleOp.getOperation());
+    kernelModules.push_back(builder.clone(*moduleOp.getOperation()));
   });
 
   SPIRVTypeConverter typeConverter;
@@ -76,12 +73,12 @@ void GPUToSPIRVPass::runOnModule() {
   populateGPUToSPIRVPatterns(context, typeConverter, patterns, workGroupSize);
   populateStandardToSPIRVPatterns(context, typeConverter, patterns);
 
-  ConversionTarget target(*context);
-  target.addLegalDialect<spirv::SPIRVDialect>();
-  target.addDynamicallyLegalOp<FuncOp>(
+  std::unique_ptr<ConversionTarget> target = spirv::SPIRVConversionTarget::get(
+      spirv::lookupTargetEnvOrDefault(module), context);
+  target->addDynamicallyLegalOp<FuncOp>(
       [&](FuncOp op) { return typeConverter.isSignatureLegal(op.getType()); });
 
-  if (failed(applyFullConversion(kernelModules, target, patterns,
+  if (failed(applyFullConversion(kernelModules, *target, patterns,
                                  &typeConverter))) {
     return signalPassFailure();
   }

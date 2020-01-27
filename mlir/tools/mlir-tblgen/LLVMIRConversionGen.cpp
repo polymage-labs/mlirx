@@ -1,6 +1,6 @@
 //===- LLVMIRConversionGen.cpp - MLIR LLVM IR builder generator -----------===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -133,7 +133,7 @@ static bool emitOneBuilder(const Record &record, raw_ostream &os) {
     } else if (isResultName(op, name)) {
       bs << formatv("valueMapping[op.{0}()]", name);
     } else if (name == "_resultType") {
-      bs << "op.getResult()->getType().cast<LLVM::LLVMType>()."
+      bs << "op.getResult().getType().cast<LLVM::LLVMType>()."
             "getUnderlyingType()";
     } else if (name == "_hasResult") {
       bs << "opInst.getNumResults() == 1";

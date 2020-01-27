@@ -1,6 +1,6 @@
 //===- VectorTransforms.h - Vector transformations as patterns --*- C++ -*-===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -64,8 +64,9 @@ namespace vector {
 //
 // This will be extended in the future to support more advanced use cases than
 // simple pointwise ops.
-Value unrollSingleResultOpMatchingType(PatternRewriter &builder, Operation *op,
-                                       ArrayRef<int64_t> targetShape);
+SmallVector<Value, 1>
+unrollSingleResultOpMatchingType(PatternRewriter &builder, Operation *op,
+                                 ArrayRef<int64_t> targetShape);
 
 } // namespace vector
 } // namespace mlir

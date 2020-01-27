@@ -54,10 +54,10 @@ func @matmul_ijk(%A: memref<2048x2048xf64>, %B: memref<2048x2048xf64>, %C: memre
 
 // Outer loop imperfect nest vectorization here.
 
-#map7 = (d0) -> (d0 * 16)
-#map8 = (d0) -> (d0 * 16 + 16)
-#map9 = (d0) -> (d0 * 8)
-#map10 = (d0) -> (d0 * 8 + 8)
+#map7 = affine_map<(d0) -> (d0 * 16)>
+#map8 = affine_map<(d0) -> (d0 * 16 + 16)>
+#map9 = affine_map<(d0) -> (d0 * 8)>
+#map10 = affine_map<(d0) -> (d0 * 8 + 8)>
 
 // CHECK-LABEL: func @sgemm_blis_tiled
 func @sgemm_blis_tiled(%A: memref<2048x2048xf32>, %B: memref<2048x2048xf32>, %C: memref<2048x2048xf32>) {

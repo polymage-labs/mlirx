@@ -42,11 +42,6 @@ using ::testing::IsEmpty;
 using ::testing::Matcher;
 using ::testing::UnorderedElementsAreArray;
 
-class IgnoreDiagnostics : public DiagnosticsConsumer {
-  void onDiagnosticsReady(PathRef File,
-                          std::vector<Diag> Diagnostics) override {}
-};
-
 MATCHER_P2(FileRange, File, Range, "") {
   return Location{URIForFile::canonicalize(File, testRoot()), Range} == arg;
 }
@@ -187,7 +182,7 @@ TEST(LocateSymbol, WithIndex) {
   EXPECT_THAT(LocateWithIndex(Test),
               ElementsAre(Sym("Foo", Test.range(), SymbolHeader.range("foo"))));
 
-  Test = Annotations(R"cpp(// defintion in AST.
+  Test = Annotations(R"cpp(// definition in AST.
         class [[Forward]] {};
         F^orward create();
       )cpp");
@@ -253,7 +248,7 @@ TEST(LocateSymbol, All) {
       )cpp",
 
       R"cpp(// Function definition via pointer
-        int [[foo]](int) {}
+        void [[foo]](int) {}
         int main() {
           auto *X = &^foo;
         }
@@ -270,7 +265,7 @@ TEST(LocateSymbol, All) {
         struct Foo { int [[x]]; };
         int main() {
           Foo bar;
-          bar.^x;
+          (void)bar.^x;
         }
       )cpp",
 
@@ -279,13 +274,6 @@ TEST(LocateSymbol, All) {
           int [[x]];
           Foo() : ^x(0) {}
         };
-      )cpp",
-
-      R"cpp(// Field, GNU old-style field designator
-        struct Foo { int [[x]]; };
-        int main() {
-          Foo bar = { ^x : 1 };
-        }
       )cpp",
 
       R"cpp(// Field, field designator
@@ -322,17 +310,9 @@ TEST(LocateSymbol, All) {
 
       R"cpp(// Namespace
         namespace $decl[[ns]] {
-        struct Foo { static void bar(); }
+        struct Foo { static void bar(); };
         } // namespace ns
         int main() { ^ns::Foo::bar(); }
-      )cpp",
-
-      R"cpp(// Macro
-        #define MACRO 0
-        #define [[MACRO]] 1
-        int main() { return ^MACRO; }
-        #define MACRO 2
-        #undef macro
       )cpp",
 
       R"cpp(// Macro
@@ -352,7 +332,7 @@ TEST(LocateSymbol, All) {
 
       R"cpp(// Symbol concatenated inside macro (not supported)
        int *pi;
-       #define POINTER(X) p # X;
+       #define POINTER(X) p ## X;
        int i = *POINTER(^i);
       )cpp",
 
@@ -433,10 +413,10 @@ TEST(LocateSymbol, All) {
       )cpp",
 
       R"cpp(// No implicit constructors
-        class X {
+        struct X {
           X(X&& x) = default;
         };
-        X [[makeX]]() {}
+        X $decl[[makeX]]();
         void foo() {
           auto x = m^akeX();
         }
@@ -444,7 +424,7 @@ TEST(LocateSymbol, All) {
 
       R"cpp(
         struct X {
-          X& [[operator]]++() {}
+          X& $decl[[operator]]++();
         };
         void foo(X& x) {
           +^+x;
@@ -500,9 +480,9 @@ TEST(LocateSymbol, All) {
         }
       )cpp",
 
-      R"cpp(// FIXME: Heuristic resolution of dependent method
+      R"cpp(// Heuristic resolution of dependent method
             // invoked via smart pointer
-        template <typename> struct S { void foo(); };
+        template <typename> struct S { void [[foo]]() {} };
         template <typename T> struct unique_ptr {
           T* operator->();
         };
@@ -528,6 +508,57 @@ TEST(LocateSymbol, All) {
     // FIXME: Auto-completion in a template requires disabling delayed template
     // parsing.
     TU.ExtraArgs.push_back("-fno-delayed-template-parsing");
+
+    auto AST = TU.build();
+    auto Results = locateSymbolAt(AST, T.point());
+
+    if (!WantDecl) {
+      EXPECT_THAT(Results, IsEmpty()) << Test;
+    } else {
+      ASSERT_THAT(Results, ::testing::SizeIs(1)) << Test;
+      EXPECT_EQ(Results[0].PreferredDeclaration.range, *WantDecl) << Test;
+      llvm::Optional<Range> GotDef;
+      if (Results[0].Definition)
+        GotDef = Results[0].Definition->range;
+      EXPECT_EQ(WantDef, GotDef) << Test;
+    }
+  }
+}
+
+// LocateSymbol test cases that produce warnings.
+// These are separated out from All so that in All we can assert
+// that there are no diagnostics.
+TEST(LocateSymbol, Warnings) {
+  const char *Tests[] = {
+      R"cpp(// Field, GNU old-style field designator
+        struct Foo { int [[x]]; };
+        int main() {
+          Foo bar = { ^x : 1 };
+        }
+      )cpp",
+
+      R"cpp(// Macro
+        #define MACRO 0
+        #define [[MACRO]] 1
+        int main() { return ^MACRO; }
+        #define MACRO 2
+        #undef macro
+      )cpp",
+  };
+
+  for (const char *Test : Tests) {
+    Annotations T(Test);
+    llvm::Optional<Range> WantDecl;
+    llvm::Optional<Range> WantDef;
+    if (!T.ranges().empty())
+      WantDecl = WantDef = T.range();
+    if (!T.ranges("decl").empty())
+      WantDecl = T.range("decl");
+    if (!T.ranges("def").empty())
+      WantDef = T.range("def");
+
+    TestTU TU;
+    TU.Code = T.code();
 
     auto AST = TU.build();
     auto Results = locateSymbolAt(AST, T.point());
@@ -656,9 +687,8 @@ int [[bar_not_preamble]];
   std::string BuildDir = testPath("build");
   MockCompilationDatabase CDB(BuildDir, RelPathPrefix);
 
-  IgnoreDiagnostics DiagConsumer;
   MockFSProvider FS;
-  ClangdServer Server(CDB, FS, DiagConsumer, ClangdServer::optsForTest());
+  ClangdServer Server(CDB, FS, ClangdServer::optsForTest());
 
   // Fill the filesystem.
   auto FooCpp = testPath("src/foo.cpp");
@@ -693,9 +723,8 @@ int [[bar_not_preamble]];
 
 TEST(GoToInclude, All) {
   MockFSProvider FS;
-  IgnoreDiagnostics DiagConsumer;
   MockCompilationDatabase CDB;
-  ClangdServer Server(CDB, FS, DiagConsumer, ClangdServer::optsForTest());
+  ClangdServer Server(CDB, FS, ClangdServer::optsForTest());
 
   auto FooCpp = testPath("foo.cpp");
   const char *SourceContents = R"cpp(
@@ -768,9 +797,8 @@ TEST(LocateSymbol, WithPreamble) {
   // Test stragety: AST should always use the latest preamble instead of last
   // good preamble.
   MockFSProvider FS;
-  IgnoreDiagnostics DiagConsumer;
   MockCompilationDatabase CDB;
-  ClangdServer Server(CDB, FS, DiagConsumer, ClangdServer::optsForTest());
+  ClangdServer Server(CDB, FS, ClangdServer::optsForTest());
 
   auto FooCpp = testPath("foo.cpp");
   // The trigger locations must be the same.
@@ -828,7 +856,7 @@ TEST(FindReferences, WithinAST) {
 
       R"cpp(// Forward declaration
         class [[Foo]];
-        class [[Foo]] {}
+        class [[Foo]] {};
         int main() {
           [[Fo^o]] foo;
         }
@@ -838,7 +866,7 @@ TEST(FindReferences, WithinAST) {
         int [[foo]](int) {}
         int main() {
           auto *X = &[[^foo]];
-          [[foo]](42)
+          [[foo]](42);
         }
       )cpp",
 
@@ -895,6 +923,13 @@ TEST(FindReferences, WithinAST) {
           [[FOO]] foo2;
           TYPE(TYPE([[Foo]])) foo3;
           [[CAT]](Fo, o) foo4;
+        }
+      )cpp",
+
+      R"cpp(// Macros
+        #define [[MA^CRO]](X) (X+1)
+        void test() {
+          int x = [[MACRO]]([[MACRO]](1));
         }
       )cpp",
   };
@@ -971,7 +1006,7 @@ TEST(FindReferences, ExplicitSymbols) {
   }
 }
 
-TEST(FindReferences, NeedsIndex) {
+TEST(FindReferences, NeedsIndexForSymbols) {
   const char *Header = "int foo();";
   Annotations Main("int main() { [[f^oo]](); }");
   TestTU TU;
@@ -1000,11 +1035,47 @@ TEST(FindReferences, NeedsIndex) {
   EXPECT_EQ(1u, LimitRefs.References.size());
   EXPECT_TRUE(LimitRefs.HasMore);
 
-  // If the main file is in the index, we don't return duplicates.
-  // (even if the references are in a different location)
+  // Avoid indexed results for the main file. Use AST for the mainfile.
   TU.Code = ("\n\n" + Main.code()).str();
   EXPECT_THAT(findReferences(AST, Main.point(), 0, TU.index().get()).References,
               ElementsAre(RangeIs(Main.range())));
+}
+
+TEST(FindReferences, NeedsIndexForMacro) {
+  const char *Header = "#define MACRO(X) (X+1)";
+  Annotations Main(R"cpp(
+    int main() {
+      int a = [[MA^CRO]](1);
+    }
+  )cpp");
+  TestTU TU;
+  TU.Code = Main.code();
+  TU.HeaderCode = Header;
+  auto AST = TU.build();
+
+  // References in main file are returned without index.
+  EXPECT_THAT(
+      findReferences(AST, Main.point(), 0, /*Index=*/nullptr).References,
+      ElementsAre(RangeIs(Main.range())));
+
+  Annotations IndexedMain(R"cpp(
+    int indexed_main() {
+      int a = [[MACRO]](1);
+    }
+  )cpp");
+
+  // References from indexed files are included.
+  TestTU IndexedTU;
+  IndexedTU.Code = IndexedMain.code();
+  IndexedTU.Filename = "Indexed.cpp";
+  IndexedTU.HeaderCode = Header;
+  EXPECT_THAT(
+      findReferences(AST, Main.point(), 0, IndexedTU.index().get()).References,
+      ElementsAre(RangeIs(Main.range()), RangeIs(IndexedMain.range())));
+  auto LimitRefs =
+      findReferences(AST, Main.point(), /*Limit*/ 1, IndexedTU.index().get());
+  EXPECT_EQ(1u, LimitRefs.References.size());
+  EXPECT_TRUE(LimitRefs.HasMore);
 }
 
 TEST(FindReferences, NoQueryForLocalSymbols) {
@@ -1099,8 +1170,6 @@ TEST(GetNonLocalDeclRefs, All) {
   for (const Case &C : Cases) {
     Annotations File(C.AnnotatedCode);
     auto AST = TestTU::withCode(File.code()).build();
-    ASSERT_TRUE(AST.getDiagnostics().empty())
-        << AST.getDiagnostics().begin()->Message;
     SourceLocation SL = llvm::cantFail(
         sourceLocationInMainFile(AST.getSourceManager(), File.point()));
 
@@ -1119,6 +1188,27 @@ TEST(GetNonLocalDeclRefs, All) {
     EXPECT_THAT(Names, UnorderedElementsAreArray(C.ExpectedDecls))
         << File.code();
   }
+}
+
+TEST(DocumentLinks, All) {
+  Annotations MainCpp(R"cpp(
+      #include $foo[["foo.h"]]
+      int end_of_preamble = 0;
+      #include $bar[["bar.h"]]
+    )cpp");
+
+  TestTU TU;
+  TU.Code = MainCpp.code();
+  TU.AdditionalFiles = {{"foo.h", ""}, {"bar.h", ""}};
+  auto AST = TU.build();
+
+  EXPECT_THAT(
+      clangd::getDocumentLinks(AST),
+      ElementsAre(
+          DocumentLink({MainCpp.range("foo"),
+                        URIForFile::canonicalize(testPath("foo.h"), "")}),
+          DocumentLink({MainCpp.range("bar"),
+                        URIForFile::canonicalize(testPath("bar.h"), "")})));
 }
 
 } // namespace

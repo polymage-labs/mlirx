@@ -1,6 +1,6 @@
 //===- PatternMatch.cpp - Base classes for pattern match ------------------===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -114,7 +114,7 @@ void PatternRewriter::mergeBlocks(Block *source, Block *dest,
 
   // Replace all of the successor arguments with the provided values.
   for (auto it : llvm::zip(source->getArguments(), argValues))
-    std::get<0>(it)->replaceAllUsesWith(std::get<1>(it));
+    std::get<0>(it).replaceAllUsesWith(std::get<1>(it));
 
   // Splice the operations of the 'source' block into the 'dest' block and erase
   // it.

@@ -641,8 +641,9 @@ bool AMDGPUTargetLowering::shouldReduceLoadWidth(SDNode *N,
 
   unsigned NewSize = NewVT.getStoreSizeInBits();
 
-  // If we are reducing to a 32-bit load, this is always better.
-  if (NewSize == 32)
+  // If we are reducing to a 32-bit load or a smaller multi-dword load,
+  // this is always better.
+  if (NewSize >= 32)
     return true;
 
   EVT OldVT = N->getValueType(0);
@@ -1383,12 +1384,11 @@ AMDGPUTargetLowering::splitVector(const SDValue &N, const SDLoc &DL,
                  (HiVT.isVector() ? HiVT.getVectorNumElements() : 1) <=
              N.getValueType().getVectorNumElements() &&
          "More vector elements requested than available!");
-  auto IdxTy = getVectorIdxTy(DAG.getDataLayout());
   SDValue Lo = DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, LoVT, N,
-                           DAG.getConstant(0, DL, IdxTy));
+                           DAG.getVectorIdxConstant(0, DL));
   SDValue Hi = DAG.getNode(
       HiVT.isVector() ? ISD::EXTRACT_SUBVECTOR : ISD::EXTRACT_VECTOR_ELT, DL,
-      HiVT, N, DAG.getConstant(LoVT.getVectorNumElements(), DL, IdxTy));
+      HiVT, N, DAG.getVectorIdxConstant(LoVT.getVectorNumElements(), DL));
   return std::make_pair(Lo, Hi);
 }
 
@@ -1396,16 +1396,19 @@ SDValue AMDGPUTargetLowering::SplitVectorLoad(const SDValue Op,
                                               SelectionDAG &DAG) const {
   LoadSDNode *Load = cast<LoadSDNode>(Op);
   EVT VT = Op.getValueType();
+  SDLoc SL(Op);
 
 
   // If this is a 2 element vector, we really want to scalarize and not create
   // weird 1 element vectors.
-  if (VT.getVectorNumElements() == 2)
-    return scalarizeVectorLoad(Load, DAG);
+  if (VT.getVectorNumElements() == 2) {
+    SDValue Ops[2];
+    std::tie(Ops[0], Ops[1]) = scalarizeVectorLoad(Load, DAG);
+    return DAG.getMergeValues(Ops, SL);
+  }
 
   SDValue BasePtr = Load->getBasePtr();
   EVT MemVT = Load->getMemoryVT();
-  SDLoc SL(Op);
 
   const MachinePointerInfo &SrcValue = Load->getMemOperand()->getPointerInfo();
 
@@ -1430,18 +1433,17 @@ SDValue AMDGPUTargetLowering::SplitVectorLoad(const SDValue Op,
                      HiPtr, SrcValue.getWithOffset(LoMemVT.getStoreSize()),
                      HiMemVT, HiAlign, Load->getMemOperand()->getFlags());
 
-  auto IdxTy = getVectorIdxTy(DAG.getDataLayout());
   SDValue Join;
   if (LoVT == HiVT) {
     // This is the case that the vector is power of two so was evenly split.
     Join = DAG.getNode(ISD::CONCAT_VECTORS, SL, VT, LoLoad, HiLoad);
   } else {
     Join = DAG.getNode(ISD::INSERT_SUBVECTOR, SL, VT, DAG.getUNDEF(VT), LoLoad,
-                       DAG.getConstant(0, SL, IdxTy));
-    Join = DAG.getNode(HiVT.isVector() ? ISD::INSERT_SUBVECTOR
-                                       : ISD::INSERT_VECTOR_ELT,
-                       SL, VT, Join, HiLoad,
-                       DAG.getConstant(LoVT.getVectorNumElements(), SL, IdxTy));
+                       DAG.getVectorIdxConstant(0, SL));
+    Join = DAG.getNode(
+        HiVT.isVector() ? ISD::INSERT_SUBVECTOR : ISD::INSERT_VECTOR_ELT, SL,
+        VT, Join, HiLoad,
+        DAG.getVectorIdxConstant(LoVT.getVectorNumElements(), SL));
   }
 
   SDValue Ops[] = {Join, DAG.getNode(ISD::TokenFactor, SL, MVT::Other,
@@ -1471,7 +1473,7 @@ SDValue AMDGPUTargetLowering::WidenVectorLoad(SDValue Op,
       WideMemVT, BaseAlign, Load->getMemOperand()->getFlags());
   return DAG.getMergeValues(
       {DAG.getNode(ISD::EXTRACT_SUBVECTOR, SL, VT, WideLoad,
-                   DAG.getConstant(0, SL, getVectorIdxTy(DAG.getDataLayout()))),
+                   DAG.getVectorIdxConstant(0, SL)),
        WideLoad.getValue(1)},
       SL);
 }
@@ -2161,7 +2163,8 @@ SDValue AMDGPUTargetLowering::LowerFNEARBYINT(SDValue Op, SelectionDAG &DAG) con
 // Don't handle v2f16. The extra instructions to scalarize and repack around the
 // compare and vselect end up producing worse code than scalarizing the whole
 // operation.
-SDValue AMDGPUTargetLowering::LowerFROUND32_16(SDValue Op, SelectionDAG &DAG) const {
+SDValue AMDGPUTargetLowering::LowerFROUND_LegalFTRUNC(SDValue Op,
+                                                      SelectionDAG &DAG) const {
   SDLoc SL(Op);
   SDValue X = Op.getOperand(0);
   EVT VT = Op.getValueType();
@@ -2250,8 +2253,8 @@ SDValue AMDGPUTargetLowering::LowerFROUND64(SDValue Op, SelectionDAG &DAG) const
 SDValue AMDGPUTargetLowering::LowerFROUND(SDValue Op, SelectionDAG &DAG) const {
   EVT VT = Op.getValueType();
 
-  if (VT == MVT::f32 || VT == MVT::f16)
-    return LowerFROUND32_16(Op, DAG);
+  if (isOperationLegal(ISD::FTRUNC, VT))
+    return LowerFROUND_LegalFTRUNC(Op, DAG);
 
   if (VT == MVT::f64)
     return LowerFROUND64(Op, DAG);
@@ -2499,15 +2502,25 @@ SDValue AMDGPUTargetLowering::LowerINT_TO_FP64(SDValue Op, SelectionDAG &DAG,
 
 SDValue AMDGPUTargetLowering::LowerUINT_TO_FP(SDValue Op,
                                                SelectionDAG &DAG) const {
-  assert(Op.getOperand(0).getValueType() == MVT::i64 &&
-         "operation should be legal");
-
   // TODO: Factor out code common with LowerSINT_TO_FP.
-
   EVT DestVT = Op.getValueType();
+  SDValue Src = Op.getOperand(0);
+  EVT SrcVT = Src.getValueType();
+
+  if (SrcVT == MVT::i16) {
+    if (DestVT == MVT::f16)
+      return Op;
+    SDLoc DL(Op);
+
+    // Promote src to i32
+    SDValue Ext = DAG.getNode(ISD::ZERO_EXTEND, DL, MVT::i32, Src);
+    return DAG.getNode(ISD::UINT_TO_FP, DL, DestVT, Ext);
+  }
+
+  assert(SrcVT == MVT::i64 && "operation should be legal");
+
   if (Subtarget->has16BitInsts() && DestVT == MVT::f16) {
     SDLoc DL(Op);
-    SDValue Src = Op.getOperand(0);
 
     SDValue IntToFp32 = DAG.getNode(Op.getOpcode(), DL, MVT::f32, Src);
     SDValue FPRoundFlag = DAG.getIntPtrConstant(0, SDLoc(Op));
@@ -2526,12 +2539,25 @@ SDValue AMDGPUTargetLowering::LowerUINT_TO_FP(SDValue Op,
 
 SDValue AMDGPUTargetLowering::LowerSINT_TO_FP(SDValue Op,
                                               SelectionDAG &DAG) const {
-  assert(Op.getOperand(0).getValueType() == MVT::i64 &&
-         "operation should be legal");
+  EVT DestVT = Op.getValueType();
+
+  SDValue Src = Op.getOperand(0);
+  EVT SrcVT = Src.getValueType();
+
+  if (SrcVT == MVT::i16) {
+    if (DestVT == MVT::f16)
+      return Op;
+
+    SDLoc DL(Op);
+    // Promote src to i32
+    SDValue Ext = DAG.getNode(ISD::SIGN_EXTEND, DL, MVT::i32, Src);
+    return DAG.getNode(ISD::SINT_TO_FP, DL, DestVT, Ext);
+  }
+
+  assert(SrcVT == MVT::i64 && "operation should be legal");
 
   // TODO: Factor out code common with LowerUINT_TO_FP.
 
-  EVT DestVT = Op.getValueType();
   if (Subtarget->has16BitInsts() && DestVT == MVT::f16) {
     SDLoc DL(Op);
     SDValue Src = Op.getOperand(0);
@@ -2868,11 +2894,13 @@ SDValue AMDGPUTargetLowering::performLoadCombine(SDNode *N,
     // the bytes again are not eliminated in the case of an unaligned copy.
     if (!allowsMisalignedMemoryAccesses(
             VT, AS, Align, LN->getMemOperand()->getFlags(), &IsFast)) {
-      if (VT.isVector())
-        return scalarizeVectorLoad(LN, DAG);
-
       SDValue Ops[2];
-      std::tie(Ops[0], Ops[1]) = expandUnalignedLoad(LN, DAG);
+
+      if (VT.isVector())
+        std::tie(Ops[0], Ops[1]) = scalarizeVectorLoad(LN, DAG);
+      else
+        std::tie(Ops[0], Ops[1]) = expandUnalignedLoad(LN, DAG);
+
       return DAG.getMergeValues(Ops, SDLoc(N));
     }
 
@@ -4269,8 +4297,6 @@ const char* AMDGPUTargetLowering::getTargetNodeName(unsigned Opcode) const {
   NODE_NAME_CASE(MAD_U64_U32)
   NODE_NAME_CASE(PERM)
   NODE_NAME_CASE(TEXTURE_FETCH)
-  NODE_NAME_CASE(EXPORT)
-  NODE_NAME_CASE(EXPORT_DONE)
   NODE_NAME_CASE(R600_EXPORT)
   NODE_NAME_CASE(CONST_ADDRESS)
   NODE_NAME_CASE(REGISTER_LOAD)

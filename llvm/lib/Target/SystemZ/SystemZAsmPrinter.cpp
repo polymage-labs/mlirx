@@ -545,9 +545,9 @@ static unsigned EmitNop(MCContext &OutContext, MCStreamer &OutStreamer,
   else {
     MCSymbol *DotSym = OutContext.createTempSymbol();
     const MCSymbolRefExpr *Dot = MCSymbolRefExpr::create(DotSym, OutContext);
+    OutStreamer.EmitLabel(DotSym);
     OutStreamer.EmitInstruction(MCInstBuilder(SystemZ::BRCLAsm)
                                   .addImm(0).addExpr(Dot), STI);
-    OutStreamer.EmitLabel(DotSym);
     return 6;
   }
 }
@@ -724,6 +724,6 @@ void SystemZAsmPrinter::EmitEndOfAsmFile(Module &M) {
 }
 
 // Force static initialization.
-extern "C" void LLVMInitializeSystemZAsmPrinter() {
+extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeSystemZAsmPrinter() {
   RegisterAsmPrinter<SystemZAsmPrinter> X(getTheSystemZTarget());
 }

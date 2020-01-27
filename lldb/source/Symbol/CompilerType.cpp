@@ -1,4 +1,4 @@
-//===-- CompilerType.cpp ----------------------------------------*- C++ -*-===//
+//===-- CompilerType.cpp --------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -25,12 +25,6 @@
 
 using namespace lldb;
 using namespace lldb_private;
-
-CompilerType::CompilerType(TypeSystem *type_system,
-                           lldb::opaque_compiler_type_t type)
-    : m_type(type), m_type_system(type_system) {}
-
-CompilerType::~CompilerType() {}
 
 // Tests
 

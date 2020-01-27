@@ -1,6 +1,6 @@
 //===- LoopUtils.cpp ---- Misc utilities for loop transformation ----------===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -98,9 +98,8 @@ void mlir::getCleanupLoopLowerBound(AffineForOp forOp, unsigned unrollFactor,
   canonicalizeMapAndOperands(map, operands);
   // Remove any affine.apply's that became dead from the simplification above.
   for (auto v : bumpValues) {
-    if (v->use_empty()) {
-      v->getDefiningOp()->erase();
-    }
+    if (v.use_empty())
+      v.getDefiningOp()->erase();
   }
   if (lb.use_empty())
     lb.erase();
@@ -121,23 +120,23 @@ LogicalResult mlir::promoteIfSingleIteration(AffineForOp forOp) {
   // Replaces all IV uses to its single iteration value.
   auto iv = forOp.getInductionVar();
   Operation *op = forOp.getOperation();
-  if (!iv->use_empty()) {
+  if (!iv.use_empty()) {
     if (forOp.hasConstantLowerBound()) {
       OpBuilder topBuilder(op->getParentOfType<FuncOp>().getBody());
       auto constOp = topBuilder.create<ConstantIndexOp>(
           forOp.getLoc(), forOp.getConstantLowerBound());
-      iv->replaceAllUsesWith(constOp);
+      iv.replaceAllUsesWith(constOp);
     } else {
       AffineBound lb = forOp.getLowerBound();
       SmallVector<Value, 4> lbOperands(lb.operand_begin(), lb.operand_end());
       OpBuilder builder(op->getBlock(), Block::iterator(op));
       if (lb.getMap() == builder.getDimIdentityMap()) {
         // No need of generating an affine.apply.
-        iv->replaceAllUsesWith(lbOperands[0]);
+        iv.replaceAllUsesWith(lbOperands[0]);
       } else {
         auto affineApplyOp = builder.create<AffineApplyOp>(
             op->getLoc(), lb.getMap(), lbOperands);
-        iv->replaceAllUsesWith(affineApplyOp);
+        iv.replaceAllUsesWith(affineApplyOp);
       }
     }
   }
@@ -193,7 +192,7 @@ generateLoop(AffineMap lbMap, AffineMap ubMap,
     // remapped to results of cloned operations, and their IV used remapped.
     // Generate the remapping if the shift is not zero: remappedIV = newIV -
     // shift.
-    if (!srcIV->use_empty() && shift != 0) {
+    if (!srcIV.use_empty() && shift != 0) {
       auto ivRemap = bodyBuilder.create<AffineApplyOp>(
           srcForInst.getLoc(),
           bodyBuilder.getSingleDimShiftAffineMap(
@@ -353,7 +352,7 @@ LogicalResult mlir::instBodySkew(AffineForOp forOp, ArrayRef<uint64_t> shifts,
 // in the parent loop.  Collect at most `maxLoops` loops and append them to
 // `forOps`.
 template <typename T>
-void getPerfectlyNestedLoopsImpl(
+static void getPerfectlyNestedLoopsImpl(
     SmallVectorImpl<T> &forOps, T rootForOp,
     unsigned maxLoops = std::numeric_limits<unsigned>::max()) {
   for (unsigned i = 0; i < maxLoops; ++i) {
@@ -475,7 +474,7 @@ LogicalResult mlir::loopUnrollByFactor(AffineForOp forOp,
 
     // If the induction variable is used, create a remapping to the value for
     // this unrolled instance.
-    if (!forOpIV->use_empty()) {
+    if (!forOpIV.use_empty()) {
       // iv' = iv + 1/2/3...unrollFactor-1;
       auto d0 = builder.getAffineDimExpr(0);
       auto bumpMap = AffineMap::get(1, 0, {d0 + i * step});
@@ -836,7 +835,7 @@ Loops mlir::tilePerfectlyNested(loop::ForOp rootForOp, ArrayRef<Value> sizes) {
 static Value ceilDivPositive(OpBuilder &builder, Location loc, Value dividend,
                              int64_t divisor) {
   assert(divisor > 0 && "expected positive divisor");
-  assert(dividend->getType().isIndex() && "expected index-typed value");
+  assert(dividend.getType().isIndex() && "expected index-typed value");
 
   Value divisorMinusOneCst = builder.create<ConstantIndexOp>(loc, divisor - 1);
   Value divisorCst = builder.create<ConstantIndexOp>(loc, divisor);
@@ -850,7 +849,7 @@ static Value ceilDivPositive(OpBuilder &builder, Location loc, Value dividend,
 // where divis is rounding-to-zero division.
 static Value ceilDivPositive(OpBuilder &builder, Location loc, Value dividend,
                              Value divisor) {
-  assert(dividend->getType().isIndex() && "expected index-typed value");
+  assert(dividend.getType().isIndex() && "expected index-typed value");
 
   Value cstOne = builder.create<ConstantIndexOp>(loc, 1);
   Value divisorMinusOne = builder.create<SubIOp>(loc, divisor, cstOne);
@@ -982,12 +981,12 @@ static void normalizeLoop(loop::ForOp loop, loop::ForOp outer,
   // a constant one step.
   bool isZeroBased = false;
   if (auto ubCst =
-          dyn_cast_or_null<ConstantIndexOp>(loop.lowerBound()->getDefiningOp()))
+          dyn_cast_or_null<ConstantIndexOp>(loop.lowerBound().getDefiningOp()))
     isZeroBased = ubCst.getValue() == 0;
 
   bool isStepOne = false;
   if (auto stepCst =
-          dyn_cast_or_null<ConstantIndexOp>(loop.step()->getDefiningOp()))
+          dyn_cast_or_null<ConstantIndexOp>(loop.step().getDefiningOp()))
     isStepOne = stepCst.getValue() == 1;
 
   if (isZeroBased && isStepOne)
@@ -1024,8 +1023,8 @@ static void normalizeLoop(loop::ForOp loop, loop::ForOp outer,
   Value shifted =
       isZeroBased ? scaled : builder.create<AddIOp>(loc, scaled, lb);
 
-  SmallPtrSet<Operation *, 2> preserve{scaled->getDefiningOp(),
-                                       shifted->getDefiningOp()};
+  SmallPtrSet<Operation *, 2> preserve{scaled.getDefiningOp(),
+                                       shifted.getDefiningOp()};
   replaceAllUsesExcept(loop.getInductionVar(), shifted, preserve);
 }
 
@@ -1112,8 +1111,8 @@ static bool isHoistableLoadStore(const MemRefAccess &acc, AffineForOp forOp) {
   Value memref = acc.memref;
 
   // If the memref is defined in the same for op, can't hoist.
-  if (memref->getDefiningOp() &&
-      memref->getDefiningOp()->getBlock() == forOp.getBody())
+  if (memref.getDefiningOp() &&
+      memref.getDefiningOp()->getBlock() == forOp.getBody())
     return false;
 
   AffineValueMap vmap;
@@ -1290,7 +1289,7 @@ void mlir::scalarReplace(AffineForOp forOp) {
     AffineValueMap vMap;
     acc.getAccessMap(&vMap);
 
-    MemRefType origMemrefType = acc.memref->getType().cast<MemRefType>();
+    MemRefType origMemrefType = acc.memref.getType().cast<MemRefType>();
 
     bool containsStore = llvm::any_of(eqAccesses, [](const MemRefAccess &acc) {
       return isa<AffineStoreOp>(acc.opInst);
@@ -1318,7 +1317,7 @@ void mlir::scalarReplace(AffineForOp forOp) {
                                : std::next(eqAccesses.begin());
            it != eqAccesses.end();) {
         auto loadOp = cast<AffineLoadOp>((*it++).opInst);
-        loadOp.getResult()->replaceAllUsesWith(scalar);
+        loadOp.getResult().replaceAllUsesWith(scalar);
         loadOp.erase();
       }
       continue;
@@ -1419,7 +1418,7 @@ static void getMultiLevelStrides(const MemRefRegion &region,
   int64_t numEltPerStride = 1;
   int64_t stride = 1;
   for (int d = bufferShape.size() - 1; d >= 1; d--) {
-    int64_t dimSize = region.memref->getType().cast<MemRefType>().getDimSize(d);
+    int64_t dimSize = region.memref.getType().cast<MemRefType>().getDimSize(d);
     stride *= dimSize;
     numEltPerStride *= bufferShape[d];
     // A stride is needed only if the region has a shorter extent than the
@@ -1447,7 +1446,7 @@ generatePointWiseCopy(Location loc, Value memref, Value fastMemRef,
     return ubMap.getNumInputs() == ubOperands.size();
   }));
 
-  unsigned rank = memref->getType().cast<MemRefType>().getRank();
+  unsigned rank = memref.getType().cast<MemRefType>().getRank();
   (void)rank; // unused in opt mode
   assert(lbMaps.size() == rank && "wrong number of lb maps");
   assert(ubMaps.size() == rank && "wrong number of ub maps");
@@ -1564,7 +1563,7 @@ static LogicalResult generateCopy(
 
   auto loc = region.loc;
   auto memref = region.memref;
-  auto memRefType = memref->getType().cast<MemRefType>();
+  auto memRefType = memref.getType().cast<MemRefType>();
 
   auto layoutMaps = memRefType.getAffineMaps();
   if (layoutMaps.size() > 1 ||
@@ -1836,7 +1835,7 @@ static bool getFullMemRefAsRegion(Operation *opInst, unsigned numParamLoopIVs,
     assert(false && "expected load or store op");
     return false;
   }
-  auto memRefType = region->memref->getType().cast<MemRefType>();
+  auto memRefType = region->memref.getType().cast<MemRefType>();
   if (!memRefType.hasStaticShape())
     return false;
 
@@ -2079,7 +2078,7 @@ static void getLiveInScalars(AffineForOp forOp,
         isa<AffineApplyOp>(op))
       return;
     for (auto value : op->getOperands()) {
-      if (auto *defOp = value->getDefiningOp()) {
+      if (auto *defOp = value.getDefiningOp()) {
         ivs.clear();
         // Check whether the defining op is outside iv.
         getLoopIVs(*defOp, &ivs);
@@ -2111,15 +2110,15 @@ static VectorType getVectorizedType(Type inputType, unsigned width) {
 /// vector<8xf32>, vector<8xf32> becomes vector<8x8xf32> if `vectorWidth` were
 /// to be 8).
 static Value createVectorMemRef(Value scalMemRef, unsigned vectorWidth) {
-  auto scalMemRefType = scalMemRef->getType().cast<MemRefType>();
+  auto scalMemRefType = scalMemRef.getType().cast<MemRefType>();
   auto shape = scalMemRefType.getShape();
   assert(shape.back() % vectorWidth == 0 && "unexpected memref shape");
 
-  OpBuilder b(scalMemRef->getContext());
-  if (auto *defOp = scalMemRef->getDefiningOp())
+  OpBuilder b(scalMemRef.getContext());
+  if (auto *defOp = scalMemRef.getDefiningOp())
     b.setInsertionPointAfter(defOp);
   else
-    b.setInsertionPointToStart(scalMemRef.cast<BlockArgument>()->getOwner());
+    b.setInsertionPointToStart(scalMemRef.cast<BlockArgument>().getOwner());
 
   auto vecMemRefEltType =
       getVectorizedType(scalMemRefType.getElementType(), vectorWidth);
@@ -2156,13 +2155,13 @@ static Operation *vectorizeMiscLeafOp(Operation *op, unsigned width) {
 
   SmallVector<Type, 8> vectorTypes;
   for (auto v : op->getResults()) {
-    vectorTypes.push_back(getVectorizedType(v->getType(), width));
+    vectorTypes.push_back(getVectorizedType(v.getType(), width));
   }
   SmallVector<Value, 4> vectorOperands(op->getOperands());
 
   // Check whether a single operand is null. If so, vectorization failed.
   bool success = llvm::all_of(
-      vectorOperands, [](Value v) { return v->getType().isa<VectorType>(); });
+      vectorOperands, [](Value v) { return v.getType().isa<VectorType>(); });
   if (!success) {
     LLVM_DEBUG(llvm::dbgs()
                << "\n[affine-vect]+++++ operands shoulds have been vectorized");
@@ -2239,7 +2238,7 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
   // Compute the width for vectorization.
   int vectorWidth = -1;
   for (auto memref : toVecMemRefs) {
-    auto memrefType = memref->getType().cast<MemRefType>();
+    auto memrefType = memref.getType().cast<MemRefType>();
     auto eltType = memrefType.getElementType();
     if (eltType.isa<VectorType>()) {
       LLVM_DEBUG(llvm::dbgs() << "code already vectorized?\n");
@@ -2290,7 +2289,7 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
 
   // Check if memref dim size is a multiple of the width.
   for (auto memref : toVecMemRefs) {
-    auto memrefType = memref->getType().cast<MemRefType>();
+    auto memrefType = memref.getType().cast<MemRefType>();
     int64_t lastDimSize = memrefType.getDimSize(memrefType.getRank() - 1);
     if (lastDimSize == -1 || lastDimSize % vectorWidth != 0) {
       LLVM_DEBUG(llvm::dbgs()
@@ -2365,13 +2364,13 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
 
   // Splat live-in scalars.
   for (auto scalar : liveInScalars) {
-    OpBuilder rewriter(scalar->getContext());
+    OpBuilder rewriter(scalar.getContext());
     Location loc = rewriter.getUnknownLoc();
-    if (auto *defOp = scalar->getDefiningOp()) {
+    if (auto *defOp = scalar.getDefiningOp()) {
       loc = defOp->getLoc();
       rewriter.setInsertionPointAfter(defOp);
     } else {
-      auto *block = scalar.cast<BlockArgument>()->getOwner();
+      auto *block = scalar.cast<BlockArgument>().getOwner();
       loc = block->getParentOp()->getLoc();
       rewriter.setInsertionPointToStart(block);
     }

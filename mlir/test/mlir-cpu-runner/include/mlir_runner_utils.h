@@ -1,6 +1,6 @@
 //===- mlir_runner_utils.h - Utils for debugging MLIR CPU execution -------===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -20,11 +20,11 @@
 #else
 /* We are using this library */
 #define MLIR_RUNNER_UTILS_EXPORT __declspec(dllimport)
-#endif
-#endif
+#endif // mlir_runner_utils_EXPORTS
+#endif // MLIR_RUNNER_UTILS_EXPORT
 #else
 #define MLIR_RUNNER_UTILS_EXPORT
-#endif
+#endif // _WIN32
 
 template <typename T, int N> struct StridedMemRefType;
 template <typename StreamType, typename T, int N>

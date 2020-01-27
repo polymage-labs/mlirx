@@ -1,6 +1,6 @@
 //===- RewriterGen.cpp - MLIR pattern rewriter generator ------------------===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -247,7 +247,7 @@ void PatternEmitter::emitOpMatch(DagNode tree, int depth) {
 
       os.indent(indent + 2) << formatv(
           "auto *op{0} = "
-          "(*castedOp{1}.getODSOperands({2}).begin())->getDefiningOp();\n",
+          "(*castedOp{1}.getODSOperands({2}).begin()).getDefiningOp();\n",
           depth + 1, depth, i);
       emitOpMatch(argTree, depth + 1);
       os.indent(indent + 2)
@@ -295,8 +295,8 @@ void PatternEmitter::emitOperandMatch(DagNode tree, int argIndex, int depth,
         PrintFatalError(loc, error);
       }
       auto self =
-          formatv("(*castedOp{0}.getODSOperands({1}).begin())->getType()",
-                  depth, argIndex);
+          formatv("(*castedOp{0}.getODSOperands({1}).begin()).getType()", depth,
+                  argIndex);
       os.indent(indent) << "if (!("
                         << tgfmt(matcher.getConditionTemplate(),
                                  &fmtCtx.withSelf(self))
@@ -329,8 +329,9 @@ void PatternEmitter::emitAttributeMatch(DagNode tree, int argIndex, int depth,
   os.indent(indent) << "{\n";
   indent += 2;
   os.indent(indent) << formatv(
-      "auto tblgen_attr = op{0}->getAttrOfType<{1}>(\"{2}\");\n", depth,
-      attr.getStorageType(), namedAttr->name);
+      "auto tblgen_attr = op{0}->getAttrOfType<{1}>(\"{2}\");"
+      "(void)tblgen_attr;\n",
+      depth, attr.getStorageType(), namedAttr->name);
 
   // TODO(antiagainst): This should use getter method to avoid duplication.
   if (attr.hasDefaultValue()) {
@@ -385,7 +386,7 @@ void PatternEmitter::emitMatchLogic(DagNode tree) {
     auto cmd = "if (!({0})) return matchFailure();\n";
 
     if (isa<TypeConstraint>(constraint)) {
-      auto self = formatv("({0}->getType())",
+      auto self = formatv("({0}.getType())",
                           symbolInfoMap.getValueAndRangeUse(entities.front()));
       os.indent(4) << formatv(cmd,
                               tgfmt(condition, &fmtCtx.withSelf(self.str())));
@@ -573,8 +574,15 @@ void PatternEmitter::emitRewriteLogic() {
       auto val = handleResultPattern(resultTree, offsets[i], 0);
       os.indent(4) << "\n";
       // Resolve each symbol for all range use so that we can loop over them.
+      // We need an explicit cast to `SmallVector` to capture the cases where
+      // `{0}` resolves to an `Operation::result_range` as well as cases that
+      // are not iterable (e.g. vector that gets wrapped in additional braces by
+      // RewriterGen).
+      // TODO(b/147096809): Revisit the need for materializing a vector.
       os << symbolInfoMap.getAllRangeUse(
-          val, "    for (auto v : {0}) {{ tblgen_repl_values.push_back(v); }",
+          val,
+          "    for (auto v : SmallVector<Value, 4>{ {0} }) {{ "
+          "tblgen_repl_values.push_back(v); }",
           "\n");
     }
     os.indent(4) << "\n";
@@ -773,16 +781,22 @@ std::string PatternEmitter::handleOpCreation(DagNode tree, int resultIndex,
     return resultValue;
   }
 
-  bool isBroadcastable =
-      resultOp.getTrait("OpTrait::BroadcastableTwoOperandsOneResult");
+  // TODO: Remove once broadcastable has been updated. This query here is not
+  // really about broadcastable or not, it is about which build method to invoke
+  // and that requires knowledge of whether ODS generated a builder that need
+  // not take return types. That knowledge should be captured in one place
+  // rather than duplicated.
+  bool isResultsBroadcastableShape =
+      resultOp.getTrait("OpTrait::ResultsBroadcastableShape");
   bool usePartialResults = valuePackName != resultValue;
 
-  if (isBroadcastable || usePartialResults || depth > 0 || resultIndex < 0) {
+  if (isResultsBroadcastableShape || usePartialResults || depth > 0 ||
+      resultIndex < 0) {
     // For these cases (broadcastable ops, op results used both as auxiliary
     // values and replacement values, ops in nested patterns, auxiliary ops), we
     // still need to supply the result types when building the op. But because
     // we don't generate a builder automatically with ODS for them, it's the
-    // developer's responsiblity to make sure such a builder (with result type
+    // developer's responsibility to make sure such a builder (with result type
     // deduction ability) exists. We go through the separate-parameter builder
     // here given that it's easier for developers to write compared to
     // aggregate-parameter builders.
@@ -811,7 +825,7 @@ std::string PatternEmitter::handleOpCreation(DagNode tree, int resultIndex,
   if (numResults != 0) {
     for (int i = 0; i < numResults; ++i)
       os.indent(6) << formatv("for (auto v : castedOp0.getODSResults({0})) {{"
-                              "tblgen_types.push_back(v->getType()); }\n",
+                              "tblgen_types.push_back(v.getType()); }\n",
                               resultIndex + i);
   }
   os.indent(6) << formatv("{0} = rewriter.create<{1}>(loc, tblgen_types, "
@@ -1020,9 +1034,8 @@ static void emitRewriters(const RecordKeeper &recordKeeper, raw_ostream &os) {
   }
 
   // Emit function to add the generated matchers to the pattern list.
-  os << "void __attribute__((unused)) populateWithGenerated(MLIRContext "
-        "*context, "
-     << "OwningRewritePatternList *patterns) {\n";
+  os << "void LLVM_ATTRIBUTE_UNUSED populateWithGenerated(MLIRContext "
+        "*context, OwningRewritePatternList *patterns) {\n";
   for (const auto &name : rewriterNames) {
     os << "  patterns->insert<" << name << ">(context);\n";
   }

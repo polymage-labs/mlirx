@@ -1,6 +1,6 @@
 //===- ViewOpGraph.cpp - View/write op graphviz graphs --------------------===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -29,13 +29,9 @@ template <> struct GraphTraits<Block *> {
   using GraphType = Block *;
   using NodeRef = Operation *;
 
-  using ChildIteratorType = UseIterator;
-  static ChildIteratorType child_begin(NodeRef n) {
-    return ChildIteratorType(n);
-  }
-  static ChildIteratorType child_end(NodeRef n) {
-    return ChildIteratorType(n, /*end=*/true);
-  }
+  using ChildIteratorType = Operation::user_iterator;
+  static ChildIteratorType child_begin(NodeRef n) { return n->user_begin(); }
+  static ChildIteratorType child_end(NodeRef n) { return n->user_end(); }
 
   // Operation's destructor is private so use Operation* instead and use
   // mapped iterator.

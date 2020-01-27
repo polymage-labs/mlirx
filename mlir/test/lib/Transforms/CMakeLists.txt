@@ -1,7 +1,9 @@
 add_llvm_library(MLIRTestTransforms
+  TestAllReduceLowering.cpp
   TestCallGraph.cpp
   TestConstantFold.cpp
   TestLoopFusion.cpp
+  TestGpuMemoryPromotion.cpp
   TestInlining.cpp
   TestLinalgTransforms.cpp
   TestLiveness.cpp
@@ -26,7 +28,12 @@ add_dependencies(MLIRTestTransforms MLIRTestVectorTransformPatternsIncGen)
 target_link_libraries(MLIRTestTransforms
   MLIRAffineOps
   MLIRAnalysis
+  MLIREDSC
+  MLIRGPU
+  MLIRLinalgOps
+  MLIRLinalgTransforms
   MLIRLoopOps
+  MLIRGPU
   MLIRPass
   MLIRTestDialect
   MLIRVectorOps

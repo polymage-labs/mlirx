@@ -173,7 +173,7 @@ void HigherOrderPolyhedralOpt::optimizeMatmul(AffineForOp rootMatmulNest,
   // It is fine if iiR, jjR are not found (due to degenerate tile sizes).
 
   if (clVect && jjR &&
-      !outputMemRef->getType()
+      !outputMemRef.getType()
            .cast<MemRefType>()
            .getElementType()
            .isa<VectorType>()) {
@@ -233,14 +233,14 @@ void HigherOrderPolyhedralOpt::optimizeMatmul(AffineForOp rootMatmulNest,
     // Set alignment to 256-bit boundaries for LHS and RHS buffers.
     // FIXME: you don't need to set alignment if these are already vector
     // memrefs.
-    cast<AllocOp>(lhsBuf->getDefiningOp())
+    cast<AllocOp>(lhsBuf.getDefiningOp())
         .setAttr(AllocOp::getAlignmentAttrName(),
                  builder.getI64IntegerAttr(32));
     // The rhsL3buf could sometimes just be the original memref / func arg.
-    if (auto rhsAllocOp = rhsL3Buf->getDefiningOp())
+    if (auto rhsAllocOp = rhsL3Buf.getDefiningOp())
       rhsAllocOp->setAttr(AllocOp::getAlignmentAttrName(),
                           builder.getI64IntegerAttr(32));
-    cast<AllocOp>(rhsL1Buf->getDefiningOp())
+    cast<AllocOp>(rhsL1Buf.getDefiningOp())
         .setAttr(AllocOp::getAlignmentAttrName(),
                  builder.getI64IntegerAttr(32));
   }

@@ -590,6 +590,7 @@ enum CommandArgumentType {
   eArgTypeWatchType,
   eArgRawInput,
   eArgTypeCommand,
+  eArgTypeColumnNum,
   eArgTypeLastArg // Always keep this entry as the last entry in this
                   // enumeration!!
 };
@@ -692,6 +693,8 @@ enum SectionType {
   eSectionTypeDWARFDebugStrOffsetsDwo,
   eSectionTypeDWARFDebugTypesDwo,
   eSectionTypeDWARFDebugRngListsDwo,
+  eSectionTypeDWARFDebugLocDwo,
+  eSectionTypeDWARFDebugLocListsDwo,
 };
 
 FLAGS_ENUM(EmulateInstructionOptions){

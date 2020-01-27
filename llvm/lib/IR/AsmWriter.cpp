@@ -1945,6 +1945,7 @@ static void writeDICompileUnit(raw_ostream &Out, const DICompileUnit *N,
                     false);
   Printer.printNameTableKind("nameTableKind", N->getNameTableKind());
   Printer.printBool("rangesBaseAddress", N->getRangesBaseAddress(), false);
+  Printer.printString("sysroot", N->getSysRoot());
   Out << ")";
 }
 
@@ -2057,7 +2058,6 @@ static void writeDIModule(raw_ostream &Out, const DIModule *N,
   Printer.printString("name", N->getName());
   Printer.printString("configMacros", N->getConfigurationMacros());
   Printer.printString("includePath", N->getIncludePath());
-  Printer.printString("sysroot", N->getSysRoot());
   Out << ")";
 }
 
@@ -2399,6 +2399,8 @@ public:
 
   void writeAllMDNodes();
   void writeMDNode(unsigned Slot, const MDNode *Node);
+  void writeAttribute(const Attribute &Attr, bool InAttrGroup = false);
+  void writeAttributeSet(const AttributeSet &AttrSet, bool InAttrGroup = false);
   void writeAllAttributeGroups();
 
   void printTypeIdentities();
@@ -2531,8 +2533,10 @@ void AssemblyWriter::writeParamOperand(const Value *Operand,
   // Print the type
   TypePrinter.print(Operand->getType(), Out);
   // Print parameter attributes list
-  if (Attrs.hasAttributes())
-    Out << ' ' << Attrs.getAsString();
+  if (Attrs.hasAttributes()) {
+    Out << ' ';
+    writeAttributeSet(Attrs);
+  }
   Out << ' ';
   // Print the operand
   WriteAsOperandInternal(Out, Operand, &TypePrinter, &Machine, TheModule);
@@ -2679,7 +2683,8 @@ void AssemblyWriter::printModuleSummaryIndex() {
   // Print module path entries. To print in order, add paths to a vector
   // indexed by module slot.
   std::vector<std::pair<std::string, ModuleHash>> moduleVec;
-  std::string RegularLTOModuleName = "[Regular LTO]";
+  std::string RegularLTOModuleName =
+      ModuleSummaryIndex::getRegularLTOModuleName();
   moduleVec.resize(TheIndex->modulePaths().size());
   for (auto &ModPath : TheIndex->modulePaths())
     moduleVec[Machine.getModulePathSlot(ModPath.first())] = std::make_pair(
@@ -2896,10 +2901,15 @@ void AssemblyWriter::printAliasSummary(const AliasSummary *AS) {
 }
 
 void AssemblyWriter::printGlobalVarSummary(const GlobalVarSummary *GS) {
-  Out << ", varFlags: (readonly: " << GS->VarFlags.MaybeReadOnly << ", "
-      << "writeonly: " << GS->VarFlags.MaybeWriteOnly << ")";
-
   auto VTableFuncs = GS->vTableFuncs();
+  Out << ", varFlags: (readonly: " << GS->VarFlags.MaybeReadOnly << ", "
+      << "writeonly: " << GS->VarFlags.MaybeWriteOnly << ", "
+      << "constant: " << GS->VarFlags.Constant;
+  if (!VTableFuncs.empty())
+    Out << ", "
+        << "vcall_visibility: " << GS->VarFlags.VCallVisibility;
+  Out << ")";
+
   if (!VTableFuncs.empty()) {
     Out << ", vTableFuncs: (";
     FieldSeparator FS;
@@ -3462,8 +3472,10 @@ void AssemblyWriter::printFunction(const Function *F) {
       TypePrinter.print(FT->getParamType(I), Out);
 
       AttributeSet ArgAttrs = Attrs.getParamAttributes(I);
-      if (ArgAttrs.hasAttributes())
-        Out << ' ' << ArgAttrs.getAsString();
+      if (ArgAttrs.hasAttributes()) {
+        Out << ' ';
+        writeAttributeSet(ArgAttrs);
+      }
     }
   } else {
     // The arguments are meaningful here, print them in detail.
@@ -3549,8 +3561,10 @@ void AssemblyWriter::printArgument(const Argument *Arg, AttributeSet Attrs) {
   TypePrinter.print(Arg->getType(), Out);
 
   // Output parameter attributes list
-  if (Attrs.hasAttributes())
-    Out << ' ' << Attrs.getAsString();
+  if (Attrs.hasAttributes()) {
+    Out << ' ';
+    writeAttributeSet(Attrs);
+  }
 
   // Output name, if available...
   if (Arg->hasName()) {
@@ -4124,6 +4138,33 @@ void AssemblyWriter::writeAllMDNodes() {
 
 void AssemblyWriter::printMDNodeBody(const MDNode *Node) {
   WriteMDNodeBodyInternal(Out, Node, &TypePrinter, &Machine, TheModule);
+}
+
+void AssemblyWriter::writeAttribute(const Attribute &Attr, bool InAttrGroup) {
+  if (!Attr.isTypeAttribute()) {
+    Out << Attr.getAsString(InAttrGroup);
+    return;
+  }
+
+  assert(Attr.hasAttribute(Attribute::ByVal) && "unexpected type attr");
+
+  Out << "byval";
+  if (Type *Ty = Attr.getValueAsType()) {
+    Out << '(';
+    TypePrinter.print(Ty, Out);
+    Out << ')';
+  }
+}
+
+void AssemblyWriter::writeAttributeSet(const AttributeSet &AttrSet,
+                                       bool InAttrGroup) {
+  bool FirstAttr = true;
+  for (const auto &Attr : AttrSet) {
+    if (!FirstAttr)
+      Out << ' ';
+    writeAttribute(Attr, InAttrGroup);
+    FirstAttr = false;
+  }
 }
 
 void AssemblyWriter::writeAllAttributeGroups() {

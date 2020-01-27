@@ -1,6 +1,6 @@
 //===- Builders.h - MLIR Declarative Builder Classes ------------*- C++ -*-===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -24,8 +24,8 @@ namespace mlir {
 
 namespace edsc {
 
-struct index_t {
-  explicit index_t(int64_t v) : v(v) {}
+struct index_type {
+  explicit index_type(int64_t v) : v(v) {}
   explicit operator int64_t() { return v; }
   int64_t v;
 };
@@ -251,6 +251,16 @@ public:
   ///   not yet bound to mlir::Value.
   BlockBuilder(BlockHandle *bh, ArrayRef<ValueHandle *> args);
 
+  /// Constructs a new mlir::Block with argument types derived from `args` and
+  /// appends it as the last block in the region.
+  /// Captures the new block in `bh` and its arguments into `args`.
+  /// Enters the new mlir::Block* and sets the insertion point to its end.
+  ///
+  /// Prerequisites:
+  ///   The ValueHandle `args` are typed delayed ValueHandles; i.e. they are
+  ///   not yet bound to mlir::Value.
+  BlockBuilder(BlockHandle *bh, Region &region, ArrayRef<ValueHandle *> args);
+
   /// The only purpose of this operator is to serve as a sequence point so that
   /// the evaluation of `fun` (which build IR snippets in a scoped fashion) is
   /// scoped within a BlockBuilder.
@@ -303,14 +313,14 @@ public:
   /// Value. An eager Value represents both the declaration and the definition
   /// (in the PL sense) of a placeholder for an mlir::Value that has already
   /// been constructed in the past and that is captured "now" in the program.
-  explicit ValueHandle(Value v) : t(v->getType()), v(v) {}
+  explicit ValueHandle(Value v) : t(v.getType()), v(v) {}
 
   /// Builds a ConstantIndexOp of value `cst`. The constant is created at the
   /// current insertion point.
   /// This implicit constructor is provided to each build an eager Value for a
   /// constant at the current insertion point in the IR. An implicit constructor
   /// allows idiomatic expressions mixing ValueHandle and literals.
-  ValueHandle(index_t cst);
+  ValueHandle(index_type cst);
 
   /// ValueHandle is a value type, use the default copy constructor.
   ValueHandle(const ValueHandle &other) = default;
@@ -329,6 +339,7 @@ public:
 
   /// Implicit conversion useful for automatic conversion to Container<Value>.
   operator Value() const { return getValue(); }
+  operator Type() const { return getType(); }
   operator bool() const { return hasValue(); }
 
   /// Generic mlir::Op create. This is the key to being extensible to the whole
@@ -365,7 +376,7 @@ public:
   Operation *getOperation() const {
     if (!v)
       return nullptr;
-    return v->getDefiningOp();
+    return v.getDefiningOp();
   }
 
 protected:
@@ -449,6 +460,9 @@ public:
 
   /// Delegates block creation to MLIR and wrap the resulting mlir::Block.
   static BlockHandle create(ArrayRef<Type> argTypes);
+
+  /// Delegates block creation to MLIR and wrap the resulting mlir::Block.
+  static BlockHandle createInRegion(Region &region, ArrayRef<Type> argTypes);
 
   operator bool() { return block != nullptr; }
   operator mlir::Block *() { return block; }

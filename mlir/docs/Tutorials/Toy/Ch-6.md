@@ -16,7 +16,7 @@ lowered all but one of the `toy` operations, with the last being `toy.print`.
 Before going over the conversion to LLVM, let's lower the `toy.print` operation.
 We will lower this operation to a non-affine loop nest that invokes `printf` for
 each element. Note that, because the dialect conversion framework supports
-[transitive lowering](Glossary.md#transitive-lowering), we don't need to
+[transitive lowering](../../../getting_started/Glossary.md#transitive-lowering), we don't need to
 directly emit operations in the LLVM dialect. By transitive lowering, we mean
 that the conversion framework may apply multiple patterns to fully legalize an
 operation. In this example, we are generating a structured loop nest instead of
@@ -86,7 +86,7 @@ used for lowering. At this point in the compilation process, we have a
 combination of `toy`, `affine`, and `std` operations. Luckily, the `std` and
 `affine` dialects already provide the set of patterns needed to transform them
 into LLVM dialect. These patterns allow for lowering the IR in multiple stages
-by relying on [transitive lowering](Glossary.md#transitive-lowering).
+by relying on [transitive lowering](../../../getting_started/Glossary.md#transitive-lowering).
 
 ```c++
   mlir::OwningRewritePatternList patterns;
@@ -189,7 +189,7 @@ utility:
 
 Exporting our module to LLVM IR generates:
 
-```.llvm
+```llvm
 define void @main() {
   ...
 
@@ -224,7 +224,7 @@ define void @main() {
 If we enable optimization on the generated LLVM IR, we can trim this down quite
 a bit:
 
-```.llvm
+```llvm
 define void @main()
   %0 = tail call i32 (i8*, ...) @printf(i8* nonnull dereferenceable(1) getelementptr inbounds ([4 x i8], [4 x i8]* @frmt_spec, i64 0, i64 0), double 1.000000e+00)
   %1 = tail call i32 (i8*, ...) @printf(i8* nonnull dereferenceable(1) getelementptr inbounds ([4 x i8], [4 x i8]* @frmt_spec, i64 0, i64 0), double 1.600000e+01)
@@ -237,7 +237,6 @@ define void @main()
   %putchar.2 = tail call i32 @putchar(i32 10)
   ret void
 }
-
 ```
 
 The full code listing for dumping LLVM IR can be found in `Ch6/toy.cpp` in the
@@ -308,7 +307,7 @@ int runJit(mlir::ModuleOp module) {
 
 You can play around with it from the build directory:
 
-```sh
+```shell
 $ echo 'def main() { print([[1, 2], [3, 4]]); }' | ./bin/toyc-ch6 -emit=jit
 1.000000 2.000000
 3.000000 4.000000

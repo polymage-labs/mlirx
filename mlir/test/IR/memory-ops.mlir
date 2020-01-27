@@ -1,28 +1,28 @@
 // RUN: mlir-opt %s | FileCheck %s
 
-// CHECK: #map0 = (d0, d1)[s0] -> (d0 + s0, d1)
+// CHECK: #map0 = affine_map<(d0, d1)[s0] -> (d0 + s0, d1)>
 
 // CHECK-LABEL: func @alloc() {
 func @alloc() {
 ^bb0:
   // Test simple alloc.
   // CHECK: %0 = alloc() : memref<1024x64xf32, 1>
-  %0 = alloc() : memref<1024x64xf32, (d0, d1) -> (d0, d1), 1>
+  %0 = alloc() : memref<1024x64xf32, affine_map<(d0, d1) -> (d0, d1)>, 1>
 
   %c0 = "std.constant"() {value = 0: index} : () -> index
   %c1 = "std.constant"() {value = 1: index} : () -> index
 
   // Test alloc with dynamic dimensions.
   // CHECK: %1 = alloc(%c0, %c1) : memref<?x?xf32, 1>
-  %1 = alloc(%c0, %c1) : memref<?x?xf32, (d0, d1) -> (d0, d1), 1>
+  %1 = alloc(%c0, %c1) : memref<?x?xf32, affine_map<(d0, d1) -> (d0, d1)>, 1>
 
   // Test alloc with no dynamic dimensions and one symbol.
   // CHECK: %2 = alloc()[%c0] : memref<2x4xf32, #map0, 1>
-  %2 = alloc()[%c0] : memref<2x4xf32, (d0, d1)[s0] -> ((d0 + s0), d1), 1>
+  %2 = alloc()[%c0] : memref<2x4xf32, affine_map<(d0, d1)[s0] -> ((d0 + s0), d1)>, 1>
 
   // Test alloc with dynamic dimensions and one symbol.
   // CHECK: %3 = alloc(%c1)[%c0] : memref<2x?xf32, #map0, 1>
-  %3 = alloc(%c1)[%c0] : memref<2x?xf32, (d0, d1)[s0] -> (d0 + s0, d1), 1>
+  %3 = alloc(%c1)[%c0] : memref<2x?xf32, affine_map<(d0, d1)[s0] -> (d0 + s0, d1)>, 1>
 
   // Alloc with no mappings.
   // b/116054838 Parser crash while parsing ill-formed AllocOp
@@ -37,22 +37,22 @@ func @alloca() {
 ^bb0:
   // Test simple alloc.
   // CHECK: %0 = alloca() : memref<1024x64xf32, 1>
-  %0 = alloca() : memref<1024x64xf32, (d0, d1) -> (d0, d1), 1>
+  %0 = alloca() : memref<1024x64xf32, affine_map<(d0, d1) -> (d0, d1)>, 1>
 
   %c0 = "std.constant"() {value = 0: index} : () -> index
   %c1 = "std.constant"() {value = 1: index} : () -> index
 
   // Test alloca with dynamic dimensions.
   // CHECK: %1 = alloca(%c0, %c1) : memref<?x?xf32, 1>
-  %1 = alloca(%c0, %c1) : memref<?x?xf32, (d0, d1) -> (d0, d1), 1>
+  %1 = alloca(%c0, %c1) : memref<?x?xf32, affine_map<(d0, d1) -> (d0, d1)>, 1>
 
   // Test alloca with no dynamic dimensions and one symbol.
   // CHECK: %2 = alloca()[%c0] : memref<2x4xf32, #map0, 1>
-  %2 = alloca()[%c0] : memref<2x4xf32, (d0, d1)[s0] -> ((d0 + s0), d1), 1>
+  %2 = alloca()[%c0] : memref<2x4xf32, affine_map<(d0, d1)[s0] -> ((d0 + s0), d1)>, 1>
 
   // Test alloca with dynamic dimensions and one symbol.
   // CHECK: %3 = alloca(%c1)[%c0] : memref<2x?xf32, #map0, 1>
-  %3 = alloca(%c1)[%c0] : memref<2x?xf32, (d0, d1)[s0] -> (d0 + s0, d1), 1>
+  %3 = alloca(%c1)[%c0] : memref<2x?xf32, affine_map<(d0, d1)[s0] -> (d0 + s0, d1)>, 1>
 
   // Alloca with no mappings.
   // CHECK: %4 = alloca() : memref<2xi32>
@@ -65,10 +65,10 @@ func @alloca() {
 func @dealloc() {
 ^bb0:
   // CHECK: %0 = alloc() : memref<1024x64xf32>
-  %0 = alloc() : memref<1024x64xf32, (d0, d1) -> (d0, d1), 0>
+  %0 = alloc() : memref<1024x64xf32, affine_map<(d0, d1) -> (d0, d1)>, 0>
 
   // CHECK: dealloc %0 : memref<1024x64xf32>
-  dealloc %0 : memref<1024x64xf32, (d0, d1) -> (d0, d1), 0>
+  dealloc %0 : memref<1024x64xf32, affine_map<(d0, d1) -> (d0, d1)>, 0>
   return
 }
 
@@ -76,16 +76,16 @@ func @dealloc() {
 func @load_store() {
 ^bb0:
   // CHECK: %0 = alloc() : memref<1024x64xf32, 1>
-  %0 = alloc() : memref<1024x64xf32, (d0, d1) -> (d0, d1), 1>
+  %0 = alloc() : memref<1024x64xf32, affine_map<(d0, d1) -> (d0, d1)>, 1>
 
   %1 = constant 0 : index
   %2 = constant 1 : index
 
   // CHECK: %1 = load %0[%c0, %c1] : memref<1024x64xf32, 1>
-  %3 = load %0[%1, %2] : memref<1024x64xf32, (d0, d1) -> (d0, d1), 1>
+  %3 = load %0[%1, %2] : memref<1024x64xf32, affine_map<(d0, d1) -> (d0, d1)>, 1>
 
   // CHECK: store %1, %0[%c0, %c1] : memref<1024x64xf32, 1>
-  store %3, %0[%1, %2] : memref<1024x64xf32, (d0, d1) -> (d0, d1), 1>
+  store %3, %0[%1, %2] : memref<1024x64xf32, affine_map<(d0, d1) -> (d0, d1)>, 1>
 
   return
 }
@@ -96,8 +96,8 @@ func @dma_ops() {
   %stride = constant 32 : index
   %elt_per_stride = constant 16 : index
 
-  %A = alloc() : memref<256 x f32, (d0) -> (d0), 0>
-  %Ah = alloc() : memref<256 x f32, (d0) -> (d0), 1>
+  %A = alloc() : memref<256 x f32, affine_map<(d0) -> (d0)>, 0>
+  %Ah = alloc() : memref<256 x f32, affine_map<(d0) -> (d0)>, 1>
   %tag = alloc() : memref<1 x f32>
 
   %num_elements = constant 256 : index

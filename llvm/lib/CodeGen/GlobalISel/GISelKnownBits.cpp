@@ -24,14 +24,12 @@ using namespace llvm;
 
 char llvm::GISelKnownBitsAnalysis::ID = 0;
 
-INITIALIZE_PASS_BEGIN(GISelKnownBitsAnalysis, DEBUG_TYPE,
-                      "Analysis for ComputingKnownBits", false, true)
-INITIALIZE_PASS_END(GISelKnownBitsAnalysis, DEBUG_TYPE,
-                    "Analysis for ComputingKnownBits", false, true)
+INITIALIZE_PASS(GISelKnownBitsAnalysis, DEBUG_TYPE,
+                "Analysis for ComputingKnownBits", false, true)
 
-GISelKnownBits::GISelKnownBits(MachineFunction &MF)
+GISelKnownBits::GISelKnownBits(MachineFunction &MF, unsigned MaxDepth)
     : MF(MF), MRI(MF.getRegInfo()), TL(*MF.getSubtarget().getTargetLowering()),
-      DL(MF.getFunction().getParent()->getDataLayout()) {}
+      DL(MF.getFunction().getParent()->getDataLayout()), MaxDepth(MaxDepth) {}
 
 Align GISelKnownBits::inferAlignmentForFrameIdx(int FrameIdx, int Offset,
                                                 const MachineFunction &MF) {
@@ -122,20 +120,39 @@ void GISelKnownBits::computeKnownBitsImpl(Register R, KnownBits &Known,
     TL.computeKnownBitsForTargetInstr(*this, R, Known, DemandedElts, MRI,
                                       Depth);
     break;
-  case TargetOpcode::COPY: {
-    MachineOperand Dst = MI.getOperand(0);
-    MachineOperand Src = MI.getOperand(1);
-    // Look through trivial copies but don't look through trivial copies of the
-    // form `%1:(s32) = OP %0:gpr32` known-bits analysis is currently unable to
-    // determine the bit width of a register class.
-    //
-    // We can't use NoSubRegister by name as it's defined by each target but
-    // it's always defined to be 0 by tablegen.
-    if (Dst.getSubReg() == 0 /*NoSubRegister*/ && Src.getReg().isVirtual() &&
-        Src.getSubReg() == 0 /*NoSubRegister*/ &&
-        MRI.getType(Src.getReg()).isValid()) {
-      // Don't increment Depth for this one since we didn't do any work.
-      computeKnownBitsImpl(Src.getReg(), Known, DemandedElts, Depth);
+  case TargetOpcode::COPY:
+  case TargetOpcode::G_PHI:
+  case TargetOpcode::PHI: {
+    Known.One = APInt::getAllOnesValue(BitWidth);
+    Known.Zero = APInt::getAllOnesValue(BitWidth);
+    // Destination registers should not have subregisters at this
+    // point of the pipeline, otherwise the main live-range will be
+    // defined more than once, which is against SSA.
+    assert(MI.getOperand(0).getSubReg() == 0 && "Is this code in SSA?");
+    // PHI's operand are a mix of registers and basic blocks interleaved.
+    // We only care about the register ones.
+    for (unsigned Idx = 1; Idx < MI.getNumOperands(); Idx += 2) {
+      const MachineOperand &Src = MI.getOperand(Idx);
+      Register SrcReg = Src.getReg();
+      // Look through trivial copies and phis but don't look through trivial
+      // copies or phis of the form `%1:(s32) = OP %0:gpr32`, known-bits
+      // analysis is currently unable to determine the bit width of a
+      // register class.
+      //
+      // We can't use NoSubRegister by name as it's defined by each target but
+      // it's always defined to be 0 by tablegen.
+      if (SrcReg.isVirtual() && Src.getSubReg() == 0 /*NoSubRegister*/ &&
+          MRI.getType(SrcReg).isValid()) {
+        // For COPYs we don't do anything, don't increase the depth.
+        computeKnownBitsImpl(SrcReg, Known2, DemandedElts,
+                             Depth + (Opcode != TargetOpcode::COPY));
+        Known.One &= Known2.One;
+        Known.Zero &= Known2.Zero;
+      } else {
+        // We know nothing.
+        Known = KnownBits(BitWidth);
+        break;
+      }
     }
     break;
   }
@@ -371,6 +388,76 @@ void GISelKnownBits::computeKnownBitsImpl(Register R, KnownBits &Known,
                     << Known.Zero.toString(16, false) << "\n"
                     << "[" << Depth << "] One:  0x"
                     << Known.One.toString(16, false) << "\n");
+}
+
+unsigned GISelKnownBits::computeNumSignBits(Register R,
+                                            const APInt &DemandedElts,
+                                            unsigned Depth) {
+  MachineInstr &MI = *MRI.getVRegDef(R);
+  unsigned Opcode = MI.getOpcode();
+
+  if (Opcode == TargetOpcode::G_CONSTANT)
+    return MI.getOperand(1).getCImm()->getValue().getNumSignBits();
+
+  if (Depth == getMaxDepth())
+    return 1;
+
+  if (!DemandedElts)
+    return 1; // No demanded elts, better to assume we don't know anything.
+
+  LLT DstTy = MRI.getType(R);
+
+  // Handle the case where this is called on a register that does not have a
+  // type constraint. This is unlikely to occur except by looking through copies
+  // but it is possible for the initial register being queried to be in this
+  // state.
+  if (!DstTy.isValid())
+    return 1;
+
+  switch (Opcode) {
+  case TargetOpcode::COPY: {
+    MachineOperand &Src = MI.getOperand(1);
+    if (Src.getReg().isVirtual() && Src.getSubReg() == 0 &&
+        MRI.getType(Src.getReg()).isValid()) {
+      // Don't increment Depth for this one since we didn't do any work.
+      return computeNumSignBits(Src.getReg(), DemandedElts, Depth);
+    }
+
+    return 1;
+  }
+  case TargetOpcode::G_SEXT: {
+    Register Src = MI.getOperand(1).getReg();
+    LLT SrcTy = MRI.getType(Src);
+    unsigned Tmp = DstTy.getScalarSizeInBits() - SrcTy.getScalarSizeInBits();
+    return computeNumSignBits(Src, DemandedElts, Depth + 1) + Tmp;
+  }
+  case TargetOpcode::G_TRUNC: {
+    Register Src = MI.getOperand(1).getReg();
+    LLT SrcTy = MRI.getType(Src);
+
+    // Check if the sign bits of source go down as far as the truncated value.
+    unsigned DstTyBits = DstTy.getScalarSizeInBits();
+    unsigned NumSrcBits = SrcTy.getScalarSizeInBits();
+    unsigned NumSrcSignBits = computeNumSignBits(Src, DemandedElts, Depth + 1);
+    if (NumSrcSignBits > (NumSrcBits - DstTyBits))
+      return NumSrcSignBits - (NumSrcBits - DstTyBits);
+    break;
+  }
+  default:
+    break;
+  }
+
+  // TODO: Handle target instructions
+  // TODO: Fall back to known bits
+  return 1;
+}
+
+unsigned GISelKnownBits::computeNumSignBits(Register R, unsigned Depth) {
+  LLT Ty = MRI.getType(R);
+  APInt DemandedElts = Ty.isVector()
+                           ? APInt::getAllOnesValue(Ty.getNumElements())
+                           : APInt(1, 1);
+  return computeNumSignBits(R, DemandedElts, Depth);
 }
 
 void GISelKnownBitsAnalysis::getAnalysisUsage(AnalysisUsage &AU) const {

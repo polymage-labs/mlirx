@@ -7,14 +7,14 @@
 // footprint -- so that one could write a definite test case and not have to
 // update it each time something related to the cost functions change.
 
-#map0 = (d0) -> (d0)
-#map1 = (d0) -> (d0 + 128)
+#map0 = affine_map<(d0) -> (d0)>
+#map1 = affine_map<(d0) -> (d0 + 128)>
 
 // Map used to index the buffer while computing.
-// CHECK-DAG: [[BUF_IDX_MAP:map[0-9]+]] = (d0, d1, d2, d3) -> (-d0 + d1, -d2 + d3)
+// CHECK-DAG: [[BUF_IDX_MAP:map[0-9]+]] = affine_map<(d0, d1, d2, d3) -> (-d0 + d1, -d2 + d3)>
 
-// CHECK-DAG: [[MAP_IDENTITY:map[0-9]+]] = (d0) -> (d0)
-// CHECK-DAG: [[MAP_PLUS_128:map[0-9]+]] = (d0) -> (d0 + 128)
+// CHECK-DAG: [[MAP_IDENTITY:map[0-9]+]] = affine_map<(d0) -> (d0)>
+// CHECK-DAG: [[MAP_PLUS_128:map[0-9]+]] = affine_map<(d0) -> (d0 + 128)>
 
 // CHECK-LABEL: func @matmul
 func @matmul(%A: memref<4096x4096xf32>, %B: memref<4096x4096xf32>, %C: memref<4096x4096xf32>) -> memref<4096x4096xf32> {
@@ -144,12 +144,12 @@ func @small_mem(%arg0: memref<1024x1024xf32>, %arg1: memref<1024x1024xf32>, %arg
 
 // -----
 
-#map0 = (d0) -> (d0)
-#map_ub = (d0) -> (4096, d0 + 100)
+#map0 = affine_map<(d0) -> (d0)>
+#map_ub = affine_map<(d0) -> (4096, d0 + 100)>
 
-// CHECK-DAG: [[MAP_IDENTITY:map[0-9]+]] = (d0) -> (d0)
-// CHECK-DAG: [[MAP_MIN_UB1:map[0-9]+]] = (d0) -> (d0 + 100, 4096)
-// CHECK-DAG: [[MAP_MIN_UB2:map[0-9]+]] = (d0) -> (4096, d0 + 100)
+// CHECK-DAG: [[MAP_IDENTITY:map[0-9]+]] = affine_map<(d0) -> (d0)>
+// CHECK-DAG: [[MAP_MIN_UB1:map[0-9]+]] = affine_map<(d0) -> (d0 + 100, 4096)>
+// CHECK-DAG: [[MAP_MIN_UB2:map[0-9]+]] = affine_map<(d0) -> (4096, d0 + 100)>
 
 // CHECK-LABEL: func @min_upper_bound
 func @min_upper_bound(%A: memref<4096xf32>) -> memref<4096xf32> {

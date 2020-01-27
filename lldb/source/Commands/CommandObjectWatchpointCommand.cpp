@@ -1,4 +1,4 @@
-//===-- CommandObjectWatchpointCommand.cpp ----------------------*- C++ -*-===//
+//===-- CommandObjectWatchpointCommand.cpp --------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -243,7 +243,6 @@ are no syntax errors may indicate that a function was declared but never called.
     m_interpreter.GetLLDBCommandsFromIOHandler(
         "> ",        // Prompt
         *this,       // IOHandlerDelegate
-        true,        // Run IOHandler in async mode
         wp_options); // Baton for the "io_handler" that will be passed back into
                      // our IOHandlerDelegate functions
   }

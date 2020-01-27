@@ -1,6 +1,6 @@
 //===- TypeUtilities.cpp - Helper function for type queries ---------------===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -25,7 +25,7 @@ Type mlir::getElementTypeOrSelf(Type type) {
 }
 
 Type mlir::getElementTypeOrSelf(Value val) {
-  return getElementTypeOrSelf(val->getType());
+  return getElementTypeOrSelf(val.getType());
 }
 
 Type mlir::getElementTypeOrSelf(Attribute attr) {
@@ -55,7 +55,7 @@ LogicalResult mlir::verifyCompatibleShape(ArrayRef<int64_t> shape1,
                                           ArrayRef<int64_t> shape2) {
   if (shape1.size() != shape2.size())
     return failure();
-  for (const auto &dims : llvm::zip(shape1, shape2)) {
+  for (auto dims : llvm::zip(shape1, shape2)) {
     int64_t dim1 = std::get<0>(dims);
     int64_t dim2 = std::get<1>(dims);
     if (!ShapedType::isDynamic(dim1) && !ShapedType::isDynamic(dim2) &&
@@ -92,7 +92,7 @@ OperandElementTypeIterator::OperandElementTypeIterator(
           it, &unwrap) {}
 
 Type OperandElementTypeIterator::unwrap(Value value) {
-  return value->getType().cast<ShapedType>().getElementType();
+  return value.getType().cast<ShapedType>().getElementType();
 }
 
 ResultElementTypeIterator::ResultElementTypeIterator(
@@ -101,5 +101,5 @@ ResultElementTypeIterator::ResultElementTypeIterator(
           it, &unwrap) {}
 
 Type ResultElementTypeIterator::unwrap(Value value) {
-  return value->getType().cast<ShapedType>().getElementType();
+  return value.getType().cast<ShapedType>().getElementType();
 }

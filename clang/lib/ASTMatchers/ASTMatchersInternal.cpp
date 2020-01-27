@@ -15,6 +15,7 @@
 #include "clang/AST/ASTTypeTraits.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclTemplate.h"
+#include "clang/AST/ParentMapContext.h"
 #include "clang/AST/PrettyPrinter.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Basic/LLVM.h"
@@ -68,6 +69,11 @@ bool AnyOfVariadicOperator(const ast_type_traits::DynTypedNode &DynNode,
                            BoundNodesTreeBuilder *Builder,
                            ArrayRef<DynTypedMatcher> InnerMatchers);
 
+bool OptionallyVariadicOperator(const ast_type_traits::DynTypedNode &DynNode,
+                                ASTMatchFinder *Finder,
+                                BoundNodesTreeBuilder *Builder,
+                                ArrayRef<DynTypedMatcher> InnerMatchers);
+
 void BoundNodesTreeBuilder::visitMatches(Visitor *ResultVisitor) {
   if (Bindings.empty())
     Bindings.push_back(BoundNodesMap());
@@ -110,6 +116,11 @@ public:
     bool Result = InnerMatcher->dynMatches(DynNode, Finder, Builder);
     if (Result) Builder->setBinding(ID, DynNode);
     return Result;
+  }
+
+  llvm::Optional<ast_type_traits::TraversalKind>
+  TraversalKind() const override {
+    return InnerMatcher->TraversalKind();
   }
 
 private:
@@ -179,6 +190,11 @@ DynTypedMatcher DynTypedMatcher::constructVariadic(
         SupportedKind, RestrictKind,
         new VariadicMatcher<EachOfVariadicOperator>(std::move(InnerMatchers)));
 
+  case VO_Optionally:
+    return DynTypedMatcher(SupportedKind, RestrictKind,
+                           new VariadicMatcher<OptionallyVariadicOperator>(
+                               std::move(InnerMatchers)));
+
   case VO_UnaryNot:
     // FIXME: Implement the Not operator to take a single matcher instead of a
     // vector.
@@ -222,7 +238,8 @@ bool DynTypedMatcher::matches(const ast_type_traits::DynTypedNode &DynNode,
   TraversalKindScope RAII(Finder->getASTContext(),
                           Implementation->TraversalKind());
 
-  auto N = Finder->getASTContext().traverseIgnored(DynNode);
+  auto N =
+      Finder->getASTContext().getParentMapContext().traverseIgnored(DynNode);
 
   if (RestrictKind.isBaseOf(N.getNodeKind()) &&
       Implementation->dynMatches(N, Finder, Builder)) {
@@ -241,7 +258,8 @@ bool DynTypedMatcher::matchesNoKindCheck(
   TraversalKindScope raii(Finder->getASTContext(),
                           Implementation->TraversalKind());
 
-  auto N = Finder->getASTContext().traverseIgnored(DynNode);
+  auto N =
+      Finder->getASTContext().getParentMapContext().traverseIgnored(DynNode);
 
   assert(RestrictKind.isBaseOf(N.getNodeKind()));
   if (Implementation->dynMatches(N, Finder, Builder)) {
@@ -340,6 +358,20 @@ bool AnyOfVariadicOperator(const ast_type_traits::DynTypedNode &DynNode,
     }
   }
   return false;
+}
+
+bool OptionallyVariadicOperator(const ast_type_traits::DynTypedNode &DynNode,
+                                ASTMatchFinder *Finder,
+                                BoundNodesTreeBuilder *Builder,
+                                ArrayRef<DynTypedMatcher> InnerMatchers) {
+  BoundNodesTreeBuilder Result;
+  for (const DynTypedMatcher &InnerMatcher : InnerMatchers) {
+    BoundNodesTreeBuilder BuilderInner(*Builder);
+    if (InnerMatcher.matches(DynNode, Finder, &BuilderInner))
+      Result.addMatch(BuilderInner);
+  }
+  *Builder = std::move(Result);
+  return true;
 }
 
 inline static
@@ -792,6 +824,9 @@ const internal::VariadicOperatorMatcherFunc<
 const internal::VariadicOperatorMatcherFunc<
     2, std::numeric_limits<unsigned>::max()>
     allOf = {internal::DynTypedMatcher::VO_AllOf};
+const internal::VariadicOperatorMatcherFunc<
+    1, std::numeric_limits<unsigned>::max()>
+    optionally = {internal::DynTypedMatcher::VO_Optionally};
 const internal::VariadicFunction<internal::Matcher<NamedDecl>, StringRef,
                                  internal::hasAnyNameFunc>
     hasAnyName = {};

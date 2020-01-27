@@ -1,4 +1,4 @@
-//===-- NSArray.cpp ---------------------------------------------*- C++ -*-===//
+//===-- NSArray.cpp -------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -16,7 +16,7 @@
 #include "lldb/Core/ValueObjectConstResult.h"
 #include "lldb/DataFormatters/FormattersHelpers.h"
 #include "lldb/Expression/FunctionCaller.h"
-#include "lldb/Symbol/ClangASTContext.h"
+#include "lldb/Symbol/TypeSystemClang.h"
 #include "lldb/Target/Language.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Utility/DataBufferHeap.h"
@@ -95,31 +95,6 @@ private:
   D32 *m_data_32;
   D64 *m_data_64;
 };
-  
-namespace Foundation109 {
-  struct DataDescriptor_32 {
-    uint32_t _used;
-    uint32_t _priv1 : 2;
-    uint32_t _size : 30;
-    uint32_t _priv2 : 2;
-    uint32_t _offset : 30;
-    uint32_t _priv3;
-    uint32_t _data;
-  };
-  
-  struct DataDescriptor_64 {
-    uint64_t _used;
-    uint64_t _priv1 : 2;
-    uint64_t _size : 62;
-    uint64_t _priv2 : 2;
-    uint64_t _offset : 62;
-    uint32_t _priv3;
-    uint64_t _data;
-  };
-  
-  using NSArrayMSyntheticFrontEnd =
-      GenericNSArrayMSyntheticFrontEnd<DataDescriptor_32, DataDescriptor_64>;
-}
   
 namespace Foundation1010 {
   struct DataDescriptor_32 {
@@ -461,7 +436,7 @@ lldb_private::formatters::NSArrayMSyntheticFrontEndBase::NSArrayMSyntheticFrontE
     : SyntheticChildrenFrontEnd(*valobj_sp), m_exe_ctx_ref(), m_ptr_size(8),
       m_id_type() {
   if (valobj_sp) {
-    auto *clang_ast_context = ClangASTContext::GetScratch(
+    auto *clang_ast_context = TypeSystemClang::GetScratch(
         *valobj_sp->GetExecutionContextRef().GetTargetSP());
     if (clang_ast_context)
       m_id_type = CompilerType(
@@ -609,12 +584,11 @@ lldb_private::formatters::GenericNSArrayISyntheticFrontEnd<D32, D64, Inline>::
   if (valobj_sp) {
     CompilerType type = valobj_sp->GetCompilerType();
     if (type) {
-      auto *clang_ast_context = ClangASTContext::GetScratch(
+      auto *clang_ast_context = TypeSystemClang::GetScratch(
           *valobj_sp->GetExecutionContextRef().GetTargetSP());
       if (clang_ast_context)
-        m_id_type = CompilerType(clang_ast_context,
-                                 clang_ast_context->getASTContext()
-                                     .ObjCBuiltinIdTy.getAsOpaquePtr());
+        m_id_type = clang_ast_context->GetType(
+            clang_ast_context->getASTContext().ObjCBuiltinIdTy);
     }
   }
 }
@@ -779,7 +753,7 @@ lldb_private::formatters::NSArray1SyntheticFrontEnd::GetChildAtIndex(
 
   if (idx == 0) {
     auto *clang_ast_context =
-        ClangASTContext::GetScratch(*m_backend.GetTargetSP());
+        TypeSystemClang::GetScratch(*m_backend.GetTargetSP());
     if (clang_ast_context) {
       CompilerType id_type(
           clang_ast_context->GetBasicType(lldb::eBasicTypeObjCID));
@@ -859,8 +833,6 @@ lldb_private::formatters::NSArraySyntheticFrontEndCreator(
       return (new Foundation1428::NSArrayMSyntheticFrontEnd(valobj_sp));
     if (runtime->GetFoundationVersion() >= 1100)
       return (new Foundation1010::NSArrayMSyntheticFrontEnd(valobj_sp));
-    else
-      return (new Foundation109::NSArrayMSyntheticFrontEnd(valobj_sp));
   } else if (class_name == g_NSCallStackArray) {
     return (new CallStackArray::NSCallStackArraySyntheticFrontEnd(valobj_sp));
   } else {

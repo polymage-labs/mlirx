@@ -1,6 +1,6 @@
 //===- Attributes.cpp - MLIR Affine Expr Classes --------------------------===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -676,7 +676,8 @@ DenseElementsAttr DenseElementsAttr::getRaw(ShapedType type,
 static bool isValidIntOrFloat(ShapedType type, int64_t dataEltSize,
                               bool isInt) {
   // Make sure that the data element size is the same as the type element width.
-  if ((dataEltSize * CHAR_BIT) != type.getElementTypeBitWidth())
+  if (getDenseElementBitwidth(type.getElementType()) !=
+      static_cast<size_t>(dataEltSize * CHAR_BIT))
     return false;
 
   // Check that the element type is valid.

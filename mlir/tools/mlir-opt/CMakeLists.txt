@@ -29,7 +29,7 @@ set(LIBS
   MLIRGPUtoNVVMTransforms
   MLIRGPUtoROCDLTransforms
   MLIRGPUtoSPIRVTransforms
-  MLIRLinalg
+  MLIRLinalgOps
   MLIRLLVMIR
   MLIRLoopOps
   MLIRNVVMIR
@@ -41,6 +41,7 @@ set(LIBS
   MLIRROCDLIR
   MLIRSPIRV
   MLIRStandardToSPIRVTransforms
+  MLIRSPIRVTestPasses
   MLIRSPIRVTransforms
   MLIRStandardOps
   MLIRStandardToLLVM

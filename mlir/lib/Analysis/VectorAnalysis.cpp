@@ -1,6 +1,6 @@
 //===- VectorAnalysis.cpp - Analysis for Vectorization --------------------===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -10,8 +10,8 @@
 #include "mlir/Analysis/LoopAnalysis.h"
 #include "mlir/Dialect/AffineOps/AffineOps.h"
 #include "mlir/Dialect/StandardOps/Ops.h"
-#include "mlir/Dialect/VectorOps/Utils.h"
 #include "mlir/Dialect/VectorOps/VectorOps.h"
+#include "mlir/Dialect/VectorOps/VectorUtils.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/IR/Operation.h"
@@ -198,7 +198,7 @@ bool mlir::matcher::operatesOnSuperVectorsOf(Operation &op,
     }
     return false;
   } else if (op.getNumResults() == 1) {
-    if (auto v = op.getResult(0)->getType().dyn_cast<VectorType>()) {
+    if (auto v = op.getResult(0).getType().dyn_cast<VectorType>()) {
       superVectorType = v;
     } else {
       // Not a vector type.

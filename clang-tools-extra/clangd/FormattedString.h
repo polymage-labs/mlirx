@@ -14,6 +14,7 @@
 #define LLVM_CLANG_TOOLS_EXTRA_CLANGD_FORMATTEDSTRING_H
 
 #include "llvm/Support/raw_ostream.h"
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <vector>
@@ -32,6 +33,7 @@ public:
   std::string asMarkdown() const;
   std::string asPlainText() const;
 
+  virtual bool isRuler() const { return false; }
   virtual ~Block() = default;
 };
 
@@ -62,25 +64,44 @@ private:
   std::vector<Chunk> Chunks;
 };
 
+/// Represents a sequence of one or more documents. Knows how to print them in a
+/// list like format, e.g. by prepending with "- " and indentation.
+class BulletList : public Block {
+public:
+  void renderMarkdown(llvm::raw_ostream &OS) const override;
+  void renderPlainText(llvm::raw_ostream &OS) const override;
+
+  class Document &addItem();
+
+private:
+  std::vector<class Document> Items;
+};
+
 /// A format-agnostic representation for structured text. Allows rendering into
 /// markdown and plaintext.
 class Document {
 public:
   /// Adds a semantical block that will be separate from others.
   Paragraph &addParagraph();
-  /// Inserts a vertical space into the document.
-  void addSpacer();
+  /// Inserts a horizontal separator to the document.
+  void addRuler();
   /// Adds a block of code. This translates to a ``` block in markdown. In plain
   /// text representation, the code block will be surrounded by newlines.
   void addCodeBlock(std::string Code, std::string Language = "cpp");
+  /// Heading is a special type of paragraph that will be prepended with \p
+  /// Level many '#'s in markdown.
+  Paragraph &addHeading(size_t Level);
 
+  BulletList &addBulletList();
+
+  /// Doesn't contain any trailing newlines.
   std::string asMarkdown() const;
+  /// Doesn't contain any trailing newlines.
   std::string asPlainText() const;
 
 private:
   std::vector<std::unique_ptr<Block>> Children;
 };
-
 } // namespace markup
 } // namespace clangd
 } // namespace clang

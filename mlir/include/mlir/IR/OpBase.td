@@ -1,6 +1,6 @@
 //===-- OpBase.td - Base op definition file ----------------*- tablegen -*-===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -85,7 +85,7 @@ class Pred;
 //   constraints on each type definition reads naturally and we want to attach
 //   type constraints directly to an operand/result, $_self will be replaced
 //   by the operand/result's type. E.g., for `F32` in `F32:$operand`, its
-//   `$_self` will be expanded as `getOperand(...)->getType()`.
+//   `$_self` will be expanded as `getOperand(...).getType()`.
 class CPred<code pred> : Pred {
   code predExpr = "(" # pred # ")";
 }
@@ -1327,7 +1327,10 @@ class PredOpTrait<string descr, Pred pred> : OpTrait {
 }
 
 // Op supports operand broadcast behavior.
-def Broadcastable  : NativeOpTrait<"BroadcastableTwoOperandsOneResult">;
+def ResultsBroadcastableShape :
+  NativeOpTrait<"ResultsBroadcastableShape">;
+// TODO: Alias of the above, remove post integrate.
+def Broadcastable : NativeOpTrait<"ResultsBroadcastableShape">;
 // X op Y == Y op X
 def Commutative  : NativeOpTrait<"IsCommutative">;
 // Op behaves like a function.
@@ -1408,8 +1411,12 @@ def ins;
 // OpInterfaceTrait corresponds to a specific 'OpInterface' class defined in
 // C++. The purpose to wrap around C++ symbol string with this class is to make
 // interfaces specified for ops in TableGen less alien and more integrated.
-class OpInterfaceTrait<string name> : NativeOpTrait<""> {
+class OpInterfaceTrait<string name, code verifyBody = [{}]> : NativeOpTrait<""> {
   let trait = name # "::Trait";
+
+  // Specify the body of the verification function. `$_op` will be replaced with
+  // the operation being verified.
+  code verify = verifyBody;
 }
 
 // This class represents a single, optionally static, interface method.
@@ -1539,7 +1546,7 @@ class Op<Dialect dialect, string mnemonic, list<OpTrait> props = []> {
   // following signatures:
   //
   // ```c++
-  // static void build(Builder *, OperationState &tblgen_state,
+  // static void build(Builder *, OperationState &odsState,
   //                   Type <result0-name>, Type <result1-name>, ...,
   //                   Value <arg0-name>, Value <arg1-name>, ...,
   //                   Attribute <attr0-name>, Attribute <attr1-name>, ...);
@@ -1547,7 +1554,7 @@ class Op<Dialect dialect, string mnemonic, list<OpTrait> props = []> {
   // * where the attributes follow the same declaration order as in the op.
   //
   // ```c++
-  // static void build(Builder *, OperationState &tblgen_state,
+  // static void build(Builder *, OperationState &odsState,
   //                   ArrayRef<Type> resultTypes,
   //                   ArrayRef<Value> operands,
   //                   ArrayRef<NamedAttribute> attributes);
@@ -1600,7 +1607,7 @@ class Results<dag rets> {
 //===----------------------------------------------------------------------===//
 
 def HasNoUseOf: Constraint<
-    CPred<"$_self->use_begin() == $_self->use_end()">, "has no use">;
+    CPred<"$_self.use_empty()">, "has no use">;
 
 //===----------------------------------------------------------------------===//
 // Common op type constraints
@@ -1661,7 +1668,7 @@ class AllTypesMatch<list<string> names> :
 // Type Constraint operand `idx`'s Element type is `type`.
 class TCopVTEtIs<int idx, Type type> : And<[
    CPred<"$_op.getNumOperands() > " # idx>,
-   SubstLeaves<"$_self", "$_op.getOperand(" # idx # ")->getType()",
+   SubstLeaves<"$_self", "$_op.getOperand(" # idx # ").getType()",
      IsShapedTypePred>,
    SubstLeaves<"$_self", "getElementTypeOrSelf($_op.getOperand(" # idx # "))",
      type.predicate>]>;
@@ -1688,9 +1695,9 @@ class ElementTypeIs<string name, Type type> : PredOpTrait<
 // type.
 class TCopVTEtIsSameAs<int i, int j> : And<[
     CPred<"$_op.getNumOperands() > std::max(" # i # "u," # j # "u)">,
-    SubstLeaves<"$_self", "$_op.getOperand(" # i # ")->getType()",
+    SubstLeaves<"$_self", "$_op.getOperand(" # i # ").getType()",
       IsShapedTypePred>,
-    SubstLeaves<"$_self", "$_op.getOperand(" # j # ")->getType()",
+    SubstLeaves<"$_self", "$_op.getOperand(" # j # ").getType()",
       IsShapedTypePred>,
     CPred<"mlir::getElementTypeOrSelf($_op.getOperand(" # i # ")) == "
           "mlir::getElementTypeOrSelf($_op.getOperand(" # j # "))">]>;
@@ -1700,16 +1707,16 @@ class TCopVTEtIsSameAs<int i, int j> : And<[
 class TCOpResIsShapedTypePred<int i, int j> : And<[
     CPred<"$_op.getNumResults() > " # i>,
     CPred<"$_op.getNumOperands() > " # j>,
-    SubstLeaves<"$_self", "$_op.getResult(" # i # ")->getType()",
+    SubstLeaves<"$_self", "$_op.getResult(" # i # ").getType()",
       IsShapedTypePred>,
-    SubstLeaves<"$_self", "$_op.getOperand(" # j # ")->getType()",
+    SubstLeaves<"$_self", "$_op.getOperand(" # j # ").getType()",
       IsShapedTypePred>]>;
 
 // Predicate to verify that the i'th result and the j'th operand have the same
 // type.
 class TCresIsSameAsOpBase<int i, int j> :
-    CPred<"$_op.getResult(" # i # ")->getType() == "
-          "$_op.getOperand(" # j # ")->getType()">;
+    CPred<"$_op.getResult(" # i # ").getType() == "
+          "$_op.getOperand(" # j # ").getType()">;
 
 // Basic Predicate to verify that the i'th result and the j'th operand have the
 // same elemental type.
@@ -1730,8 +1737,8 @@ class TCresVTEtIsSameAsOp<int i, int j> : And<[
 class TCOpIsBroadcastableToRes<int opId, int resId> : And<[
     TCOpResIsShapedTypePred<opId, resId>,
     CPred<"OpTrait::util::getBroadcastedType("
-              "$_op.getOperand(" # opId # ")->getType(), "
-              "$_op.getResult(" # resId # ")->getType())">]>;
+              "$_op.getOperand(" # opId # ").getType(), "
+              "$_op.getResult(" # resId # ").getType())">]>;
 
 // Predicate to verify that all the operands at the given `indices`
 // have the same element type.

@@ -220,8 +220,14 @@ void X86AsmPrinter::PrintOperand(const MachineInstr *MI, unsigned OpNo,
 
   case MachineOperand::MO_ConstantPoolIndex:
   case MachineOperand::MO_GlobalAddress: {
-    if (IsATT)
+    switch (MI->getInlineAsmDialect()) {
+    case InlineAsm::AD_ATT:
       O << '$';
+      break;
+    case InlineAsm::AD_Intel:
+      O << "offset ";
+      break;
+    }
     PrintSymbolOperand(MO, O);
     break;
   }
@@ -743,7 +749,7 @@ void X86AsmPrinter::EmitEndOfAsmFile(Module &M) {
 //===----------------------------------------------------------------------===//
 
 // Force static initialization.
-extern "C" void LLVMInitializeX86AsmPrinter() {
+extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeX86AsmPrinter() {
   RegisterAsmPrinter<X86AsmPrinter> X(getTheX86_32Target());
   RegisterAsmPrinter<X86AsmPrinter> Y(getTheX86_64Target());
 }

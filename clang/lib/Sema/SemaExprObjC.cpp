@@ -1642,15 +1642,14 @@ bool Sema::CheckMessageArgumentTypes(
           << Sel << isClassMessage << SourceRange(SelectorLocs.front(),
                                                 SelectorLocs.back());
       // Find the class to which we are sending this message.
-      if (ReceiverType->isObjCObjectPointerType()) {
-        if (ObjCInterfaceDecl *ThisClass =
-            ReceiverType->getAs<ObjCObjectPointerType>()->getInterfaceDecl()) {
+      if (auto *ObjPT = ReceiverType->getAs<ObjCObjectPointerType>()) {
+        if (ObjCInterfaceDecl *ThisClass = ObjPT->getInterfaceDecl()) {
           Diag(ThisClass->getLocation(), diag::note_receiver_class_declared);
           if (!RecRange.isInvalid())
             if (ThisClass->lookupClassMethod(Sel))
-              Diag(RecRange.getBegin(),diag::note_receiver_expr_here)
-                << FixItHint::CreateReplacement(RecRange,
-                                                ThisClass->getNameAsString());
+              Diag(RecRange.getBegin(), diag::note_receiver_expr_here)
+                  << FixItHint::CreateReplacement(RecRange,
+                                                  ThisClass->getNameAsString());
         }
       }
     }
@@ -2399,7 +2398,6 @@ static void checkFoundationAPI(Sema &S, SourceLocation Loc,
     return;
   QualType Ret = ImpliedMethod->getReturnType();
   if (Ret->isRecordType() || Ret->isVectorType() || Ret->isExtVectorType()) {
-    QualType Ret = ImpliedMethod->getReturnType();
     S.Diag(Loc, diag::warn_objc_unsafe_perform_selector)
         << Method->getSelector()
         << (!Ret->isRecordType()
@@ -3014,7 +3012,11 @@ ExprResult Sema::BuildInstanceMessage(Expr *Receiver,
           << Method->getDeclName();
     }
 
-    if (ReceiverType->isObjCClassType() && !isImplicit) {
+    // Under ARC, self can't be assigned, and doing a direct call to `self`
+    // when it's a Class is hence safe.  For other cases, we can't trust `self`
+    // is what we think it is, so we reject it.
+    if (ReceiverType->isObjCClassType() && !isImplicit &&
+        !(Receiver->isObjCSelfExpr() && getLangOpts().ObjCAutoRefCount)) {
       Diag(Receiver->getExprLoc(),
            diag::err_messaging_class_with_direct_method);
       Diag(Method->getLocation(), diag::note_direct_method_declared_at)

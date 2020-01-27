@@ -1236,6 +1236,7 @@ class CGObjCGNUstep2 : public CGObjCGNUstep {
         // The first Interface we find may be a @class,
         // which should only be treated as the source of
         // truth in the absence of a true declaration.
+        assert(OID && "Failed to find ObjCInterfaceDecl");
         const ObjCInterfaceDecl *OIDDef = OID->getDefinition();
         if (OIDDef != nullptr)
           OID = OIDDef;
@@ -1646,8 +1647,10 @@ class CGObjCGNUstep2 : public CGObjCGNUstep {
       for (const auto &lateInit : EarlyInitList) {
         auto *global = TheModule.getGlobalVariable(lateInit.first);
         if (global) {
-          b.CreateAlignedStore(global,
-              b.CreateStructGEP(lateInit.second.first, lateInit.second.second), CGM.getPointerAlign().getQuantity());
+          b.CreateAlignedStore(
+              global,
+              b.CreateStructGEP(lateInit.second.first, lateInit.second.second),
+              CGM.getPointerAlign().getAsAlign());
         }
       }
       b.CreateRetVoid();
@@ -3036,6 +3039,7 @@ llvm::Value *CGObjCGNU::GenerateProtocolRef(CodeGenFunction &CGF,
   llvm::Constant *&protocol = ExistingProtocols[PD->getNameAsString()];
   if (!protocol)
     GenerateProtocol(PD);
+  assert(protocol && "Unknown protocol");
   llvm::Type *T =
     CGM.getTypes().ConvertType(CGM.getContext().getObjCProtoType());
   return CGF.Builder.CreateBitCast(protocol, llvm::PointerType::getUnqual(T));

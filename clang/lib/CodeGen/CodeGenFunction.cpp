@@ -799,11 +799,13 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
           FD->getBody()->getStmtClass() == Stmt::CoroutineBodyStmtClass)
         SanOpts.Mask &= ~SanitizerKind::Null;
 
-  // Apply xray attributes to the function (as a string, for now)
   if (D) {
+    // Apply xray attributes to the function (as a string, for now)
     if (const auto *XRayAttr = D->getAttr<XRayInstrumentAttr>()) {
       if (CGM.getCodeGenOpts().XRayInstrumentationBundle.has(
-              XRayInstrKind::Function)) {
+              XRayInstrKind::FunctionEntry) ||
+          CGM.getCodeGenOpts().XRayInstrumentationBundle.has(
+              XRayInstrKind::FunctionExit)) {
         if (XRayAttr->alwaysXRayInstrument() && ShouldXRayInstrumentFunction())
           Fn->addFnAttr("function-instrument", "xray-always");
         if (XRayAttr->neverXRayInstrument())
@@ -812,12 +814,37 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
           if (ShouldXRayInstrumentFunction())
             Fn->addFnAttr("xray-log-args",
                           llvm::utostr(LogArgs->getArgumentCount()));
+        if (!CGM.getCodeGenOpts().XRayInstrumentationBundle.has(
+                XRayInstrKind::FunctionExit)) {
+          Fn->addFnAttr("xray-skip-exit");
+        }
+        if (!CGM.getCodeGenOpts().XRayInstrumentationBundle.has(
+                XRayInstrKind::FunctionEntry)) {
+          Fn->addFnAttr("xray-skip-entry");
+        }
       }
     } else {
       if (ShouldXRayInstrumentFunction() && !CGM.imbueXRayAttrs(Fn, Loc))
         Fn->addFnAttr(
             "xray-instruction-threshold",
             llvm::itostr(CGM.getCodeGenOpts().XRayInstructionThreshold));
+      if (CGM.getCodeGenOpts().XRayIgnoreLoops) {
+        Fn->addFnAttr("xray-ignore-loops");
+      }
+    }
+
+    unsigned Count, Offset;
+    if (const auto *Attr = D->getAttr<PatchableFunctionEntryAttr>()) {
+      Count = Attr->getCount();
+      Offset = Attr->getOffset();
+    } else {
+      Count = CGM.getCodeGenOpts().PatchableFunctionEntryCount;
+      Offset = CGM.getCodeGenOpts().PatchableFunctionEntryOffset;
+    }
+    if (Count && Offset <= Count) {
+      Fn->addFnAttr("patchable-function-entry", std::to_string(Count - Offset));
+      if (Offset)
+        Fn->addFnAttr("patchable-function-prefix", std::to_string(Offset));
     }
   }
 
@@ -2101,7 +2128,7 @@ void CodeGenFunction::EmitDeclRefExprDbgValue(const DeclRefExpr *E,
                                               const APValue &Init) {
   assert(Init.hasValue() && "Invalid DeclRefExpr initializer!");
   if (CGDebugInfo *Dbg = getDebugInfo())
-    if (CGM.getCodeGenOpts().getDebugInfo() >= codegenoptions::LimitedDebugInfo)
+    if (CGM.getCodeGenOpts().hasReducedDebugInfo())
       Dbg->EmitGlobalVariable(E->getDecl(), Init);
 }
 
@@ -2378,10 +2405,7 @@ static void CreateMultiVersionResolverReturn(CodeGenModule &CGM,
 
 void CodeGenFunction::EmitMultiVersionResolver(
     llvm::Function *Resolver, ArrayRef<MultiVersionResolverOption> Options) {
-  assert((getContext().getTargetInfo().getTriple().getArch() ==
-              llvm::Triple::x86 ||
-          getContext().getTargetInfo().getTriple().getArch() ==
-              llvm::Triple::x86_64) &&
+  assert(getContext().getTargetInfo().getTriple().isX86() &&
          "Only implemented for x86 targets");
 
   bool SupportsIFunc = getContext().getTargetInfo().supportsIFunc();

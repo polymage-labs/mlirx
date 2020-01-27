@@ -1,6 +1,6 @@
 //===- STLExtras.h - STL-like extensions that are used by MLIR --*- C++ -*-===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -187,7 +187,8 @@ namespace detail {
 /// drop_front/slice/etc.. Derived range classes must implement the following
 /// static methods:
 ///   * ReferenceT dereference_iterator(const BaseT &base, ptrdiff_t index)
-///     - Derefence an iterator pointing to the base object at the given index.
+///     - Dereference an iterator pointing to the base object at the given
+///       index.
 ///   * BaseT offset_base(const BaseT &base, ptrdiff_t index)
 ///     - Return a new base that is offset from the provide base by 'index'
 ///       elements.
@@ -222,6 +223,8 @@ public:
         count(end.getIndex() - begin.getIndex()) {}
   indexed_accessor_range_base(const iterator_range<iterator> &range)
       : indexed_accessor_range_base(range.begin(), range.end()) {}
+  indexed_accessor_range_base(BaseT base, ptrdiff_t count)
+      : base(base), count(count) {}
 
   iterator begin() const { return iterator(base, 0); }
   iterator end() const { return iterator(base, count); }
@@ -267,8 +270,6 @@ public:
   }
 
 protected:
-  indexed_accessor_range_base(BaseT base, ptrdiff_t count)
-      : base(base), count(count) {}
   indexed_accessor_range_base(const indexed_accessor_range_base &) = default;
   indexed_accessor_range_base(indexed_accessor_range_base &&) = default;
   indexed_accessor_range_base &
@@ -286,21 +287,28 @@ protected:
 /// bases that are offsetable should derive from indexed_accessor_range_base
 /// instead. Derived range classes are expected to implement the following
 /// static method:
-///   * ReferenceT dereference_iterator(const BaseT &base, ptrdiff_t index)
-///     - Derefence an iterator pointing to a parent base at the given index.
+///   * ReferenceT dereference(const BaseT &base, ptrdiff_t index)
+///     - Dereference an iterator pointing to a parent base at the given index.
 template <typename DerivedT, typename BaseT, typename T,
           typename PointerT = T *, typename ReferenceT = T &>
 class indexed_accessor_range
     : public detail::indexed_accessor_range_base<
-          indexed_accessor_range<DerivedT, BaseT, T, PointerT, ReferenceT>,
-          std::pair<BaseT, ptrdiff_t>, T, PointerT, ReferenceT> {
-protected:
+          DerivedT, std::pair<BaseT, ptrdiff_t>, T, PointerT, ReferenceT> {
+public:
   indexed_accessor_range(BaseT base, ptrdiff_t startIndex, ptrdiff_t count)
       : detail::indexed_accessor_range_base<
             DerivedT, std::pair<BaseT, ptrdiff_t>, T, PointerT, ReferenceT>(
             std::make_pair(base, startIndex), count) {}
+  using detail::indexed_accessor_range_base<
+      DerivedT, std::pair<BaseT, ptrdiff_t>, T, PointerT,
+      ReferenceT>::indexed_accessor_range_base;
 
-private:
+  /// Returns the current base of the range.
+  const BaseT &getBase() const { return this->base.first; }
+
+  /// Returns the current start index of the range.
+  ptrdiff_t getStartIndex() const { return this->base.second; }
+
   /// See `detail::indexed_accessor_range_base` for details.
   static std::pair<BaseT, ptrdiff_t>
   offset_base(const std::pair<BaseT, ptrdiff_t> &base, ptrdiff_t index) {
@@ -312,13 +320,8 @@ private:
   static ReferenceT
   dereference_iterator(const std::pair<BaseT, ptrdiff_t> &base,
                        ptrdiff_t index) {
-    return DerivedT::dereference_iterator(base.first, base.second + index);
+    return DerivedT::dereference(base.first, base.second + index);
   }
-
-  /// Allow access to `offset_base` and `dereference_iterator`.
-  friend detail::indexed_accessor_range_base<
-      indexed_accessor_range<DerivedT, BaseT, T, PointerT, ReferenceT>,
-      std::pair<BaseT, ptrdiff_t>, T, PointerT, ReferenceT>;
 };
 
 /// Given a container of pairs, return a range over the second elements.

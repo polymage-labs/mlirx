@@ -1,6 +1,6 @@
 //===- ConvertFromLLVMIR.cpp - MLIR to LLVM IR conversion -----------------===//
 //
-// Part of the MLIR Project, under the Apache License v2.0 with LLVM Exceptions.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -203,6 +203,14 @@ Attribute Importer::getConstantAsAttr(llvm::Constant *value) {
   if (auto *c = dyn_cast<llvm::ConstantDataArray>(value))
     if (c->isString())
       return b.getStringAttr(c->getAsString());
+  if (auto *c = dyn_cast<llvm::ConstantFP>(value)) {
+    if (c->getType()->isDoubleTy())
+      return b.getFloatAttr(FloatType::getF64(context), c->getValueAPF());
+    else if (c->getType()->isFloatingPointTy())
+      return b.getFloatAttr(FloatType::getF32(context), c->getValueAPF());
+  }
+  if (auto *f = dyn_cast<llvm::Function>(value))
+    return b.getSymbolRefAttr(f->getName());
   return Attribute();
 }
 
@@ -558,7 +566,7 @@ LogicalResult Importer::processFunction(llvm::Function *f) {
     assert(instMap.count(llvmAndUnknown.first));
     Value newValue = instMap[llvmAndUnknown.first];
     Value oldValue = llvmAndUnknown.second->getResult(0);
-    oldValue->replaceAllUsesWith(newValue);
+    oldValue.replaceAllUsesWith(newValue);
     llvmAndUnknown.second->erase();
   }
   return success();
