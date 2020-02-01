@@ -625,6 +625,13 @@ func @memref_cast(%arg0: memref<4xf32>, %arg1 : memref<?xf32>, %arg2 : memref<64
   return
 }
 
+// CHECK-LABEL: func @memref_shape_cast
+func @memref_shape_cast(%arg0: memref<64x8xf32>) -> memref<64x2xvector<4xf32>> {
+  // CHECK: {{.*}} = memref_shape_cast %arg0 : memref<64x8xf32> to memref<64x2xvector<4xf32>>
+  %0 = memref_shape_cast %arg0 : memref<64x8xf32> to memref<64x2xvector<4xf32>>
+  return %0 : memref<64x2xvector<4xf32>>
+}
+
 // CHECK-LABEL: func @memref_view(%arg0
 func @memref_view(%arg0 : index, %arg1 : index, %arg2 : index) {
   %0 = alloc() : memref<2048xi8>
