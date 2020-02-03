@@ -39,9 +39,9 @@ func @main() {
   return
 }
 
-#K_UB = (d0) -> (480, d0 * -480 + 2048)
-#I_LB = (d0) -> (d0 * 110)
-#I_UB = (d0) -> (696, d0 * 110 + 110)
+#K_UB = affine_map<(d0) -> (480, d0 * -480 + 2048)>
+#I_LB = affine_map<(d0) -> (d0 * 110)>
+#I_UB = affine_map<(d0) -> (696, d0 * 110 + 110)>
 
 // This is a pre-tiled matmul loop nest matching the OpenBLAS/BLIS
 // tiling strategy with L3 tiling being ignored:
