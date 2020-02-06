@@ -446,8 +446,10 @@ LogicalResult mlir::normalizeMemRef(AllocOp allocOp, Value *normalizedMemRef) {
   SmallVector<Value, 4> symbolOperands(allocOp.getSymbolicOperands());
 
   // Create the replacement alloc op.
-  auto newMemRefType = MemRefType::get(newShape, memrefType.getElementType(),
-                                       b.getMultiDimIdentityMap(newRank));
+  MemRefType newMemRefType =
+      MemRefType::Builder(memrefType)
+          .setShape(newShape)
+          .setAffineMaps(b.getMultiDimIdentityMap(newRank));
   auto newAlloc = b.create<AllocOp>(
       allocOp.getLoc(), newMemRefType, llvm::None,
       allocOp.getAttrOfType<IntegerAttr>(AllocOp::getAlignmentAttrName()));

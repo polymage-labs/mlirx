@@ -46,8 +46,8 @@ mlir::edsc::LoopRangeBuilder::LoopRangeBuilder(ValueHandle *iv,
   enter(body, /*prev=*/1);
 }
 
-ValueHandle mlir::edsc::LoopRangeBuilder::
-operator()(std::function<void(void)> fun) {
+ValueHandle
+mlir::edsc::LoopRangeBuilder::operator()(std::function<void(void)> fun) {
   if (fun)
     fun();
   exit();
@@ -77,8 +77,8 @@ mlir::edsc::LoopNestRangeBuilder::LoopNestRangeBuilder(
     : LoopNestRangeBuilder(
           ivs, SmallVector<ValueHandle, 4>(ranges.begin(), ranges.end())) {}
 
-ValueHandle LoopNestRangeBuilder::LoopNestRangeBuilder::
-operator()(std::function<void(void)> fun) {
+ValueHandle LoopNestRangeBuilder::LoopNestRangeBuilder::operator()(
+    std::function<void(void)> fun) {
   if (fun)
     fun();
   for (auto &lit : reverse(loops)) {
@@ -89,6 +89,7 @@ operator()(std::function<void(void)> fun) {
 
 namespace mlir {
 namespace edsc {
+
 template <>
 GenericLoopNestRangeBuilder<loop::ForOp>::GenericLoopNestRangeBuilder(
     ArrayRef<edsc::ValueHandle *> ivs, ArrayRef<Value> ranges) {
@@ -105,12 +106,28 @@ GenericLoopNestRangeBuilder<AffineForOp>::GenericLoopNestRangeBuilder(
     assert(range.getType() && "expected linalg.range type");
     assert(range.getDefiningOp() && "need operations to extract range parts");
     RangeOp rangeOp = cast<RangeOp>(range.getDefiningOp());
-    lbs.emplace_back(ValueHandle(rangeOp.min()));
-    ubs.emplace_back(ValueHandle(rangeOp.max()));
-    steps.emplace_back(ValueHandle(rangeOp.step()));
+    lbs.emplace_back(rangeOp.min());
+    ubs.emplace_back(rangeOp.max());
+    steps.emplace_back(rangeOp.step());
   }
   builder = std::make_unique<AffineLoopNestBuilder>(ivs, lbs, ubs, steps);
 }
+
+template <>
+GenericLoopNestRangeBuilder<loop::ParallelOp>::GenericLoopNestRangeBuilder(
+    ArrayRef<ValueHandle *> ivs, ArrayRef<Value> ranges) {
+  SmallVector<ValueHandle, 4> lbs, ubs, steps;
+  for (Value range : ranges) {
+    assert(range.getType() && "expected linalg.range type");
+    assert(range.getDefiningOp() && "need operations to extract range parts");
+    RangeOp rangeOp = cast<RangeOp>(range.getDefiningOp());
+    lbs.emplace_back(rangeOp.min());
+    ubs.emplace_back(rangeOp.max());
+    steps.emplace_back(rangeOp.step());
+  }
+  builder = std::make_unique<ParallelLoopNestBuilder>(ivs, lbs, ubs, steps);
+}
+
 } // namespace edsc
 } // namespace mlir
 
@@ -205,6 +222,13 @@ Operation *mlir::edsc::makeGenericLinalgOp(
   return op;
 }
 
+static void mulRegionBuilder(ArrayRef<BlockArgument> args) {
+  using edsc::op::operator*;
+  assert(args.size() == 2 && "expected 2 block arguments");
+  ValueHandle a(args[0]), b(args[1]);
+  linalg_yield((a * b).getValue());
+}
+
 void mlir::edsc::ops::macRegionBuilder(ArrayRef<BlockArgument> args) {
   using edsc::op::operator+;
   using edsc::op::operator*;
@@ -294,6 +318,34 @@ Operation *mlir::edsc::ops::linalg_matmul(ValueHandle vA, ValueHandle vB,
     {IterType::Parallel, IterType::Parallel, IterType::Reduction},
     {A({m, k}), B({k, n})},
     {C({m, n})},
+    macRegionBuilder);
+  // clang-format on
+}
+
+Operation *mlir::edsc::ops::linalg_matmul(ValueHandle vA, ValueHandle vB,
+                                          RankedTensorType tC) {
+  // clang-format off
+  AffineExpr m, n, k;
+  bindDims(ScopedContext::getContext(), m, n, k);
+  StructuredIndexed A(vA), B(vB), C(tC);
+  return makeGenericLinalgOp(
+    {IterType::Parallel, IterType::Parallel, IterType::Reduction},
+    {A({m, k}), B({k, n})},
+    {C({m, n})},
+    mulRegionBuilder);
+  // clang-format on
+}
+
+Operation *mlir::edsc::ops::linalg_matmul(ValueHandle vA, ValueHandle vB,
+                                          ValueHandle vC, RankedTensorType tD) {
+  // clang-format off
+  AffineExpr m, n, k;
+  bindDims(ScopedContext::getContext(), m, n, k);
+  StructuredIndexed A(vA), B(vB), C(vC), D(tD);
+  return makeGenericLinalgOp(
+    {IterType::Parallel, IterType::Parallel, IterType::Reduction},
+    {A({m, k}), B({k, n}), C({m, n})},
+    {D({m, n})},
     macRegionBuilder);
   // clang-format on
 }

@@ -512,8 +512,8 @@ static const Comdat *getELFComdat(const GlobalValue *GV) {
   return C;
 }
 
-static const MCSymbolELF *getAssociatedSymbol(const GlobalObject *GO,
-                                              const TargetMachine &TM) {
+static const MCSymbolELF *getLinkedToSymbol(const GlobalObject *GO,
+                                            const TargetMachine &TM) {
   MDNode *MD = GO->getMetadata(LLVMContext::MD_associated);
   if (!MD)
     return nullptr;
@@ -592,18 +592,18 @@ MCSection *TargetLoweringObjectFileELF::getExplicitSectionGlobal(
   // A section can have at most one associated section. Put each global with
   // MD_associated in a unique section.
   unsigned UniqueID = MCContext::GenericSectionID;
-  const MCSymbolELF *AssociatedSymbol = getAssociatedSymbol(GO, TM);
-  if (AssociatedSymbol) {
+  const MCSymbolELF *LinkedToSym = getLinkedToSymbol(GO, TM);
+  if (LinkedToSym) {
     UniqueID = NextUniqueID++;
     Flags |= ELF::SHF_LINK_ORDER;
   }
 
   MCSectionELF *Section = getContext().getELFSection(
       SectionName, getELFSectionType(SectionName, Kind), Flags,
-      getEntrySizeForKind(Kind), Group, UniqueID, AssociatedSymbol);
+      getEntrySizeForKind(Kind), Group, UniqueID, LinkedToSym);
   // Make sure that we did not get some other section with incompatible sh_link.
   // This should not be possible due to UniqueID code above.
-  assert(Section->getAssociatedSymbol() == AssociatedSymbol &&
+  assert(Section->getLinkedToSymbol() == LinkedToSym &&
          "Associated symbol mismatch between sections");
   return Section;
 }
@@ -696,16 +696,16 @@ MCSection *TargetLoweringObjectFileELF::SelectSectionForGlobal(
   }
   EmitUniqueSection |= GO->hasComdat();
 
-  const MCSymbolELF *AssociatedSymbol = getAssociatedSymbol(GO, TM);
-  if (AssociatedSymbol) {
+  const MCSymbolELF *LinkedToSym = getLinkedToSymbol(GO, TM);
+  if (LinkedToSym) {
     EmitUniqueSection = true;
     Flags |= ELF::SHF_LINK_ORDER;
   }
 
   MCSectionELF *Section = selectELFSectionForGlobal(
       getContext(), GO, Kind, getMangler(), TM, EmitUniqueSection, Flags,
-      &NextUniqueID, AssociatedSymbol);
-  assert(Section->getAssociatedSymbol() == AssociatedSymbol);
+      &NextUniqueID, LinkedToSym);
+  assert(Section->getLinkedToSymbol() == LinkedToSym);
   return Section;
 }
 
@@ -888,7 +888,7 @@ void TargetLoweringObjectFileMachO::emitModuleMetadata(MCStreamer &Streamer,
     for (const auto *Option : LinkerOptions->operands()) {
       SmallVector<std::string, 4> StrOptions;
       for (const auto &Piece : cast<MDNode>(Option)->operands())
-        StrOptions.push_back(cast<MDString>(Piece)->getString());
+        StrOptions.push_back(std::string(cast<MDString>(Piece)->getString()));
       Streamer.EmitLinkerOptions(StrOptions);
     }
   }
@@ -1453,7 +1453,7 @@ void TargetLoweringObjectFileCOFF::emitModuleMetadata(MCStreamer &Streamer,
       for (const auto &Piece : cast<MDNode>(Option)->operands()) {
         // Lead with a space for consistency with our dllexport implementation.
         std::string Directive(" ");
-        Directive.append(cast<MDString>(Piece)->getString());
+        Directive.append(std::string(cast<MDString>(Piece)->getString()));
         Streamer.EmitBytes(Directive);
       }
     }

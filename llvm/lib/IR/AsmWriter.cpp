@@ -2651,8 +2651,10 @@ void AssemblyWriter::printModule(const Module *M) {
   printUseLists(nullptr);
 
   // Output all of the functions.
-  for (const Function &F : *M)
+  for (const Function &F : *M) {
+    Out << '\n';
     printFunction(&F);
+  }
   assert(UseListOrders.empty() && "All use-lists should have been consumed");
 
   // Output all attribute groups.
@@ -2691,7 +2693,7 @@ void AssemblyWriter::printModuleSummaryIndex() {
         // A module id of -1 is a special entry for a regular LTO module created
         // during the thin link.
         ModPath.second.first == -1u ? RegularLTOModuleName
-                                    : (std::string)ModPath.first(),
+                                    : (std::string)std::string(ModPath.first()),
         ModPath.second.second);
 
   unsigned i = 0;

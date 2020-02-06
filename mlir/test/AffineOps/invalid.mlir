@@ -171,8 +171,8 @@ func @affine_min(%arg0 : index, %arg1 : index, %arg2 : index) {
 
 // -----
 
-// CHECK-LABEL: @graybox_missing_capture
-func @graybox_missing_capture(%M : memref<2xi32>) {
+// CHECK-LABEL: @affine_graybox_missing_capture
+func @affine_graybox_missing_capture(%M : memref<2xi32>) {
   affine.for %i = 0 to 10 {
     affine.graybox [] = () : () -> () {
     // expected-error@-1 {{incoming memref not explicitly captured}}
@@ -184,8 +184,8 @@ func @graybox_missing_capture(%M : memref<2xi32>) {
 
 // -----
 
-// CHECK-LABEL: @graybox_wrong_capture
-func @graybox_wrong_capture(%s : index) {
+// CHECK-LABEL: @affine_graybox_wrong_capture
+func @affine_graybox_wrong_capture(%s : index) {
   affine.graybox [%rS] = (%s) : (index) -> () {
     // expected-error@-1 {{operand #0 must be memref}}
     "use"(%s) : (index) -> ()
@@ -194,17 +194,18 @@ func @graybox_wrong_capture(%s : index) {
 
 // -----
 
-// CHECK-LABEL: @graybox_wrong_capture
-func @graybox_wrong_capture(%A : memref<2xi32>) {
+// CHECK-LABEL: @affine_graybox_wrong_capture
+func @affine_graybox_wrong_capture(%A : memref<2xi32>) {
   affine.graybox [] = (%A) : (memref<2xi32>) -> () {
     // expected-error@-1 {{incorrect number of memref captures}}
   }
+  return
 }
 
 // -----
 
-// CHECK-LABEL: @graybox_region_type_mismatch
-func @graybox_region_type_mismatch(%A : memref<2xi32>) {
+// CHECK-LABEL: @affine_graybox_region_type_mismatch
+func @affine_graybox_region_type_mismatch(%A : memref<2xi32>) {
   "affine.graybox"(%A) ({
     // expected-error@-1 {{type of one or more region arguments does not match corresponding operand}}
     ^bb0(%rA : memref<4xi32>):
@@ -214,11 +215,42 @@ func @graybox_region_type_mismatch(%A : memref<2xi32>) {
 
 // -----
 
-// CHECK-LABEL: @graybox_region_arg_count_mismatch
-func @graybox_region_arg_count_mismatch(%A : memref<2xi32>) {
+// CHECK-LABEL: @affine_graybox_region_arg_count_mismatch
+func @affine_graybox_region_arg_count_mismatch(%A : memref<2xi32>) {
   "affine.graybox"(%A) ({
     // expected-error@-1 {{region argument count does not match operand count}}
     ^bb0:
       return
   }) : (memref<2xi32>) -> ()
+  return
+}
+
+// -----
+
+// CHECK-LABEL: @affine_max
+func @affine_max(%arg0 : index, %arg1 : index, %arg2 : index) {
+  // expected-error@+1 {{operand count and affine map dimension and symbol count must match}}
+  %0 = affine.max affine_map<(d0) -> (d0)> (%arg0, %arg1)
+
+  return
+}
+
+// -----
+
+// CHECK-LABEL: @affine_max
+func @affine_max(%arg0 : index, %arg1 : index, %arg2 : index) {
+  // expected-error@+1 {{operand count and affine map dimension and symbol count must match}}
+  %0 = affine.max affine_map<()[s0] -> (s0)> (%arg0, %arg1)
+
+  return
+}
+
+// -----
+
+// CHECK-LABEL: @affine_max
+func @affine_max(%arg0 : index, %arg1 : index, %arg2 : index) {
+  // expected-error@+1 {{operand count and affine map dimension and symbol count must match}}
+  %0 = affine.max affine_map<(d0) -> (d0)> ()
+
+  return
 }

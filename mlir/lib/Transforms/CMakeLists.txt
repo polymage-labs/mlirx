@@ -16,9 +16,11 @@ add_llvm_library(MLIRTransforms
   LoopTiling.cpp
   LoopUnrollAndJam.cpp
   LoopUnroll.cpp
+  OpStats.cpp
   PipelineDataTransfer.cpp
   SimplifyAffineStructures.cpp
   StripDebugInfo.cpp
+  SymbolDCE.cpp
   Vectorize.cpp
   ViewOpGraph.cpp
   ViewRegionGraph.cpp

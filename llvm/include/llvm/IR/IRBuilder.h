@@ -770,13 +770,30 @@ public:
                               Value *Mask);
 
   /// Create a call to Masked Gather intrinsic
-  CallInst *CreateMaskedGather(Value *Ptrs, unsigned Align,
-                               Value *Mask = nullptr,
-                               Value *PassThru = nullptr,
-                               const Twine& Name = "");
+  LLVM_ATTRIBUTE_DEPRECATED(
+      CallInst *CreateMaskedGather(Value *Ptrs, unsigned Alignment,
+                                   Value *Mask = nullptr,
+                                   Value *PassThru = nullptr,
+                                   const Twine &Name = ""),
+      "Use the version that takes Align instead") {
+    return CreateMaskedGather(Ptrs, Align(Alignment), Mask, PassThru, Name);
+  }
+
+  /// Create a call to Masked Gather intrinsic
+  CallInst *CreateMaskedGather(Value *Ptrs, Align Alignment,
+                               Value *Mask = nullptr, Value *PassThru = nullptr,
+                               const Twine &Name = "");
 
   /// Create a call to Masked Scatter intrinsic
-  CallInst *CreateMaskedScatter(Value *Val, Value *Ptrs, unsigned Align,
+  LLVM_ATTRIBUTE_DEPRECATED(
+      CallInst *CreateMaskedScatter(Value *Val, Value *Ptrs, unsigned Alignment,
+                                    Value *Mask = nullptr),
+      "Use the version that takes Align instead") {
+    return CreateMaskedScatter(Val, Ptrs, Align(Alignment), Mask);
+  }
+
+  /// Create a call to Masked Scatter intrinsic
+  CallInst *CreateMaskedScatter(Value *Val, Value *Ptrs, Align Alignment,
                                 Value *Mask = nullptr);
 
   /// Create an assume intrinsic call that allows the optimizer to
@@ -1802,19 +1819,27 @@ public:
   }
 
   // Deprecated [opaque pointer types]
-  LoadInst *CreateAlignedLoad(Value *Ptr, unsigned Align, const char *Name) {
+  LLVM_ATTRIBUTE_DEPRECATED(LoadInst *CreateAlignedLoad(Value *Ptr,
+                                                        unsigned Align,
+                                                        const char *Name),
+                            "Use the version that takes MaybeAlign instead") {
     return CreateAlignedLoad(Ptr->getType()->getPointerElementType(), Ptr,
                              MaybeAlign(Align), Name);
   }
   // Deprecated [opaque pointer types]
-  LoadInst *CreateAlignedLoad(Value *Ptr, unsigned Align,
-                              const Twine &Name = "") {
+  LLVM_ATTRIBUTE_DEPRECATED(LoadInst *CreateAlignedLoad(Value *Ptr,
+                                                        unsigned Align,
+                                                        const Twine &Name = ""),
+                            "Use the version that takes MaybeAlign instead") {
     return CreateAlignedLoad(Ptr->getType()->getPointerElementType(), Ptr,
                              MaybeAlign(Align), Name);
   }
   // Deprecated [opaque pointer types]
-  LoadInst *CreateAlignedLoad(Value *Ptr, unsigned Align, bool isVolatile,
-                              const Twine &Name = "") {
+  LLVM_ATTRIBUTE_DEPRECATED(LoadInst *CreateAlignedLoad(Value *Ptr,
+                                                        unsigned Align,
+                                                        bool isVolatile,
+                                                        const Twine &Name = ""),
+                            "Use the version that takes MaybeAlign instead") {
     return CreateAlignedLoad(Ptr->getType()->getPointerElementType(), Ptr,
                              MaybeAlign(Align), isVolatile, Name);
   }
@@ -2279,7 +2304,7 @@ public:
     switch (ID) {
     default:
       break;
-#define INSTRUCTION(NAME, NARG, ROUND_MODE, INTRINSIC, DAGN)  \
+#define INSTRUCTION(NAME, NARG, ROUND_MODE, INTRINSIC)        \
     case Intrinsic::INTRINSIC:                                \
       HasRoundingMD = ROUND_MODE;                             \
       break;
@@ -2550,7 +2575,7 @@ public:
     switch (Callee->getIntrinsicID()) {
     default:
       break;
-#define INSTRUCTION(NAME, NARG, ROUND_MODE, INTRINSIC, DAGN)  \
+#define INSTRUCTION(NAME, NARG, ROUND_MODE, INTRINSIC)        \
     case Intrinsic::INTRINSIC:                                \
       HasRoundingMD = ROUND_MODE;                             \
       break;

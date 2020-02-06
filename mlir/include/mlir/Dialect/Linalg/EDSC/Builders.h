@@ -76,9 +76,14 @@ public:
   void operator()(std::function<void(void)> fun = nullptr) { (*builder)(fun); }
 
 private:
-  typedef typename std::conditional<std::is_same<LoopTy, AffineForOp>::value,
-                                    AffineLoopNestBuilder,
-                                    LoopNestRangeBuilder>::type BuilderType;
+  using LoopOrAffineLoopBuilder =
+      typename std::conditional_t<std::is_same<LoopTy, AffineForOp>::value,
+                                  AffineLoopNestBuilder, LoopNestRangeBuilder>;
+  using BuilderType =
+      typename std::conditional_t<std::is_same<LoopTy, loop::ParallelOp>::value,
+                                  ParallelLoopNestBuilder,
+                                  LoopOrAffineLoopBuilder>;
+
   std::unique_ptr<BuilderType> builder;
 };
 
@@ -230,6 +235,27 @@ Operation *linalg_pointwise_max(StructuredIndexed I1, StructuredIndexed I2,
 ///    |  C(m, n) += A(m, k) * B(k, n)
 /// ```
 Operation *linalg_matmul(ValueHandle vA, ValueHandle vB, ValueHandle vC);
+
+/// Build a linalg.generic, under the current ScopedContext, at the current
+/// insert point, that computes:
+/// ```
+///    (m, n, k) = (par, par, seq)
+///    |
+///    |  C(m, n) = sum_k(A(m, k) * B(k, n))
+/// ```
+/// and returns the tensor `C`.
+Operation *linalg_matmul(ValueHandle vA, ValueHandle vB, RankedTensorType tC);
+
+/// Build a linalg.generic, under the current ScopedContext, at the current
+/// insert point, that computes:
+/// ```
+///    (m, n, k) = (par, par, seq)
+///    |
+///    |  D(m, n) = C(m, n) + sum_k(A(m, k) * B(k, n))
+/// ```
+/// and returns the tensor `D`.
+Operation *linalg_matmul(ValueHandle vA, ValueHandle vB, ValueHandle vC,
+                         RankedTensorType tD);
 
 template <typename Container> Operation *linalg_matmul(Container values) {
   assert(values.size() == 3 && "Expected exactly 3 values");

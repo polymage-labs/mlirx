@@ -185,7 +185,7 @@ static void analyzeImportedModule(
             Twine("Conflicting parseable interfaces for Swift Module ") +
                 *Name + ": " + Entry + " and " + Path,
             DIE);
-      Entry = ResolvedPath.str();
+      Entry = std::string(ResolvedPath.str());
     }
 }
 
@@ -953,8 +953,7 @@ unsigned DWARFLinker::DIECloner::cloneBlockAttribute(
     DWARFUnit &OrigUnit = Unit.getOrigUnit();
     DataExtractor Data(StringRef((const char *)Bytes.data(), Bytes.size()),
                        IsLittleEndian, OrigUnit.getAddressByteSize());
-    DWARFExpression Expr(Data, OrigUnit.getVersion(),
-                         OrigUnit.getAddressByteSize());
+    DWARFExpression Expr(Data, OrigUnit.getAddressByteSize());
     cloneExpression(Data, Expr, OF, Unit, Buffer);
     Bytes = Buffer;
   }
@@ -1181,7 +1180,7 @@ void DWARFLinker::DIECloner::addObjCAccelerator(CompileUnit &Unit,
       std::string MethodNameNoCategory(Name.getString().data(), OpenParens + 2);
       // FIXME: The missing space here may be a bug, but
       //        dsymutil-classic also does it this way.
-      MethodNameNoCategory.append(SelectorStart);
+      MethodNameNoCategory.append(std::string(SelectorStart));
       Unit.addNameAccelerator(Die, StringPool.getEntry(MethodNameNoCategory),
                               SkipPubSection);
     }
@@ -2059,8 +2058,7 @@ void DWARFLinker::DIECloner::cloneAllCompileUnits(DWARFContext &DwarfContext,
         DataExtractor Data(Bytes, IsLittleEndian,
                            OrigUnit.getAddressByteSize());
         cloneExpression(Data,
-                        DWARFExpression(Data, OrigUnit.getVersion(),
-                                        OrigUnit.getAddressByteSize()),
+                        DWARFExpression(Data, OrigUnit.getAddressByteSize()),
                         OF, *CurrentUnit, Buffer);
       };
       Emitter->emitLocationsForUnit(*CurrentUnit, DwarfContext, ProcessExpr);

@@ -726,11 +726,19 @@ ABIArgInfo DefaultABIInfo::classifyReturnType(QualType RetTy) const {
 //===----------------------------------------------------------------------===//
 
 class WebAssemblyABIInfo final : public SwiftABIInfo {
+public:
+  enum ABIKind {
+    MVP = 0,
+    ExperimentalMV = 1,
+  };
+
+private:
   DefaultABIInfo defaultInfo;
+  ABIKind Kind;
 
 public:
-  explicit WebAssemblyABIInfo(CodeGen::CodeGenTypes &CGT)
-      : SwiftABIInfo(CGT), defaultInfo(CGT) {}
+  explicit WebAssemblyABIInfo(CodeGen::CodeGenTypes &CGT, ABIKind Kind)
+      : SwiftABIInfo(CGT), defaultInfo(CGT), Kind(Kind) {}
 
 private:
   ABIArgInfo classifyReturnType(QualType RetTy) const;
@@ -761,8 +769,9 @@ private:
 
 class WebAssemblyTargetCodeGenInfo final : public TargetCodeGenInfo {
 public:
-  explicit WebAssemblyTargetCodeGenInfo(CodeGen::CodeGenTypes &CGT)
-      : TargetCodeGenInfo(new WebAssemblyABIInfo(CGT)) {}
+  explicit WebAssemblyTargetCodeGenInfo(CodeGen::CodeGenTypes &CGT,
+                                        WebAssemblyABIInfo::ABIKind K)
+      : TargetCodeGenInfo(new WebAssemblyABIInfo(CGT, K)) {}
 
   void setTargetAttributes(const Decl *D, llvm::GlobalValue *GV,
                            CodeGen::CodeGenModule &CGM) const override {
@@ -813,6 +822,20 @@ ABIArgInfo WebAssemblyABIInfo::classifyArgumentType(QualType Ty) const {
     // though watch out for things like bitfields.
     if (const Type *SeltTy = isSingleElementStruct(Ty, getContext()))
       return ABIArgInfo::getDirect(CGT.ConvertType(QualType(SeltTy, 0)));
+    // For the experimental multivalue ABI, fully expand all other aggregates
+    if (Kind == ABIKind::ExperimentalMV) {
+      const RecordType *RT = Ty->getAs<RecordType>();
+      assert(RT);
+      bool HasBitField = false;
+      for (auto *Field : RT->getDecl()->fields()) {
+        if (Field->isBitField()) {
+          HasBitField = true;
+          break;
+        }
+      }
+      if (!HasBitField)
+        return ABIArgInfo::getExpand();
+    }
   }
 
   // Otherwise just do the default thing.
@@ -832,6 +855,9 @@ ABIArgInfo WebAssemblyABIInfo::classifyReturnType(QualType RetTy) const {
       // ABIArgInfo::getDirect().
       if (const Type *SeltTy = isSingleElementStruct(RetTy, getContext()))
         return ABIArgInfo::getDirect(CGT.ConvertType(QualType(SeltTy, 0)));
+      // For the experimental multivalue ABI, return all other aggregates
+      if (Kind == ABIKind::ExperimentalMV)
+        return ABIArgInfo::getDirect();
     }
   }
 
@@ -1676,7 +1702,6 @@ ABIArgInfo X86_32ABIInfo::classifyArgumentType(QualType Ty,
   bool IsVectorCall = State.CC == llvm::CallingConv::X86_VectorCall;
 
   Ty = useFirstFieldIfTransparentUnion(Ty);
-  TypeInfo TI = getContext().getTypeInfo(Ty);
 
   // Check with the C++ ABI first.
   const RecordType *RT = Ty->getAs<RecordType>();
@@ -1726,7 +1751,7 @@ ABIArgInfo X86_32ABIInfo::classifyArgumentType(QualType Ty,
     bool NeedsPadding = false;
     bool InReg;
     if (shouldAggregateUseDirect(Ty, State, InReg, NeedsPadding)) {
-      unsigned SizeInRegs = (TI.Width + 31) / 32;
+      unsigned SizeInRegs = (getContext().getTypeSize(Ty) + 31) / 32;
       SmallVector<llvm::Type*, 3> Elements(SizeInRegs, Int32);
       llvm::Type *Result = llvm::StructType::get(LLVMContext, Elements);
       if (InReg)
@@ -1736,19 +1761,14 @@ ABIArgInfo X86_32ABIInfo::classifyArgumentType(QualType Ty,
     }
     llvm::IntegerType *PaddingType = NeedsPadding ? Int32 : nullptr;
 
-    // Pass over-aligned aggregates on Windows indirectly. This behavior was
-    // added in MSVC 2015.
-    if (IsWin32StructABI && TI.AlignIsRequired && TI.Align > 32)
-      return getIndirectResult(Ty, /*ByVal=*/false, State);
-
     // Expand small (<= 128-bit) record types when we know that the stack layout
     // of those arguments will match the struct. This is important because the
     // LLVM backend isn't smart enough to remove byval, which inhibits many
     // optimizations.
     // Don't do this for the MCU if there are still free integer registers
     // (see X86_64 ABI for full explanation).
-    if (TI.Width <= 4 * 32 && (!IsMCUABI || State.FreeRegs == 0) &&
-        canExpandIndirectArgument(Ty))
+    if (getContext().getTypeSize(Ty) <= 4 * 32 &&
+        (!IsMCUABI || State.FreeRegs == 0) && canExpandIndirectArgument(Ty))
       return ABIArgInfo::getExpandWithPadding(
           IsFastCall || IsVectorCall || IsRegCall, PaddingType);
 
@@ -1756,24 +1776,14 @@ ABIArgInfo X86_32ABIInfo::classifyArgumentType(QualType Ty,
   }
 
   if (const VectorType *VT = Ty->getAs<VectorType>()) {
-    // On Windows, vectors are passed directly if registers are available, or
-    // indirectly if not. This avoids the need to align argument memory. Pass
-    // user-defined vector types larger than 512 bits indirectly for simplicity.
-    if (IsWin32StructABI) {
-      if (TI.Width <= 512 && State.FreeSSERegs > 0) {
-        --State.FreeSSERegs;
-        return ABIArgInfo::getDirectInReg();
-      }
-      return getIndirectResult(Ty, /*ByVal=*/false, State);
-    }
-
     // On Darwin, some vectors are passed in memory, we handle this by passing
     // it as an i8/i16/i32/i64.
     if (IsDarwinVectorABI) {
-      if ((TI.Width == 8 || TI.Width == 16 || TI.Width == 32) ||
-          (TI.Width == 64 && VT->getNumElements() == 1))
-        return ABIArgInfo::getDirect(
-            llvm::IntegerType::get(getVMContext(), TI.Width));
+      uint64_t Size = getContext().getTypeSize(Ty);
+      if ((Size == 8 || Size == 16 || Size == 32) ||
+          (Size == 64 && VT->getNumElements() == 1))
+        return ABIArgInfo::getDirect(llvm::IntegerType::get(getVMContext(),
+                                                            Size));
     }
 
     if (IsX86_MMXType(CGT.ConvertType(Ty)))
@@ -1803,10 +1813,9 @@ void X86_32ABIInfo::computeInfo(CGFunctionInfo &FI) const {
   CCState State(FI);
   if (IsMCUABI)
     State.FreeRegs = 3;
-  else if (State.CC == llvm::CallingConv::X86_FastCall) {
+  else if (State.CC == llvm::CallingConv::X86_FastCall)
     State.FreeRegs = 2;
-    State.FreeSSERegs = 3;
-  } else if (State.CC == llvm::CallingConv::X86_VectorCall) {
+  else if (State.CC == llvm::CallingConv::X86_VectorCall) {
     State.FreeRegs = 2;
     State.FreeSSERegs = 6;
   } else if (FI.getHasRegParm())
@@ -1814,11 +1823,6 @@ void X86_32ABIInfo::computeInfo(CGFunctionInfo &FI) const {
   else if (State.CC == llvm::CallingConv::X86_RegCall) {
     State.FreeRegs = 5;
     State.FreeSSERegs = 8;
-  } else if (IsWin32StructABI) {
-    // Since MSVC 2015, the first three SSE vectors have been passed in
-    // registers. The rest are passed indirectly.
-    State.FreeRegs = DefaultNumRegisterParameters;
-    State.FreeSSERegs = 3;
   } else
     State.FreeRegs = DefaultNumRegisterParameters;
 
@@ -1865,25 +1869,16 @@ X86_32ABIInfo::addFieldToArgStruct(SmallVector<llvm::Type *, 6> &FrameFields,
                                    CharUnits &StackOffset, ABIArgInfo &Info,
                                    QualType Type) const {
   // Arguments are always 4-byte-aligned.
-  CharUnits WordSize = CharUnits::fromQuantity(4);
-  assert(StackOffset.isMultipleOf(WordSize) && "unaligned inalloca struct");
+  CharUnits FieldAlign = CharUnits::fromQuantity(4);
 
-  // sret pointers and indirect things will require an extra pointer
-  // indirection, unless they are byval. Most things are byval, and will not
-  // require this indirection.
-  bool IsIndirect = false;
-  if (Info.isIndirect() && !Info.getIndirectByVal())
-    IsIndirect = true;
-  Info = ABIArgInfo::getInAlloca(FrameFields.size(), IsIndirect);
-  llvm::Type *LLTy = CGT.ConvertTypeForMem(Type);
-  if (IsIndirect)
-    LLTy = LLTy->getPointerTo(0);
-  FrameFields.push_back(LLTy);
-  StackOffset += IsIndirect ? WordSize : getContext().getTypeSizeInChars(Type);
+  assert(StackOffset.isMultipleOf(FieldAlign) && "unaligned inalloca struct");
+  Info = ABIArgInfo::getInAlloca(FrameFields.size());
+  FrameFields.push_back(CGT.ConvertTypeForMem(Type));
+  StackOffset += getContext().getTypeSizeInChars(Type);
 
   // Insert padding bytes to respect alignment.
   CharUnits FieldEnd = StackOffset;
-  StackOffset = FieldEnd.alignTo(WordSize);
+  StackOffset = FieldEnd.alignTo(FieldAlign);
   if (StackOffset != FieldEnd) {
     CharUnits NumBytes = StackOffset - FieldEnd;
     llvm::Type *Ty = llvm::Type::getInt8Ty(getVMContext());
@@ -1897,12 +1892,16 @@ static bool isArgInAlloca(const ABIArgInfo &Info) {
   switch (Info.getKind()) {
   case ABIArgInfo::InAlloca:
     return true;
+  case ABIArgInfo::Indirect:
+    assert(Info.getIndirectByVal());
+    return true;
   case ABIArgInfo::Ignore:
     return false;
-  case ABIArgInfo::Indirect:
   case ABIArgInfo::Direct:
   case ABIArgInfo::Extend:
-    return !Info.getInReg();
+    if (Info.getInReg())
+      return false;
+    return true;
   case ABIArgInfo::Expand:
   case ABIArgInfo::CoerceAndExpand:
     // These are aggregate types which are never passed in registers when
@@ -1936,7 +1935,8 @@ void X86_32ABIInfo::rewriteWithInAlloca(CGFunctionInfo &FI) const {
 
   // Put the sret parameter into the inalloca struct if it's in memory.
   if (Ret.isIndirect() && !Ret.getInReg()) {
-    addFieldToArgStruct(FrameFields, StackOffset, Ret, FI.getReturnType());
+    CanQualType PtrTy = getContext().getPointerType(FI.getReturnType());
+    addFieldToArgStruct(FrameFields, StackOffset, Ret, PtrTy);
     // On Windows, the hidden sret parameter is always returned in eax.
     Ret.setInAllocaSRet(IsWin32StructABI);
   }
@@ -6591,10 +6591,11 @@ namespace {
 
 class SystemZABIInfo : public SwiftABIInfo {
   bool HasVector;
+  bool IsSoftFloatABI;
 
 public:
-  SystemZABIInfo(CodeGenTypes &CGT, bool HV)
-    : SwiftABIInfo(CGT), HasVector(HV) {}
+  SystemZABIInfo(CodeGenTypes &CGT, bool HV, bool SF)
+    : SwiftABIInfo(CGT), HasVector(HV), IsSoftFloatABI(SF) {}
 
   bool isPromotableIntegerType(QualType Ty) const;
   bool isCompoundType(QualType Ty) const;
@@ -6626,8 +6627,8 @@ public:
 
 class SystemZTargetCodeGenInfo : public TargetCodeGenInfo {
 public:
-  SystemZTargetCodeGenInfo(CodeGenTypes &CGT, bool HasVector)
-    : TargetCodeGenInfo(new SystemZABIInfo(CGT, HasVector)) {}
+  SystemZTargetCodeGenInfo(CodeGenTypes &CGT, bool HasVector, bool SoftFloatABI)
+    : TargetCodeGenInfo(new SystemZABIInfo(CGT, HasVector, SoftFloatABI)) {}
 };
 
 }
@@ -6666,6 +6667,9 @@ bool SystemZABIInfo::isVectorArgumentType(QualType Ty) const {
 }
 
 bool SystemZABIInfo::isFPArgumentType(QualType Ty) const {
+  if (IsSoftFloatABI)
+    return false;
+
   if (const BuiltinType *BT = Ty->getAs<BuiltinType>())
     switch (BT->getKind()) {
     case BuiltinType::Float:
@@ -6751,7 +6755,7 @@ Address SystemZABIInfo::EmitVAArg(CodeGenFunction &CGF, Address VAListAddr,
   } else {
     if (AI.getCoerceToType())
       ArgTy = AI.getCoerceToType();
-    InFPRs = ArgTy->isFloatTy() || ArgTy->isDoubleTy();
+    InFPRs = (!IsSoftFloatABI && (ArgTy->isFloatTy() || ArgTy->isDoubleTy()));
     IsVector = ArgTy->isVectorTy();
     UnpaddedSize = TyInfo.first;
     DirectAlign = TyInfo.second;
@@ -9850,8 +9854,12 @@ const TargetCodeGenInfo &CodeGenModule::getTargetCodeGenInfo() {
   }
 
   case llvm::Triple::wasm32:
-  case llvm::Triple::wasm64:
-    return SetCGInfo(new WebAssemblyTargetCodeGenInfo(Types));
+  case llvm::Triple::wasm64: {
+    WebAssemblyABIInfo::ABIKind Kind = WebAssemblyABIInfo::MVP;
+    if (getTarget().getABI() == "experimental-mv")
+      Kind = WebAssemblyABIInfo::ExperimentalMV;
+    return SetCGInfo(new WebAssemblyTargetCodeGenInfo(Types, Kind));
+  }
 
   case llvm::Triple::arm:
   case llvm::Triple::armeb:
@@ -9926,8 +9934,9 @@ const TargetCodeGenInfo &CodeGenModule::getTargetCodeGenInfo() {
   }
 
   case llvm::Triple::systemz: {
-    bool HasVector = getTarget().getABI() == "vector";
-    return SetCGInfo(new SystemZTargetCodeGenInfo(Types, HasVector));
+    bool SoftFloat = CodeGenOpts.FloatABI == "soft";
+    bool HasVector = !SoftFloat && getTarget().getABI() == "vector";
+    return SetCGInfo(new SystemZTargetCodeGenInfo(Types, HasVector, SoftFloat));
   }
 
   case llvm::Triple::tce:

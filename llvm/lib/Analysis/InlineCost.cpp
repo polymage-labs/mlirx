@@ -46,6 +46,11 @@ using namespace llvm;
 
 STATISTIC(NumCallsAnalyzed, "Number of call sites analyzed");
 
+static cl::opt<int>
+    DefaultThreshold("inlinedefault-threshold", cl::Hidden, cl::init(225),
+                     cl::ZeroOrMore,
+                     cl::desc("Default amount of inlining to perform"));
+
 static cl::opt<int> InlineThreshold(
     "inline-threshold", cl::Hidden, cl::init(225), cl::ZeroOrMore,
     cl::desc("Control the amount of inlining to perform (default = 225)"));
@@ -185,7 +190,7 @@ protected:
 
   /// Called to account for any other instruction not specifically accounted
   /// for.
-  virtual void onCommonInstructionSimplification() {}
+  virtual void onMissedSimplification() {}
 
   /// Start accounting potential benefits due to SROA for the given alloca.
   virtual void onInitializeSROAArg(AllocaInst *Arg) {}
@@ -502,7 +507,7 @@ class InlineCostCallAnalyzer final : public CallAnalyzer {
 
     addCost(SwitchCost, (int64_t)CostUpperBound);
   }
-  void onCommonInstructionSimplification() override {
+  void onMissedSimplification() override {
     addCost(InlineConstants::InstrCost);
   }
 
@@ -1761,7 +1766,7 @@ CallAnalyzer::analyzeBlock(BasicBlock *BB,
     if (Base::visit(&*I))
       ++NumInstructionsSimplified;
     else
-      onCommonInstructionSimplification();
+      onMissedSimplification();
 
     using namespace ore;
     // If the visit this instruction detected an uninlinable pattern, abort.
@@ -2303,7 +2308,7 @@ InlineParams llvm::getInlineParams(int Threshold) {
 }
 
 InlineParams llvm::getInlineParams() {
-  return getInlineParams(InlineThreshold);
+  return getInlineParams(DefaultThreshold);
 }
 
 // Compute the default threshold for inlining based on the opt level and the
@@ -2316,7 +2321,7 @@ static int computeThresholdFromOptLevels(unsigned OptLevel,
     return InlineConstants::OptSizeThreshold;
   if (SizeOptLevel == 2) // -Oz
     return InlineConstants::OptMinSizeThreshold;
-  return InlineThreshold;
+  return DefaultThreshold;
 }
 
 InlineParams llvm::getInlineParams(unsigned OptLevel, unsigned SizeOptLevel) {

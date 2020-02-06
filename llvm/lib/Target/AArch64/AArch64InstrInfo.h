@@ -148,13 +148,13 @@ public:
                    bool KillSrc) const override;
 
   void storeRegToStackSlot(MachineBasicBlock &MBB,
-                           MachineBasicBlock::iterator MBBI, unsigned SrcReg,
+                           MachineBasicBlock::iterator MBBI, Register SrcReg,
                            bool isKill, int FrameIndex,
                            const TargetRegisterClass *RC,
                            const TargetRegisterInfo *TRI) const override;
 
   void loadRegFromStackSlot(MachineBasicBlock &MBB,
-                            MachineBasicBlock::iterator MBBI, unsigned DestReg,
+                            MachineBasicBlock::iterator MBBI, Register DestReg,
                             int FrameIndex, const TargetRegisterClass *RC,
                             const TargetRegisterInfo *TRI) const override;
 
@@ -391,7 +391,7 @@ enum ElementSizeType {
 enum DestructiveInstType {
   DestructiveInstTypeMask = TSFLAG_DESTRUCTIVE_INST_TYPE(0x1),
   NotDestructive          = TSFLAG_DESTRUCTIVE_INST_TYPE(0x0),
-  Destructive             = TSFLAG_DESTRUCTIVE_INST_TYPE(0x1),
+  DestructiveOther        = TSFLAG_DESTRUCTIVE_INST_TYPE(0x1),
 };
 
 #undef TSFLAG_ELEMENT_SIZE_TYPE

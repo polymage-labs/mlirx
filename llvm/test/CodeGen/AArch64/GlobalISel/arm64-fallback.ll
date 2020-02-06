@@ -85,7 +85,7 @@ define i64 @atomic_ops(i64* %addr) {
 ; Make sure we don't mess up metadata arguments.
 declare void @llvm.write_register.i64(metadata, i64)
 
-; FALLBACK-WITH-REPORT-ERR: remark: <unknown>:0:0: unable to translate instruction: call: ' call void @llvm.write_register.i64(metadata !0, i64 0)' (in function: test_write_register_intrin)
+; FALLBACK-WITH-REPORT-ERR: remark: <unknown>:0:0: unable to legalize instruction: G_WRITE_REGISTER !0, %0:_(s64) (in function: test_write_register_intrin)
 ; FALLBACK-WITH-REPORT-ERR: warning: Instruction selection used fallback path for test_write_register_intrin
 ; FALLBACK-WITH-REPORT-LABEL: test_write_register_intrin:
 define void @test_write_register_intrin() {
@@ -167,7 +167,7 @@ define void @nonpow2_load_narrowing() {
   ret void
 }
 
-; FALLBACK-WITH-REPORT-ERR: remark: <unknown>:0:0: cannot select: %14:gpr64(s64), %15:gpr(s1) = G_UADDE %17:gpr, %17:gpr, %13:gpr (in function: nonpow2_store_narrowing)
+; FALLBACK-WITH-REPORT-ERR: remark: <unknown>:0:0: cannot select: %{{[0-9]+}}:gpr64(s64), %{{[0-9]+}}:gpr(s1) = G_UADDE %{{[0-9]+}}:gpr, %{{[0-9]+}}:gpr, %{{[0-9]+}}:gpr (in function: nonpow2_store_narrowing)
 ; FALLBACK-WITH-REPORT-ERR: warning: Instruction selection used fallback path for nonpow2_store_narrowing
 ; FALLBACK-WITH-REPORT-OUT-LABEL: nonpow2_store_narrowing:
 define void @nonpow2_store_narrowing(i96* %c) {

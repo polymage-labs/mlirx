@@ -35,7 +35,12 @@ class DiagnosticConsumer;
 
 namespace format {
 
-enum class ParseError { Success = 0, Error, Unsuitable };
+enum class ParseError {
+  Success = 0,
+  Error,
+  Unsuitable,
+  BinPackTrailingCommaConflict
+};
 class ParseErrorCategory final : public std::error_category {
 public:
   const char *name() const noexcept override;
@@ -543,6 +548,20 @@ struct FormatStyle {
   ///   }
   /// \endcode
   bool BinPackArguments;
+
+  /// The style of inserting trailing commas into container literals.
+  enum TrailingCommaStyle {
+    /// Do not insert trailing commas.
+    TCS_None,
+    /// Insert trailing commas in container literals that were wrapped over
+    /// multiple lines. Note that this is conceptually incompatible with
+    /// bin-packing, because the trailing comma is used as an indicator
+    /// that a container should be formatted one-per-line (i.e. not bin-packed).
+    /// So inserting a trailing comma counteracts bin-packing.
+    TCS_Wrapped,
+  };
+
+  TrailingCommaStyle InsertTrailingCommas;
 
   /// If ``false``, a function declaration's or function definition's
   /// parameters will either all be on the same line or will have one line each.
@@ -1669,6 +1688,29 @@ struct FormatStyle {
   /// ``@property (readonly)`` instead of ``@property(readonly)``.
   bool ObjCSpaceAfterProperty;
 
+  /// Break parameters list into lines when there is nested block
+  /// parameters in a fuction call.
+  /// \code
+  ///   false:
+  ///    - (void)_aMethod
+  ///    {
+  ///        [self.test1 t:self w:self callback:^(typeof(self) self, NSNumber
+  ///        *u, NSNumber *v) {
+  ///            u = c;
+  ///        }]
+  ///    }
+  ///    true:
+  ///    - (void)_aMethod
+  ///    {
+  ///       [self.test1 t:self
+  ///                    w:self
+  ///           callback:^(typeof(self) self, NSNumber *u, NSNumber *v) {
+  ///                u = c;
+  ///            }]
+  ///    }
+  /// \endcode
+  bool ObjCBreakBeforeNestedBlockParam;
+
   /// Add a space in front of an Objective-C protocol list, i.e. use
   /// ``Foo <Protocol>`` instead of ``Foo<Protocol>``.
   bool ObjCSpaceBeforeProtocolList;
@@ -2159,6 +2201,8 @@ struct FormatStyle {
            NamespaceMacros == R.NamespaceMacros &&
            ObjCBinPackProtocolList == R.ObjCBinPackProtocolList &&
            ObjCBlockIndentWidth == R.ObjCBlockIndentWidth &&
+           ObjCBreakBeforeNestedBlockParam ==
+               R.ObjCBreakBeforeNestedBlockParam &&
            ObjCSpaceAfterProperty == R.ObjCSpaceAfterProperty &&
            ObjCSpaceBeforeProtocolList == R.ObjCSpaceBeforeProtocolList &&
            PenaltyBreakAssignment == R.PenaltyBreakAssignment &&

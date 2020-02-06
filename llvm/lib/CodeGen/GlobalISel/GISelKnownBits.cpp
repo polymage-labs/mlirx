@@ -107,7 +107,15 @@ void GISelKnownBits::computeKnownBitsImpl(Register R, KnownBits &Known,
   if (DstTy.isVector())
     return; // TODO: Handle vectors.
 
-  if (Depth == getMaxDepth())
+  // Depth may get bigger than max depth if it gets passed to a different
+  // GISelKnownBits object.
+  // This may happen when say a generic part uses a GISelKnownBits object
+  // with some max depth, but then we hit TL.computeKnownBitsForTargetInstr
+  // which creates a new GISelKnownBits object with a different and smaller
+  // depth. If we just check for equality, we would never exit if the depth
+  // that is passed down to the target specific GISelKnownBits object is
+  // already bigger than its max depth.
+  if (Depth >= getMaxDepth())
     return;
 
   if (!DemandedElts)
@@ -169,18 +177,12 @@ void GISelKnownBits::computeKnownBitsImpl(Register R, KnownBits &Known,
     break;
   }
   case TargetOpcode::G_SUB: {
-    // If low bits are known to be zero in both operands, then we know they are
-    // going to be 0 in the result. Both addition and complement operations
-    // preserve the low zero bits.
-    computeKnownBitsImpl(MI.getOperand(1).getReg(), Known2, DemandedElts,
+    computeKnownBitsImpl(MI.getOperand(1).getReg(), Known, DemandedElts,
                          Depth + 1);
-    unsigned KnownZeroLow = Known2.countMinTrailingZeros();
-    if (KnownZeroLow == 0)
-      break;
     computeKnownBitsImpl(MI.getOperand(2).getReg(), Known2, DemandedElts,
                          Depth + 1);
-    KnownZeroLow = std::min(KnownZeroLow, Known2.countMinTrailingZeros());
-    Known.Zero.setLowBits(KnownZeroLow);
+    Known = KnownBits::computeForAddSub(/*Add*/ false, /*NSW*/ false, Known,
+                                        Known2);
     break;
   }
   case TargetOpcode::G_XOR: {
@@ -204,24 +206,12 @@ void GISelKnownBits::computeKnownBitsImpl(Register R, KnownBits &Known,
     LLVM_FALLTHROUGH;
   }
   case TargetOpcode::G_ADD: {
-    // Output known-0 bits are known if clear or set in both the low clear bits
-    // common to both LHS & RHS.  For example, 8+(X<<3) is known to have the
-    // low 3 bits clear.
-    // Output known-0 bits are also known if the top bits of each input are
-    // known to be clear. For example, if one input has the top 10 bits clear
-    // and the other has the top 8 bits clear, we know the top 7 bits of the
-    // output must be clear.
-    computeKnownBitsImpl(MI.getOperand(1).getReg(), Known2, DemandedElts,
+    computeKnownBitsImpl(MI.getOperand(1).getReg(), Known, DemandedElts,
                          Depth + 1);
-    unsigned KnownZeroHigh = Known2.countMinLeadingZeros();
-    unsigned KnownZeroLow = Known2.countMinTrailingZeros();
     computeKnownBitsImpl(MI.getOperand(2).getReg(), Known2, DemandedElts,
                          Depth + 1);
-    KnownZeroHigh = std::min(KnownZeroHigh, Known2.countMinLeadingZeros());
-    KnownZeroLow = std::min(KnownZeroLow, Known2.countMinTrailingZeros());
-    Known.Zero.setLowBits(KnownZeroLow);
-    if (KnownZeroHigh > 1)
-      Known.Zero.setHighBits(KnownZeroHigh - 1);
+    Known =
+        KnownBits::computeForAddSub(/*Add*/ true, /*NSW*/ false, Known, Known2);
     break;
   }
   case TargetOpcode::G_AND: {

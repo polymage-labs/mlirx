@@ -1476,6 +1476,13 @@ Verifier::visitModuleFlag(const MDNode *Op,
            "'Linker Options' named metadata no longer supported");
   }
 
+  if (ID->getString() == "SemanticInterposition") {
+    ConstantInt *Value =
+        mdconst::dyn_extract_or_null<ConstantInt>(Op->getOperand(2));
+    Assert(Value,
+           "SemanticInterposition metadata requires constant integer argument");
+  }
+
   if (ID->getString() == "CG Profile") {
     for (const MDOperand &MDO : cast<MDNode>(Op->getOperand(2))->operands())
       visitModuleFlagCGProfileEntry(MDO);
@@ -1564,6 +1571,13 @@ void Verifier::verifyAttributeTypes(AttributeSet Attrs, bool IsFunction,
   for (Attribute A : Attrs) {
     if (A.isStringAttribute())
       continue;
+
+    if (A.isIntAttribute() !=
+        Attribute::doesAttrKindHaveArgument(A.getKindAsEnum())) {
+      CheckFailed("Attribute '" + A.getAsString() + "' should have an Argument",
+                  V);
+      return;
+    }
 
     if (isFuncOnlyAttr(A.getKindAsEnum())) {
       if (!IsFunction) {
@@ -4327,7 +4341,7 @@ void Verifier::visitIntrinsicCall(Intrinsic::ID ID, CallBase &Call) {
       "an array");
     break;
   }
-#define INSTRUCTION(NAME, NARGS, ROUND_MODE, INTRINSIC, DAGN)                  \
+#define INSTRUCTION(NAME, NARGS, ROUND_MODE, INTRINSIC)                        \
   case Intrinsic::INTRINSIC:
 #include "llvm/IR/ConstrainedOps.def"
     visitConstrainedFPIntrinsic(cast<ConstrainedFPIntrinsic>(Call));
@@ -4347,6 +4361,7 @@ void Verifier::visitIntrinsicCall(Intrinsic::ID ID, CallBase &Call) {
     visitDbgLabelIntrinsic("label", cast<DbgLabelInst>(Call));
     break;
   case Intrinsic::memcpy:
+  case Intrinsic::memcpy_inline:
   case Intrinsic::memmove:
   case Intrinsic::memset: {
     const auto *MI = cast<MemIntrinsic>(&Call);
@@ -4778,7 +4793,7 @@ void Verifier::visitConstrainedFPIntrinsic(ConstrainedFPIntrinsic &FPI) {
   unsigned NumOperands;
   bool HasRoundingMD;
   switch (FPI.getIntrinsicID()) {
-#define INSTRUCTION(NAME, NARG, ROUND_MODE, INTRINSIC, DAGN)                   \
+#define INSTRUCTION(NAME, NARG, ROUND_MODE, INTRINSIC)                         \
   case Intrinsic::INTRINSIC:                                                   \
     NumOperands = NARG;                                                        \
     HasRoundingMD = ROUND_MODE;                                                \

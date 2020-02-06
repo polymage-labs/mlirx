@@ -97,7 +97,7 @@ public:
     std::vector<std::pair<Path, bool>> Result;
     std::lock_guard<std::mutex> Lock(Mutex);
     for (const auto &It : LastDiagsHadError)
-      Result.emplace_back(It.first(), It.second);
+      Result.emplace_back(std::string(It.first()), It.second);
     return Result;
   }
 
@@ -146,7 +146,8 @@ protected:
     MockCompilationDatabase CDB;
     ClangdServer Server(CDB, FS, ClangdServer::optsForTest(), &DiagConsumer);
     for (const auto &FileWithContents : ExtraFiles)
-      FS.Files[testPath(FileWithContents.first)] = FileWithContents.second;
+      FS.Files[testPath(FileWithContents.first)] =
+          std::string(FileWithContents.second);
 
     auto SourceFilename = testPath(SourceFileRelPath);
     Server.addDocument(SourceFilename, SourceContents);
@@ -1020,7 +1021,8 @@ TEST_F(ClangdVFSTest, FallbackWhenWaitingForCompileCommand) {
       // something goes wrong.
       CanReturnCommand.wait();
       auto FileName = llvm::sys::path::filename(File);
-      std::vector<std::string> CommandLine = {"clangd", "-ffreestanding", File};
+      std::vector<std::string> CommandLine = {"clangd", "-ffreestanding",
+                                              std::string(File)};
       return {tooling::CompileCommand(llvm::sys::path::parent_path(File),
                                       FileName, std::move(CommandLine), "")};
     }
@@ -1061,6 +1063,27 @@ TEST_F(ClangdVFSTest, FallbackWhenWaitingForCompileCommand) {
                   .Completions,
               ElementsAre(AllOf(Field(&CodeCompletion::Name, "xyz"),
                                 Field(&CodeCompletion::Scope, "ns::"))));
+}
+
+TEST_F(ClangdVFSTest, TestStackOverflow) {
+  MockFSProvider FS;
+  ErrorCheckingCallbacks DiagConsumer;
+  MockCompilationDatabase CDB;
+  ClangdServer Server(CDB, FS, ClangdServer::optsForTest(), &DiagConsumer);
+
+  const char *SourceContents = R"cpp(
+    constexpr int foo() { return foo(); }
+    static_assert(foo());
+  )cpp";
+
+  auto FooCpp = testPath("foo.cpp");
+  FS.Files[FooCpp] = SourceContents;
+
+  Server.addDocument(FooCpp, SourceContents);
+  ASSERT_TRUE(Server.blockUntilIdleForTest()) << "Waiting for diagnostics";
+  // check that we got a constexpr depth error, and not crashed by stack
+  // overflow
+  EXPECT_TRUE(DiagConsumer.hadErrorInLastDiags());
 }
 
 } // namespace

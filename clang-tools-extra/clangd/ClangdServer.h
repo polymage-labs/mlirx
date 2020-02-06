@@ -130,8 +130,8 @@ public:
     llvm::Optional<std::string> ResourceDir = llvm::None;
 
     /// Time to wait after a new file version before computing diagnostics.
-    std::chrono::steady_clock::duration UpdateDebounce =
-        std::chrono::milliseconds(500);
+    DebouncePolicy UpdateDebounce =
+        DebouncePolicy::fixed(std::chrono::milliseconds(500));
 
     bool SuggestMissingIncludes = false;
 
@@ -149,6 +149,8 @@ public:
     std::function<bool(const Tweak &)> TweakFilter = [](const Tweak &T) {
       return !T.hidden(); // only enable non-hidden tweaks.
     };
+
+    explicit operator TUScheduler::Options() const;
   };
   // Sensible default options for use in tests.
   // Features like indexing must be enabled if desired.
@@ -164,12 +166,6 @@ public:
   ClangdServer(const GlobalCompilationDatabase &CDB,
                const FileSystemProvider &FSProvider, const Options &Opts,
                Callbacks *Callbacks = nullptr);
-
-  // FIXME: remove this compatibility alias.
-  ClangdServer(const GlobalCompilationDatabase &CDB,
-               const FileSystemProvider &FSProvider, Callbacks &Callbacks,
-               const Options &Opts)
-      : ClangdServer(CDB, FSProvider, Opts, &Callbacks) {}
 
   /// Add a \p File to the list of tracked C++ files or update the contents if
   /// \p File is already tracked. Also schedules parsing of the AST for it on a
@@ -358,9 +354,6 @@ private:
   // ClangdServer.
   TUScheduler WorkScheduler;
 };
-
-// FIXME: Remove this compatibility alias.
-using DiagnosticsConsumer = ClangdServer::Callbacks;
 
 } // namespace clangd
 } // namespace clang

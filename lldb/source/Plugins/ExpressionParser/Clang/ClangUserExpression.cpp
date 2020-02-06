@@ -20,6 +20,7 @@
 #include "ClangUserExpression.h"
 
 #include "ASTResultSynthesizer.h"
+#include "ClangASTMetadata.h"
 #include "ClangDiagnostic.h"
 #include "ClangExpressionDeclMap.h"
 #include "ClangExpressionParser.h"
@@ -27,6 +28,7 @@
 #include "ClangPersistentVariables.h"
 #include "CppModuleConfiguration.h"
 
+#include "Plugins/TypeSystem/Clang/TypeSystemClang.h"
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/StreamFile.h"
@@ -37,8 +39,6 @@
 #include "lldb/Expression/Materializer.h"
 #include "lldb/Host/HostInfo.h"
 #include "lldb/Symbol/Block.h"
-#include "lldb/Symbol/TypeSystemClang.h"
-#include "lldb/Symbol/ClangASTMetadata.h"
 #include "lldb/Symbol/CompileUnit.h"
 #include "lldb/Symbol/Function.h"
 #include "lldb/Symbol/ObjectFile.h"
@@ -896,9 +896,16 @@ void ClangUserExpression::ClangUserExpressionHelper::ResetDeclMap(
     Materializer::PersistentVariableDelegate &delegate,
     bool keep_result_in_memory,
     ValueObject *ctx_obj) {
-  m_expr_decl_map_up.reset(new ClangExpressionDeclMap(
-      keep_result_in_memory, &delegate, exe_ctx.GetTargetSP(),
-      exe_ctx.GetTargetRef().GetClangASTImporter(), ctx_obj));
+  std::shared_ptr<ClangASTImporter> ast_importer;
+  auto *state = exe_ctx.GetTargetSP()->GetPersistentExpressionStateForLanguage(
+      lldb::eLanguageTypeC);
+  if (state) {
+    auto *persistent_vars = llvm::cast<ClangPersistentVariables>(state);
+    ast_importer = persistent_vars->GetClangASTImporter();
+  }
+  m_expr_decl_map_up.reset(
+      new ClangExpressionDeclMap(keep_result_in_memory, &delegate,
+                                 exe_ctx.GetTargetSP(), ast_importer, ctx_obj));
 }
 
 clang::ASTConsumer *

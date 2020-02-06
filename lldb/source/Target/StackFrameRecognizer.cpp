@@ -70,8 +70,9 @@ public:
                          std::string symbol, bool regexp)> const &callback) {
     for (auto entry : m_recognizers) {
       if (entry.is_regexp) {
-        callback(entry.recognizer_id, entry.recognizer->GetName(), entry.module_regexp->GetText(),
-                 entry.symbol_regexp->GetText(), true);
+        callback(entry.recognizer_id, entry.recognizer->GetName(),
+                 std::string(entry.module_regexp->GetText()),
+                 std::string(entry.symbol_regexp->GetText()), true);
       } else {
         callback(entry.recognizer_id, entry.recognizer->GetName(), entry.module.GetCString(),
                  entry.symbol.GetCString(), false);
@@ -91,8 +92,8 @@ public:
   }
 
   StackFrameRecognizerSP GetRecognizerForFrame(StackFrameSP frame) {
-    const SymbolContext &symctx =
-        frame->GetSymbolContext(eSymbolContextModule | eSymbolContextFunction);
+    const SymbolContext &symctx = frame->GetSymbolContext(
+        eSymbolContextModule | eSymbolContextFunction | eSymbolContextSymbol);
     ConstString function_name = symctx.GetFunctionName();
     ModuleSP module_sp = symctx.module_sp;
     if (!module_sp) return StackFrameRecognizerSP();

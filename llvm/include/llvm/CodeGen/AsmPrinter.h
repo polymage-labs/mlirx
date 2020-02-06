@@ -71,10 +71,13 @@ class MDNode;
 class Module;
 class ProfileSummaryInfo;
 class raw_ostream;
-class RemarkStreamer;
 class StackMaps;
 class TargetLoweringObjectFile;
 class TargetMachine;
+
+namespace remarks {
+class RemarkStreamer;
+}
 
 /// This class is intended to be used as a driving class for all asm writers.
 class AsmPrinter : public MachineFunctionPass {
@@ -135,7 +138,6 @@ public:
   MapVector<const MCSymbol *, GOTEquivUsePair> GlobalGOTEquivs;
 
 private:
-  MCSymbol *CurrentFnBegin = nullptr;
   MCSymbol *CurrentFnEnd = nullptr;
   MCSymbol *CurExceptionSym = nullptr;
 
@@ -148,6 +150,8 @@ private:
   static char ID;
 
 protected:
+  MCSymbol *CurrentFnBegin = nullptr;
+
   /// Protected struct HandlerInfo and Handlers permit target extended
   /// AsmPrinter adds their own handlers.
   struct HandlerInfo {
@@ -247,6 +251,11 @@ public:
 
   MCSymbol *getSymbol(const GlobalValue *GV) const;
 
+  /// Similar to getSymbol() but preferred for references. On ELF, this uses a
+  /// local symbol if a reference to GV is guaranteed to be resolved to the
+  /// definition in the same module.
+  MCSymbol *getSymbolPreferLocal(const GlobalValue &GV) const;
+
   //===------------------------------------------------------------------===//
   // XRay instrumentation implementation.
   //===------------------------------------------------------------------===//
@@ -331,7 +340,7 @@ public:
 
   void emitStackSizeSection(const MachineFunction &MF);
 
-  void emitRemarksSection(RemarkStreamer &RS);
+  void emitRemarksSection(remarks::RemarkStreamer &RS);
 
   enum CFIMoveType { CFI_M_None, CFI_M_EH, CFI_M_Debug };
   CFIMoveType needsCFIMoves() const;

@@ -26,6 +26,7 @@
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/Type.h"
+#include "clang/Basic/Specifiers.h"
 #include "clang/Index/IndexSymbol.h"
 #include "llvm/ADT/None.h"
 #include "llvm/ADT/Optional.h"
@@ -205,15 +206,23 @@ const FunctionDecl *getUnderlyingFunction(const Decl *D) {
 // Returns the decl that should be used for querying comments, either from index
 // or AST.
 const NamedDecl *getDeclForComment(const NamedDecl *D) {
-  if (auto *CTSD = llvm::dyn_cast<ClassTemplateSpecializationDecl>(D))
-    if (!CTSD->isExplicitInstantiationOrSpecialization())
-      return CTSD->getTemplateInstantiationPattern();
-  if (auto *VTSD = llvm::dyn_cast<VarTemplateSpecializationDecl>(D))
-    if (!VTSD->isExplicitInstantiationOrSpecialization())
-      return VTSD->getTemplateInstantiationPattern();
-  if (auto *FD = D->getAsFunction())
-    if (FD->isTemplateInstantiation())
-      return FD->getTemplateInstantiationPattern();
+  if (const auto *TSD = llvm::dyn_cast<ClassTemplateSpecializationDecl>(D)) {
+    // Template may not be instantiated e.g. if the type didn't need to be
+    // complete; fallback to primary template.
+    if (TSD->getTemplateSpecializationKind() == TSK_Undeclared)
+      return TSD->getSpecializedTemplate();
+    if (const auto *TIP = TSD->getTemplateInstantiationPattern())
+      return TIP;
+  }
+  if (const auto *TSD = llvm::dyn_cast<VarTemplateSpecializationDecl>(D)) {
+    if (TSD->getTemplateSpecializationKind() == TSK_Undeclared)
+      return TSD->getSpecializedTemplate();
+    if (const auto *TIP = TSD->getTemplateInstantiationPattern())
+      return TIP;
+  }
+  if (const auto *FD = D->getAsFunction())
+    if (const auto *TIP = FD->getTemplateInstantiationPattern())
+      return TIP;
   return D;
 }
 
@@ -236,8 +245,23 @@ void enhanceFromIndex(HoverInfo &Hover, const NamedDecl &ND,
     return;
   LookupRequest Req;
   Req.IDs.insert(*ID);
-  Index->lookup(
-      Req, [&](const Symbol &S) { Hover.Documentation = S.Documentation; });
+  Index->lookup(Req, [&](const Symbol &S) {
+    Hover.Documentation = std::string(S.Documentation);
+  });
+}
+
+// Default argument might exist but be unavailable, in the case of unparsed
+// arguments for example. This function returns the default argument if it is
+// available.
+const Expr *getDefaultArg(const ParmVarDecl *PVD) {
+  // Default argument can be unparsed or uninstatiated. For the former we
+  // can't do much, as token information is only stored in Sema and not
+  // attached to the AST node. For the latter though, it is safe to proceed as
+  // the expression is still valid.
+  if (!PVD->hasDefaultArg() || PVD->hasUnparsedDefaultArg())
+    return nullptr;
+  return PVD->hasUninstantiatedDefaultArg() ? PVD->getUninstantiatedDefaultArg()
+                                            : PVD->getDefaultArg();
 }
 
 // Populates Type, ReturnType, and Parameters for function-like decls.
@@ -259,10 +283,10 @@ void fillFunctionTypeAndParams(HoverInfo &HI, const Decl *D,
     }
     if (!PVD->getName().empty())
       P.Name = PVD->getNameAsString();
-    if (PVD->hasDefaultArg()) {
+    if (const Expr *DefArg = getDefaultArg(PVD)) {
       P.Default.emplace();
       llvm::raw_string_ostream Out(*P.Default);
-      PVD->getDefaultArg()->printPretty(Out, nullptr, Policy);
+      DefArg->printPretty(Out, nullptr, Policy);
     }
   }
 
@@ -401,7 +425,7 @@ HoverInfo getHoverContents(QualType T, ASTContext &ASTCtx,
 HoverInfo getHoverContents(const DefinedMacro &Macro, ParsedAST &AST) {
   HoverInfo HI;
   SourceManager &SM = AST.getSourceManager();
-  HI.Name = Macro.Name;
+  HI.Name = std::string(Macro.Name);
   HI.Kind = index::SymbolKind::Macro;
   // FIXME: Populate documentation
   // FIXME: Pupulate parameters
@@ -464,7 +488,7 @@ llvm::Optional<HoverInfo> getHoverContents(const Expr *E, ParsedAST &AST) {
     Policy.SuppressTagKeyword = true;
     HI.Type = printType(E->getType(), Policy);
     HI.Value = *Val;
-    HI.Name = getNameForExpr(E);
+    HI.Name = std::string(getNameForExpr(E));
     return HI;
   }
   return llvm::None;
@@ -536,7 +560,7 @@ markup::Document HoverInfo::present() const {
   // https://github.com/microsoft/vscode/issues/88417 for details.
   markup::Paragraph &Header = Output.addHeading(3);
   if (Kind != index::SymbolKind::Unknown)
-    Header.appendText(index::getSymbolKindString(Kind));
+    Header.appendText(std::string(index::getSymbolKindString(Kind)));
   assert(!Name.empty() && "hover triggered on a nameless symbol");
   Header.appendCode(Name);
 

@@ -2741,21 +2741,19 @@ static void diagnoseMissingConstinit(Sema &S, const VarDecl *InitDecl,
   // heroics.
   std::string SuitableSpelling;
   if (S.getLangOpts().CPlusPlus2a)
-    SuitableSpelling =
-        S.PP.getLastMacroWithSpelling(InsertLoc, {tok::kw_constinit});
+    SuitableSpelling = std::string(
+        S.PP.getLastMacroWithSpelling(InsertLoc, {tok::kw_constinit}));
   if (SuitableSpelling.empty() && S.getLangOpts().CPlusPlus11)
-    SuitableSpelling = S.PP.getLastMacroWithSpelling(
-        InsertLoc,
-        {tok::l_square, tok::l_square, S.PP.getIdentifierInfo("clang"),
-         tok::coloncolon,
-         S.PP.getIdentifierInfo("require_constant_initialization"),
-         tok::r_square, tok::r_square});
+    SuitableSpelling = std::string(S.PP.getLastMacroWithSpelling(
+        InsertLoc, {tok::l_square, tok::l_square,
+                    S.PP.getIdentifierInfo("clang"), tok::coloncolon,
+                    S.PP.getIdentifierInfo("require_constant_initialization"),
+                    tok::r_square, tok::r_square}));
   if (SuitableSpelling.empty())
-    SuitableSpelling = S.PP.getLastMacroWithSpelling(
-        InsertLoc,
-        {tok::kw___attribute, tok::l_paren, tok::r_paren,
-         S.PP.getIdentifierInfo("require_constant_initialization"),
-         tok::r_paren, tok::r_paren});
+    SuitableSpelling = std::string(S.PP.getLastMacroWithSpelling(
+        InsertLoc, {tok::kw___attribute, tok::l_paren, tok::r_paren,
+                    S.PP.getIdentifierInfo("require_constant_initialization"),
+                    tok::r_paren, tok::r_paren}));
   if (SuitableSpelling.empty() && S.getLangOpts().CPlusPlus2a)
     SuitableSpelling = "constinit";
   if (SuitableSpelling.empty() && S.getLangOpts().CPlusPlus11)
@@ -8932,9 +8930,24 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
       // C++11 [dcl.constexpr]p3: functions declared constexpr are required to
       // be either constructors or to return a literal type. Therefore,
       // destructors cannot be declared constexpr.
-      if (isa<CXXDestructorDecl>(NewFD) && !getLangOpts().CPlusPlus2a) {
+      if (isa<CXXDestructorDecl>(NewFD) &&
+          (!getLangOpts().CPlusPlus2a || ConstexprKind == CSK_consteval)) {
         Diag(D.getDeclSpec().getConstexprSpecLoc(), diag::err_constexpr_dtor)
             << ConstexprKind;
+        NewFD->setConstexprKind(getLangOpts().CPlusPlus2a ? CSK_unspecified : CSK_constexpr);
+      }
+      // C++20 [dcl.constexpr]p2: An allocation function, or a
+      // deallocation function shall not be declared with the consteval
+      // specifier.
+      if (ConstexprKind == CSK_consteval &&
+          (NewFD->getOverloadedOperator() == OO_New ||
+           NewFD->getOverloadedOperator() == OO_Array_New ||
+           NewFD->getOverloadedOperator() == OO_Delete ||
+           NewFD->getOverloadedOperator() == OO_Array_Delete)) {
+        Diag(D.getDeclSpec().getConstexprSpecLoc(),
+             diag::err_invalid_consteval_decl_kind)
+            << NewFD;
+        NewFD->setConstexprKind(CSK_constexpr);
       }
     }
 
@@ -12525,6 +12538,7 @@ void Sema::CheckCompleteVariableDeclaration(VarDecl *var) {
       var->getDeclContext()->getRedeclContext()->isFileContext() &&
       var->isExternallyVisible() && var->hasLinkage() &&
       !var->isInline() && !var->getDescribedVarTemplate() &&
+      !isa<VarTemplatePartialSpecializationDecl>(var) &&
       !isTemplateInstantiation(var->getTemplateSpecializationKind()) &&
       !getDiagnostics().isIgnored(diag::warn_missing_variable_declarations,
                                   var->getLocation())) {
@@ -13650,7 +13664,9 @@ Decl *Sema::ActOnStartOfFunctionDef(Scope *FnBodyScope, Decl *D,
   // Do not push if it is a lambda because one is already pushed when building
   // the lambda in ActOnStartOfLambdaDefinition().
   if (!isLambdaCallOperator(FD))
-    PushExpressionEvaluationContext(ExprEvalContexts.back().Context);
+    PushExpressionEvaluationContext(
+        FD->isConsteval() ? ExpressionEvaluationContext::ConstantEvaluated
+                          : ExprEvalContexts.back().Context);
 
   // Check for defining attributes before the check for redefinition.
   if (const auto *Attr = FD->getAttr<AliasAttr>()) {

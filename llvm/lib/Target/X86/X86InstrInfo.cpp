@@ -3243,7 +3243,7 @@ static unsigned getLoadRegOpcode(unsigned DestReg,
 
 void X86InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
                                        MachineBasicBlock::iterator MI,
-                                       unsigned SrcReg, bool isKill, int FrameIdx,
+                                       Register SrcReg, bool isKill, int FrameIdx,
                                        const TargetRegisterClass *RC,
                                        const TargetRegisterInfo *TRI) const {
   const MachineFunction &MF = *MBB.getParent();
@@ -3260,7 +3260,7 @@ void X86InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
 
 void X86InstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
                                         MachineBasicBlock::iterator MI,
-                                        unsigned DestReg, int FrameIdx,
+                                        Register DestReg, int FrameIdx,
                                         const TargetRegisterClass *RC,
                                         const TargetRegisterInfo *TRI) const {
   const MachineFunction &MF = *MBB.getParent();
@@ -4085,10 +4085,6 @@ bool X86InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
   case X86::MOV32ImmSExti8:
   case X86::MOV64ImmSExti8:
     return ExpandMOVImmSExti8(MIB, *this, Subtarget);
-  case X86::SETB_C8r:
-    return Expand2AddrUndef(MIB, get(X86::SBB8rr));
-  case X86::SETB_C16r:
-    return Expand2AddrUndef(MIB, get(X86::SBB16rr));
   case X86::SETB_C32r:
     return Expand2AddrUndef(MIB, get(X86::SBB32rr));
   case X86::SETB_C64r:

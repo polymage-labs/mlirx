@@ -167,10 +167,10 @@ static SDValue CreateCopyOfByValArgument(SDValue Src, SDValue Dst,
                                          SDValue Chain, ISD::ArgFlagsTy Flags,
                                          SelectionDAG &DAG, const SDLoc &dl) {
   SDValue SizeNode = DAG.getConstant(Flags.getByValSize(), dl, MVT::i32);
-  return DAG.getMemcpy(Chain, dl, Dst, Src, SizeNode, Flags.getByValAlign(),
-                       /*isVolatile=*/false, /*AlwaysInline=*/false,
-                       /*isTailCall=*/false,
-                       MachinePointerInfo(), MachinePointerInfo());
+  return DAG.getMemcpy(
+      Chain, dl, Dst, Src, SizeNode, Flags.getNonZeroByValAlign(),
+      /*isVolatile=*/false, /*AlwaysInline=*/false,
+      /*isTailCall=*/false, MachinePointerInfo(), MachinePointerInfo());
 }
 
 bool
@@ -993,10 +993,9 @@ HexagonTargetLowering::LowerVACOPY(SDValue Op, SelectionDAG &DAG) const {
   // Size of the va_list is 12 bytes as it has 3 pointers. Therefore,
   // we need to memcopy 12 bytes from va_list to another similar list.
   return DAG.getMemcpy(Chain, DL, DestPtr, SrcPtr,
-                       DAG.getIntPtrConstant(12, DL), 4, /*isVolatile*/false,
-                       false, false,
+                       DAG.getIntPtrConstant(12, DL), Align(4),
+                       /*isVolatile*/ false, false, false,
                        MachinePointerInfo(DestSV), MachinePointerInfo(SrcSV));
-
 }
 
 SDValue HexagonTargetLowering::LowerSETCC(SDValue Op, SelectionDAG &DAG) const {
@@ -3379,19 +3378,21 @@ bool HexagonTargetLowering::IsEligibleForTailCallOptimization(
 /// zero. 'MemcpyStrSrc' indicates whether the memcpy source is constant so it
 /// does not need to be loaded.  It returns EVT::Other if the type should be
 /// determined using generic target-independent logic.
-EVT HexagonTargetLowering::getOptimalMemOpType(uint64_t Size,
-      unsigned DstAlign, unsigned SrcAlign, bool IsMemset, bool ZeroMemset,
-      bool MemcpyStrSrc, const AttributeList &FuncAttributes) const {
+EVT HexagonTargetLowering::getOptimalMemOpType(
+    const MemOp &Op, const AttributeList &FuncAttributes) const {
 
   auto Aligned = [](unsigned GivenA, unsigned MinA) -> bool {
     return (GivenA % MinA) == 0;
   };
 
-  if (Size >= 8 && Aligned(DstAlign, 8) && (IsMemset || Aligned(SrcAlign, 8)))
+  if (Op.size() >= 8 && Aligned(Op.getDstAlign(), 8) &&
+      (Op.isMemset() || Aligned(Op.getSrcAlign(), 8)))
     return MVT::i64;
-  if (Size >= 4 && Aligned(DstAlign, 4) && (IsMemset || Aligned(SrcAlign, 4)))
+  if (Op.size() >= 4 && Aligned(Op.getDstAlign(), 4) &&
+      (Op.isMemset() || Aligned(Op.getSrcAlign(), 4)))
     return MVT::i32;
-  if (Size >= 2 && Aligned(DstAlign, 2) && (IsMemset || Aligned(SrcAlign, 2)))
+  if (Op.size() >= 2 && Aligned(Op.getDstAlign(), 2) &&
+      (Op.isMemset() || Aligned(Op.getSrcAlign(), 2)))
     return MVT::i16;
 
   return MVT::Other;

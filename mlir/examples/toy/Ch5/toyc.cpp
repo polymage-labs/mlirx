@@ -68,7 +68,7 @@ std::unique_ptr<toy::ModuleAST> parseInputFile(llvm::StringRef filename) {
     return nullptr;
   }
   auto buffer = fileOrErr.get()->getBuffer();
-  LexerBuffer lexer(buffer.begin(), buffer.end(), filename);
+  LexerBuffer lexer(buffer.begin(), buffer.end(), std::string(filename));
   Parser parser(lexer);
   return parser.parseModule();
 }
@@ -124,7 +124,7 @@ int dumpMLIR() {
   if (enableOpt || isLoweringToAffine) {
     // Inline all functions into main and then delete them.
     pm.addPass(mlir::createInlinerPass());
-    pm.addPass(mlir::toy::createDeadFunctionEliminationPass());
+    pm.addPass(mlir::createSymbolDCEPass());
 
     // Now that there is only one function, we can infer the shapes of each of
     // the operations.

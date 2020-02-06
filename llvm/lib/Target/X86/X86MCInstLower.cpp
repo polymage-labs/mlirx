@@ -137,6 +137,10 @@ MachineModuleInfoMachO &X86MCInstLower::getMachOMMI() const {
 /// GetSymbolFromOperand - Lower an MO_GlobalAddress or MO_ExternalSymbol
 /// operand to an MCSymbol.
 MCSymbol *X86MCInstLower::GetSymbolFromOperand(const MachineOperand &MO) const {
+  const Triple &TT = TM.getTargetTriple();
+  if (MO.isGlobal() && TT.isOSBinFormatELF())
+    return AsmPrinter.getSymbolPreferLocal(*MO.getGlobal());
+
   const DataLayout &DL = MF.getDataLayout();
   assert((MO.isGlobal() || MO.isSymbol() || MO.isMBB()) &&
          "Isn't a symbol reference");
@@ -1998,6 +2002,25 @@ void X86AsmPrinter::EmitInstruction(const MachineInstr *MI) {
   case X86::CATCHRET: {
     // Lower these as normal, but add some comments.
     OutStreamer->AddComment("CATCHRET");
+    break;
+  }
+
+  case X86::ENDBR32:
+  case X86::ENDBR64: {
+    // CurrentPatchableFunctionEntrySym can be CurrentFnBegin only for
+    // -fpatchable-function-entry=N,0. The entry MBB is guaranteed to be
+    // non-empty. If MI is the initial ENDBR, place the
+    // __patchable_function_entries label after ENDBR.
+    if (CurrentPatchableFunctionEntrySym &&
+        CurrentPatchableFunctionEntrySym == CurrentFnBegin &&
+        MI == &MF->front().front()) {
+      MCInst Inst;
+      MCInstLowering.Lower(MI, Inst);
+      EmitAndCountInstruction(Inst);
+      CurrentPatchableFunctionEntrySym = createTempSymbol("patch");
+      OutStreamer->EmitLabel(CurrentPatchableFunctionEntrySym);
+      return;
+    }
     break;
   }
 

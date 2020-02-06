@@ -158,8 +158,11 @@ clang-format
   It helps avoid having the closing bracket align with the switch statement's
   closing bracket (when ``IndentCaseLabels`` is ``false``).
 
+- Option ``ObjCBreakBeforeNestedBlockParam`` has been added to optionally apply
+  linebreaks for function arguments declarations before nested blocks.
+
   .. code-block:: c++
-  
+
     switch (fool) {                vs.     switch (fool) {
     case 1:                                case 1: {
       {                                      bar();
@@ -171,6 +174,11 @@ clang-format
         plop();
       }
     }
+
+- Option ``InsertTrailingCommas`` can be set to ``TCS_Wrapped`` to insert
+  trailing commas in container literals (arrays and objects) that wrap across
+  multiple lines. It is currently only available for JavaScript and disabled by
+  default (``TCS_None``).
 
 libclang
 --------

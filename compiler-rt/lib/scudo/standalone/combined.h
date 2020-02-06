@@ -24,6 +24,8 @@
 
 #ifdef GWP_ASAN_HOOKS
 #include "gwp_asan/guarded_pool_allocator.h"
+#include "gwp_asan/optional/backtrace.h"
+#include "gwp_asan/optional/segv_handler.h"
 #endif // GWP_ASAN_HOOKS
 
 extern "C" inline void EmptyCallback() {}
@@ -141,8 +143,9 @@ public:
         static_cast<u32>(getFlags()->quarantine_max_chunk_size);
 
     Stats.initLinkerInitialized();
-    Primary.initLinkerInitialized(getFlags()->release_to_os_interval_ms);
-    Secondary.initLinkerInitialized(&Stats);
+    const s32 ReleaseToOsIntervalMs = getFlags()->release_to_os_interval_ms;
+    Primary.initLinkerInitialized(ReleaseToOsIntervalMs);
+    Secondary.initLinkerInitialized(&Stats, ReleaseToOsIntervalMs);
 
     Quarantine.init(
         static_cast<uptr>(getFlags()->quarantine_size_kb << 10),
@@ -168,8 +171,13 @@ public:
     // Allocator::disable calling GWPASan.disable). Disable GWP-ASan's atfork
     // handler.
     Opt.InstallForkHandlers = false;
-    Opt.Printf = Printf;
+    Opt.Backtrace = gwp_asan::options::getBacktraceFunction();
     GuardedAlloc.init(Opt);
+
+    if (Opt.InstallSignalHandlers)
+      gwp_asan::crash_handler::installSignalHandlers(
+          &GuardedAlloc, Printf, gwp_asan::options::getPrintBacktraceFunction(),
+          Opt.Backtrace);
 #endif // GWP_ASAN_HOOKS
   }
 
@@ -179,6 +187,8 @@ public:
     TSDRegistry.unmapTestOnly();
     Primary.unmapTestOnly();
 #ifdef GWP_ASAN_HOOKS
+    if (getFlags()->GWP_ASAN_InstallSignalHandlers)
+      gwp_asan::crash_handler::uninstallSignalHandlers();
     GuardedAlloc.uninitTestOnly();
 #endif // GWP_ASAN_HOOKS
   }
@@ -566,6 +576,7 @@ public:
   void releaseToOS() {
     initThreadMaybe();
     Primary.releaseToOS();
+    Secondary.releaseToOS();
   }
 
   // Iterate over all chunks and call a callback for all busy chunks located
@@ -592,6 +603,9 @@ public:
     };
     Primary.iterateOverBlocks(Lambda);
     Secondary.iterateOverBlocks(Lambda);
+#ifdef GWP_ASAN_HOOKS
+    GuardedAlloc.iterate(reinterpret_cast<void *>(Base), Size, Callback, Arg);
+#endif
   }
 
   bool canReturnNull() {

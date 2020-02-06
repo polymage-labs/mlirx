@@ -7,11 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/Linalg/EDSC/Builders.h"
+#include "mlir/Dialect/Linalg/EDSC/Intrinsics.h"
 #include "mlir/Dialect/Linalg/IR/LinalgOps.h"
 #include "mlir/Dialect/Linalg/IR/LinalgTypes.h"
 #include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/Dialect/Linalg/Transforms/LinalgTransforms.h"
-#include "mlir/Dialect/Linalg/Utils/Intrinsics.h"
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
 #include "mlir/Dialect/LoopOps/LoopOps.h"
 #include "mlir/Dialect/StandardOps/Ops.h"
@@ -30,7 +30,6 @@ using namespace mlir;
 using namespace mlir::edsc;
 using namespace mlir::edsc::intrinsics;
 using namespace mlir::linalg;
-using namespace mlir::linalg::intrinsics;
 
 using IndexedStdValue = TemplatedIndexedValue<std_load, std_store>;
 using IndexedAffineValue = TemplatedIndexedValue<affine_load, affine_store>;
@@ -77,7 +76,8 @@ SmallVector<Value, 4> emitLoopRanges(OpBuilder &b, Location loc, AffineMap map,
   ScopedContext scope(b, loc);
   SmallVector<Value, 4> res;
   for (unsigned idx = 0, e = map.getNumResults(); idx < e; ++idx) {
-    res.push_back(range(constant_index(0), sizes[idx], constant_index(1)));
+    res.push_back(
+        linalg_range(constant_index(0), sizes[idx], constant_index(1)));
   }
   return res;
 }
@@ -273,13 +273,11 @@ public:
     // 2. Inline region, currently only works for a single basic block.
     BlockAndValueMapping map;
     auto &block = genericOp.region().front();
-    for (auto it : llvm::zip(block.getArguments(), indexedValues))
-      map.map(std::get<0>(it), std::get<1>(it));
+    map.map(block.getArguments(), indexedValues);
     for (auto &op : block.without_terminator()) {
       assert(op.getNumRegions() == 0);
       auto *newOp = b.clone(op, map);
-      for (auto it : llvm::zip(op.getResults(), newOp->getResults()))
-        map.map(std::get<0>(it), std::get<1>(it));
+      map.map(op.getResults(), newOp->getResults());
     }
 
     // 3. Emit std_store.
@@ -377,13 +375,11 @@ public:
     // 2. Inline region, currently only works for a single basic block.
     BlockAndValueMapping map;
     auto &block = indexedGenericOp.region().front();
-    for (auto it : llvm::zip(block.getArguments(), indexedValues))
-      map.map(std::get<0>(it), std::get<1>(it));
+    map.map(block.getArguments(), indexedValues);
     for (auto &op : block.without_terminator()) {
       assert(op.getNumRegions() == 0);
       auto *newOp = b.clone(op, map);
-      for (auto it : llvm::zip(op.getResults(), newOp->getResults()))
-        map.map(std::get<0>(it), std::get<1>(it));
+      map.map(op.getResults(), newOp->getResults());
     }
 
     // 3. Emit std_store.
@@ -412,6 +408,15 @@ public:
   static LogicalResult doit(Operation *op, PatternRewriter &rewriter);
 };
 
+template <typename LoopTy>
+bool loweringIsAllowed(int numParallelLoops, int numLoops) {
+  return true;
+}
+template <>
+bool loweringIsAllowed<loop::ParallelOp>(int numParallelLoops, int numLoops) {
+  return numParallelLoops == numLoops;
+}
+
 template <typename LoopTy, typename IndexedValueTy, typename ConcreteOpTy>
 LogicalResult LinalgOpToLoopsImpl<LoopTy, IndexedValueTy, ConcreteOpTy>::doit(
     Operation *op, PatternRewriter &rewriter) {
@@ -423,6 +428,12 @@ LogicalResult LinalgOpToLoopsImpl<LoopTy, IndexedValueTy, ConcreteOpTy>::doit(
   auto linalgOp = cast<ConcreteOpTy>(op);
   assert(linalgOp.hasBufferSemantics() &&
          "expected linalg op with buffer semantics");
+  auto nPar = linalgOp.getNumParallelLoops();
+  auto nRed = linalgOp.getNumReductionLoops();
+  auto nWin = linalgOp.getNumWindowLoops();
+  auto nLoops = nPar + nRed + nWin;
+  if (!loweringIsAllowed<LoopTy>(nPar, nLoops))
+    return failure();
   auto invertedMap =
       inversePermutation(concatAffineMaps(loopToOperandRangesMaps(linalgOp)));
   if (!invertedMap) {
@@ -431,10 +442,7 @@ LogicalResult LinalgOpToLoopsImpl<LoopTy, IndexedValueTy, ConcreteOpTy>::doit(
     return success();
   }
 
-  auto nPar = linalgOp.getNumParallelLoops();
-  auto nRed = linalgOp.getNumReductionLoops();
-  auto nWin = linalgOp.getNumWindowLoops();
-  SmallVector<IndexHandle, 4> allIvs(nPar + nRed + nWin);
+  SmallVector<IndexHandle, 4> allIvs(nLoops);
   SmallVector<ValueHandle *, 4> allPIvs =
       makeHandlePointers(MutableArrayRef<IndexHandle>(allIvs));
   auto loopRanges = emitLoopRanges(scope.getBuilder(), scope.getLocation(),
@@ -558,23 +566,24 @@ void LowerLinalgToLoopsPass<LoopType, IndexedValueType>::runOnFunction() {
   applyPatternsGreedily(this->getFunction(), patterns);
 }
 
-/// Create a pass to convert Linalg operations to loop.for loops and
-/// std.load/std.store accesses.
 std::unique_ptr<OpPassBase<FuncOp>> mlir::createConvertLinalgToLoopsPass() {
   return std::make_unique<
       LowerLinalgToLoopsPass<loop::ForOp, IndexedStdValue>>();
 }
 
-/// Create a pass to convert Linalg operations to affine.for loops and
-/// affine_load/affine_store accesses.
-/// Placeholder for now, this is NYI.
+std::unique_ptr<OpPassBase<FuncOp>>
+mlir::createConvertLinalgToParallelLoopsPass() {
+  return std::make_unique<
+      LowerLinalgToLoopsPass<loop::ParallelOp, IndexedStdValue>>();
+}
+
 std::unique_ptr<OpPassBase<FuncOp>>
 mlir::createConvertLinalgToAffineLoopsPass() {
   return std::make_unique<
       LowerLinalgToLoopsPass<AffineForOp, IndexedAffineValue>>();
 }
 
-// Emits a loop nest of `loop.for` with the proper body for `op`.
+/// Emits a loop nest of `loop.for` with the proper body for `op`.
 template <typename ConcreteOp>
 LogicalResult mlir::linalg::linalgOpToLoops(PatternRewriter &rewriter,
                                             Operation *op) {
@@ -582,12 +591,20 @@ LogicalResult mlir::linalg::linalgOpToLoops(PatternRewriter &rewriter,
       op, rewriter);
 }
 
-// Emits a loop nest of `affine.for` with the proper body for `op`.
+/// Emits a loop nest of `affine.for` with the proper body for `op`.
 template <typename ConcreteOp>
 LogicalResult mlir::linalg::linalgOpToAffineLoops(PatternRewriter &rewriter,
                                                   Operation *op) {
   return LinalgOpToLoopsImpl<AffineForOp, IndexedAffineValue, ConcreteOp>::doit(
       op, rewriter);
+}
+
+/// Emits a loop nest of `loop.parallel` with the proper body for `op`.
+template <typename ConcreteOp>
+LogicalResult mlir::linalg::linalgOpToParallelLoops(PatternRewriter &rewriter,
+                                                    Operation *op) {
+  return LinalgOpToLoopsImpl<loop::ParallelOp, IndexedStdValue,
+                             ConcreteOp>::doit(op, rewriter);
 }
 
 // TODO(ntv) Need to make these instantiations more future-proof to avoid the
@@ -607,10 +624,22 @@ INSTANTIATE_LINALG_OP_TO_LOOPS(ConvOp)
 INSTANTIATE_LINALG_OP_TO_LOOPS(GenericOp)
 INSTANTIATE_LINALG_OP_TO_LOOPS(IndexedGenericOp)
 
+// TODO(pifon): Enable lowering to parallel loops for ops other than
+// linalg.generic for now to be on the safe side.
+template LogicalResult
+mlir::linalg::linalgOpToParallelLoops<GenericOp>(PatternRewriter &rewriter,
+                                                 Operation *op);
+
 static PassRegistration<LowerLinalgToLoopsPass<loop::ForOp, IndexedStdValue>>
     structuredLoopsPass(
         "convert-linalg-to-loops",
         "Lower the operations from the linalg dialect into loops");
+
+static PassRegistration<
+    LowerLinalgToLoopsPass<loop::ParallelOp, IndexedStdValue>>
+    parallelLoopsPass(
+        "convert-linalg-to-parallel-loops",
+        "Lower the operations from the linalg dialect into parallel loops");
 
 static PassRegistration<LowerLinalgToLoopsPass<AffineForOp, IndexedAffineValue>>
     affineLoopsPass(
