@@ -768,3 +768,11 @@ func @return_in_op_with_region() {
   }): () -> (i32)
   return
 }
+
+// CHECK-LABEL: func @assume_alignment
+// CHECK-SAME: %[[MEMREF:.*]]: memref<4x4xf16>
+func @assume_alignment(%0: memref<4x4xf16>) {
+  // CHECK: assume_alignment %[[MEMREF]], 16 : memref<4x4xf16>
+  assume_alignment %0, 16 : memref<4x4xf16>
+  return
+}

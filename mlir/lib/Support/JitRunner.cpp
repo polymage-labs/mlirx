@@ -22,6 +22,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Module.h"
 #include "mlir/IR/StandardTypes.h"
+#include "mlir/InitAllDialects.h"
 #include "mlir/Parser.h"
 #include "mlir/Support/FileUtilities.h"
 
@@ -247,6 +248,7 @@ static Error compileAndExecuteSingleFloatReturnFunction(
 int mlir::JitRunnerMain(
     int argc, char **argv,
     function_ref<LogicalResult(mlir::ModuleOp)> mlirTransformer) {
+  registerAllDialects();
   llvm::InitLLVM y(argc, argv);
 
   initializeLLVM();

@@ -184,7 +184,8 @@ struct AffineCopyOptions {
 /// by its root affine.for. Since we generate alloc's and dealloc's for all fast
 /// buffers (before and after the range of operations resp. or at a hoisted
 /// position), all of the fast memory capacity is assumed to be available for
-/// processing this block range.
+/// processing this block range. When 'filterMemRef' is specified, copies are
+/// only generated for the provided MemRef.
 uint64_t affineDataCopyGenerate(Block::iterator begin, Block::iterator end,
                                 const AffineCopyOptions &copyOptions,
                                 Optional<Value> filterMemRef,
@@ -203,7 +204,7 @@ TileLoops extractFixedOuterLoops(loop::ForOp rootFOrOp,
 void coalesceLoops(MutableArrayRef<loop::ForOp> loops);
 
 /// Vectorizes a loop (either outer or inner, with a perfect or imperfectly
-/// nested body).
+/// nested body). `simdWidth` is the bit width of the vectors on target.
 LogicalResult loopVectorize(AffineForOp forOp,
                             unsigned simdWidth,
                             DenseMap<Value, Value> *vecMemRefs = nullptr);
@@ -241,6 +242,11 @@ LogicalResult loopVectorize(AffineForOp forOp,
 /// ```
 void mapLoopToProcessorIds(loop::ForOp forOp, ArrayRef<Value> processorId,
                            ArrayRef<Value> numProcessors);
+
+/// Gathers all AffineForOps in 'func' grouped by loop depth.
+void gatherLoops(FuncOp func,
+                 std::vector<SmallVector<AffineForOp, 2>> &depthToLoops);
+
 } // end namespace mlir
 
 #endif // MLIR_TRANSFORMS_LOOP_UTILS_H

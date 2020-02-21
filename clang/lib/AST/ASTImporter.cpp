@@ -204,9 +204,7 @@ namespace clang {
 
     // Wrapper for an overload set.
     template <typename ToDeclT> struct CallOverloadedCreateFun {
-      template <typename... Args>
-      auto operator()(Args &&... args)
-          -> decltype(ToDeclT::Create(std::forward<Args>(args)...)) {
+      template <typename... Args> decltype(auto) operator()(Args &&... args) {
         return ToDeclT::Create(std::forward<Args>(args)...);
       }
     };
@@ -465,7 +463,7 @@ namespace clang {
                                         ParmVarDecl *ToParam);
 
     template <typename T>
-    bool hasSameVisibilityContext(T *Found, T *From);
+    bool hasSameVisibilityContextAndLinkage(T *Found, T *From);
 
     bool IsStructuralMatch(Decl *From, Decl *To, bool Complain);
     bool IsStructuralMatch(RecordDecl *FromRecord, RecordDecl *ToRecord,
@@ -650,7 +648,7 @@ namespace clang {
 
     template<typename IIter, typename OIter>
     Error ImportArrayChecked(IIter Ibegin, IIter Iend, OIter Obegin) {
-      using ItemT = typename std::remove_reference<decltype(*Obegin)>::type;
+      using ItemT = std::remove_reference_t<decltype(*Obegin)>;
       for (; Ibegin != Iend; ++Ibegin, ++Obegin) {
         Expected<ItemT> ToOrErr = import(*Ibegin);
         if (!ToOrErr)
@@ -975,7 +973,10 @@ Expected<LambdaCapture> ASTNodeImporter::import(const LambdaCapture &From) {
 }
 
 template <typename T>
-bool ASTNodeImporter::hasSameVisibilityContext(T *Found, T *From) {
+bool ASTNodeImporter::hasSameVisibilityContextAndLinkage(T *Found, T *From) {
+  if (Found->getLinkageInternal() != From->getLinkageInternal())
+    return false;
+
   if (From->hasExternalFormalLinkage())
     return Found->hasExternalFormalLinkage();
   if (Importer.GetFromTU(Found) != From->getTranslationUnitDecl())
@@ -988,8 +989,11 @@ bool ASTNodeImporter::hasSameVisibilityContext(T *Found, T *From) {
 }
 
 template <>
-bool ASTNodeImporter::hasSameVisibilityContext(TypedefNameDecl *Found,
+bool ASTNodeImporter::hasSameVisibilityContextAndLinkage(TypedefNameDecl *Found,
                                                TypedefNameDecl *From) {
+  if (Found->getLinkageInternal() != From->getLinkageInternal())
+    return false;
+
   if (From->isInAnonymousNamespace() && Found->isInAnonymousNamespace())
     return Importer.GetFromTU(Found) == From->getTranslationUnitDecl();
   return From->isInAnonymousNamespace() == Found->isInAnonymousNamespace();
@@ -2394,7 +2398,7 @@ ASTNodeImporter::VisitTypedefNameDecl(TypedefNameDecl *D, bool IsAlias) {
       if (!FoundDecl->isInIdentifierNamespace(IDNS))
         continue;
       if (auto *FoundTypedef = dyn_cast<TypedefNameDecl>(FoundDecl)) {
-        if (!hasSameVisibilityContext(FoundTypedef, D))
+        if (!hasSameVisibilityContextAndLinkage(FoundTypedef, D))
           continue;
 
         QualType FromUT = D->getUnderlyingType();
@@ -2580,6 +2584,7 @@ ExpectedDecl ASTNodeImporter::VisitEnumDecl(EnumDecl *D) {
     IDNS |= Decl::IDNS_Ordinary;
 
   // We may already have an enum of the same name; try to find and match it.
+  EnumDecl *PrevDecl = nullptr;
   if (!DC->isFunctionOrMethod() && SearchName) {
     SmallVector<NamedDecl *, 4> ConflictingDecls;
     auto FoundDecls =
@@ -2594,10 +2599,15 @@ ExpectedDecl ASTNodeImporter::VisitEnumDecl(EnumDecl *D) {
       }
 
       if (auto *FoundEnum = dyn_cast<EnumDecl>(FoundDecl)) {
-        if (!hasSameVisibilityContext(FoundEnum, D))
+        if (!hasSameVisibilityContextAndLinkage(FoundEnum, D))
           continue;
-        if (IsStructuralMatch(D, FoundEnum))
-          return Importer.MapImported(D, FoundEnum);
+        if (IsStructuralMatch(D, FoundEnum)) {
+          EnumDecl *FoundDef = FoundEnum->getDefinition();
+          if (D->isThisDeclarationADefinition() && FoundDef)
+            return Importer.MapImported(D, FoundDef);
+          PrevDecl = FoundEnum->getMostRecentDecl();
+          break;
+        }
         ConflictingDecls.push_back(FoundDecl);
       }
     }
@@ -2625,7 +2635,7 @@ ExpectedDecl ASTNodeImporter::VisitEnumDecl(EnumDecl *D) {
   EnumDecl *D2;
   if (GetImportedOrCreateDecl(
           D2, D, Importer.getToContext(), DC, ToBeginLoc,
-          Loc, Name.getAsIdentifierInfo(), nullptr, D->isScoped(),
+          Loc, Name.getAsIdentifierInfo(), PrevDecl, D->isScoped(),
           D->isScopedUsingClassTag(), D->isFixed()))
     return D2;
 
@@ -2711,7 +2721,7 @@ ExpectedDecl ASTNodeImporter::VisitRecordDecl(RecordDecl *D) {
           if (!IsStructuralMatch(D, FoundRecord, false))
             continue;
 
-        if (!hasSameVisibilityContext(FoundRecord, D))
+        if (!hasSameVisibilityContextAndLinkage(FoundRecord, D))
           continue;
 
         if (IsStructuralMatch(D, FoundRecord)) {
@@ -3159,7 +3169,7 @@ ExpectedDecl ASTNodeImporter::VisitFunctionDecl(FunctionDecl *D) {
         continue;
 
       if (auto *FoundFunction = dyn_cast<FunctionDecl>(FoundDecl)) {
-        if (!hasSameVisibilityContext(FoundFunction, D))
+        if (!hasSameVisibilityContextAndLinkage(FoundFunction, D))
           continue;
 
         if (IsStructuralMatch(D, FoundFunction)) {
@@ -3781,7 +3791,7 @@ ExpectedDecl ASTNodeImporter::VisitVarDecl(VarDecl *D) {
         continue;
 
       if (auto *FoundVar = dyn_cast<VarDecl>(FoundDecl)) {
-        if (!hasSameVisibilityContext(FoundVar, D))
+        if (!hasSameVisibilityContextAndLinkage(FoundVar, D))
           continue;
         if (Importer.IsStructurallyEquivalent(D->getType(),
                                               FoundVar->getType())) {
@@ -5187,7 +5197,7 @@ ExpectedDecl ASTNodeImporter::VisitClassTemplateDecl(ClassTemplateDecl *D) {
       Decl *Found = FoundDecl;
       auto *FoundTemplate = dyn_cast<ClassTemplateDecl>(Found);
       if (FoundTemplate) {
-        if (!hasSameVisibilityContext(FoundTemplate, D))
+        if (!hasSameVisibilityContextAndLinkage(FoundTemplate, D))
           continue;
 
         if (IsStructuralMatch(D, FoundTemplate)) {
@@ -5715,7 +5725,7 @@ ASTNodeImporter::VisitFunctionTemplateDecl(FunctionTemplateDecl *D) {
         continue;
 
       if (auto *FoundTemplate = dyn_cast<FunctionTemplateDecl>(FoundDecl)) {
-        if (!hasSameVisibilityContext(FoundTemplate, D))
+        if (!hasSameVisibilityContextAndLinkage(FoundTemplate, D))
           continue;
         if (IsStructuralMatch(D, FoundTemplate)) {
           FunctionTemplateDecl *TemplateWithDef =
@@ -8475,6 +8485,15 @@ Expected<FileID> ASTImporter::Import(FileID FromID, bool IsBuiltin) {
       if (!ToIncludeLoc)
         return ToIncludeLoc.takeError();
 
+      // Every FileID that is not the main FileID needs to have a valid include
+      // location so that the include chain points to the main FileID. When
+      // importing the main FileID (which has no include location), we need to
+      // create a fake include location in the main file to keep this property
+      // intact.
+      SourceLocation ToIncludeLocOrFakeLoc = *ToIncludeLoc;
+      if (FromID == FromSM.getMainFileID())
+        ToIncludeLocOrFakeLoc = ToSM.getLocForStartOfFile(ToSM.getMainFileID());
+
       if (Cache->OrigEntry && Cache->OrigEntry->getDir()) {
         // FIXME: We probably want to use getVirtualFile(), so we don't hit the
         // disk again
@@ -8486,7 +8505,7 @@ Expected<FileID> ASTImporter::Import(FileID FromID, bool IsBuiltin) {
         // point to a valid file and we get no Entry here. In this case try with
         // the memory buffer below.
         if (Entry)
-          ToID = ToSM.createFileID(*Entry, *ToIncludeLoc,
+          ToID = ToSM.createFileID(*Entry, ToIncludeLocOrFakeLoc,
                                    FromSLoc.getFile().getFileCharacteristic());
       }
     }

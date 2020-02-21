@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLDB_MANUALDWARFINDEX_H
-#define LLDB_MANUALDWARFINDEX_H
+#ifndef LLDB_SOURCE_PLUGINS_SYMBOLFILE_DWARF_MANUALDWARFINDEX_H
+#define LLDB_SOURCE_PLUGINS_SYMBOLFILE_DWARF_MANUALDWARFINDEX_H
 
 #include "Plugins/SymbolFile/DWARF/DWARFIndex.h"
 #include "Plugins/SymbolFile/DWARF/NameToDIE.h"
@@ -18,9 +18,9 @@ class DWARFDebugInfo;
 namespace lldb_private {
 class ManualDWARFIndex : public DWARFIndex {
 public:
-  ManualDWARFIndex(Module &module, DWARFDebugInfo *debug_info,
+  ManualDWARFIndex(Module &module, DWARFDebugInfo &debug_info,
                    llvm::DenseSet<dw_offset_t> units_to_avoid = {})
-      : DWARFIndex(module), m_debug_info(debug_info),
+      : DWARFIndex(module), m_debug_info(&debug_info),
         m_units_to_avoid(std::move(units_to_avoid)) {}
 
   void Preload() override { Index(); }
@@ -71,4 +71,4 @@ private:
 };
 } // namespace lldb_private
 
-#endif // LLDB_MANUALDWARFINDEX_H
+#endif // LLDB_SOURCE_PLUGINS_SYMBOLFILE_DWARF_MANUALDWARFINDEX_H

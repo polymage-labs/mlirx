@@ -932,6 +932,8 @@ def fseh_exceptions : Flag<["-"], "fseh-exceptions">, Group<f_Group>,
   Flags<[CC1Option]>, HelpText<"Use SEH style exceptions">;
 def fwasm_exceptions : Flag<["-"], "fwasm-exceptions">, Group<f_Group>,
   Flags<[CC1Option]>, HelpText<"Use WebAssembly style exceptions">;
+def fignore_exceptions : Flag<["-"], "fignore-exceptions">, Group<f_Group>, Flags<[CC1Option]>,
+  HelpText<"Enable support for ignoring exception handling constructs">;
 def fexcess_precision_EQ : Joined<["-"], "fexcess-precision=">,
     Group<clang_ignored_gcc_optimization_f_Group>;
 def : Flag<["-"], "fexpensive-optimizations">, Group<clang_ignored_gcc_optimization_f_Group>;
@@ -1773,6 +1775,10 @@ def fno_signed_char : Flag<["-"], "fno-signed-char">, Group<f_Group>,
 def fsplit_stack : Flag<["-"], "fsplit-stack">, Group<f_Group>;
 def fstack_protector_all : Flag<["-"], "fstack-protector-all">, Group<f_Group>,
   HelpText<"Enable stack protectors for all functions">;
+def fstack_clash_protection : Flag<["-"], "fstack-clash-protection">, Group<f_Group>, Flags<[CC1Option]>,
+  HelpText<"Enable stack clash protection">;
+def fnostack_clash_protection : Flag<["-"], "fnostack-clash-protection">, Group<f_Group>,
+  HelpText<"Disable stack clash protection">;
 def fstack_protector_strong : Flag<["-"], "fstack-protector-strong">, Group<f_Group>,
   HelpText<"Enable stack protectors for some functions vulnerable to stack smashing. "
            "Compared to -fstack-protector, this uses a stronger heuristic "
@@ -1946,10 +1952,10 @@ def fwritable_strings : Flag<["-"], "fwritable-strings">, Group<f_Group>, Flags<
 def fzero_initialized_in_bss : Flag<["-"], "fzero-initialized-in-bss">, Group<f_Group>;
 def ffunction_sections : Flag<["-"], "ffunction-sections">, Group<f_Group>,
   Flags<[CC1Option]>,
-  HelpText<"Place each function in its own section (ELF Only)">;
+  HelpText<"Place each function in its own section">;
 def fno_function_sections : Flag<["-"], "fno-function-sections">, Group<f_Group>;
 def fdata_sections : Flag <["-"], "fdata-sections">, Group<f_Group>,
- Flags<[CC1Option]>, HelpText<"Place each data in its own section (ELF Only)">;
+ Flags<[CC1Option]>, HelpText<"Place each data in its own section">;
 def fno_data_sections : Flag <["-"], "fno-data-sections">, Group<f_Group>;
 def fstack_size_section : Flag<["-"], "fstack-size-section">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Emit section containing metadata on function stack sizes">;
@@ -1958,7 +1964,7 @@ def fno_stack_size_section : Flag<["-"], "fno-stack-size-section">, Group<f_Grou
 
 def funique_section_names : Flag <["-"], "funique-section-names">,
   Group<f_Group>,
-  HelpText<"Use unique names for text and data sections (ELF Only)">;
+  HelpText<"Use unique names for text and data sections">;
 def fno_unique_section_names : Flag <["-"], "fno-unique-section-names">,
   Group<f_Group>, Flags<[CC1Option]>;
 
@@ -2322,6 +2328,9 @@ def mno_neg_immediates: Flag<["-"], "mno-neg-immediates">, Group<m_arm_Features_
 def mcmse : Flag<["-"], "mcmse">, Group<m_arm_Features_Group>,
   Flags<[DriverOption,CC1Option]>,
   HelpText<"Allow use of CMSE (Armv8-M Security Extensions)">;
+def ForceAAPCSBitfieldLoad : Flag<["-"], "fAAPCSBitfieldLoad">, Group<m_arm_Features_Group>,
+  Flags<[DriverOption,CC1Option]>,
+  HelpText<"Follows the AAPCS standard that all volatile bit-field write generates at least one load. (ARM only).">;
 
 def mgeneral_regs_only : Flag<["-"], "mgeneral-regs-only">, Group<m_aarch64_Features_Group>,
   HelpText<"Generate code which only uses the general purpose registers (AArch64 only)">;
@@ -3316,9 +3325,6 @@ defm strength_reduce :
 defm tls_model : BooleanFFlag<"tls-model">, Group<clang_ignored_f_Group>;
 defm tracer : BooleanFFlag<"tracer">, Group<clang_ignored_gcc_optimization_f_Group>;
 defm tree_dce : BooleanFFlag<"tree-dce">, Group<clang_ignored_gcc_optimization_f_Group>;
-defm tree_loop_im : BooleanFFlag<"tree_loop_im">,  Group<clang_ignored_gcc_optimization_f_Group>;
-defm tree_loop_ivcanon : BooleanFFlag<"tree_loop_ivcanon">,  Group<clang_ignored_gcc_optimization_f_Group>;
-defm tree_loop_linear : BooleanFFlag<"tree_loop_linear">,  Group<clang_ignored_gcc_optimization_f_Group>;
 defm tree_salias : BooleanFFlag<"tree-salias">, Group<clang_ignored_f_Group>;
 defm tree_ter : BooleanFFlag<"tree-ter">, Group<clang_ignored_gcc_optimization_f_Group>;
 defm tree_vectorizer_verbose : BooleanFFlag<"tree-vectorizer-verbose">, Group<clang_ignored_f_Group>;

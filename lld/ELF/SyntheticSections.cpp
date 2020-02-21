@@ -1401,7 +1401,7 @@ template <class ELFT> void DynamicSection<ELFT>::finalizeContents() {
   if (config->emachine == EM_AARCH64) {
     if (config->andFeatures & GNU_PROPERTY_AARCH64_FEATURE_1_BTI)
       addInt(DT_AARCH64_BTI_PLT, 0);
-    if (config->andFeatures & GNU_PROPERTY_AARCH64_FEATURE_1_PAC)
+    if (config->zPacPlt)
       addInt(DT_AARCH64_PAC_PLT, 0);
   }
 
@@ -2747,8 +2747,8 @@ createSymbols(ArrayRef<std::vector<GdbIndexSection::NameAttrEntry>> nameAttrs,
   size_t numShards = 32;
   size_t concurrency = 1;
   if (threadsEnabled)
-    concurrency =
-        std::min<size_t>(PowerOf2Floor(hardware_concurrency()), numShards);
+    concurrency = std::min<size_t>(
+        hardware_concurrency().compute_thread_count(), numShards);
 
   // A sharded map to uniquify symbols by name.
   std::vector<DenseMap<CachedHashStringRef, size_t>> map(numShards);
@@ -3191,8 +3191,8 @@ void MergeNoTailSection::finalizeContents() {
   // operations in the following tight loop.
   size_t concurrency = 1;
   if (threadsEnabled)
-    concurrency =
-        std::min<size_t>(PowerOf2Floor(hardware_concurrency()), numShards);
+    concurrency = std::min<size_t>(
+        hardware_concurrency().compute_thread_count(), numShards);
 
   // Add section pieces to the builders.
   parallelForEachN(0, concurrency, [&](size_t threadId) {

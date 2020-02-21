@@ -24,9 +24,11 @@
 #include "llvm/ExecutionEngine/JITEventListener.h"
 #include "llvm/ExecutionEngine/MCJIT.h"
 #include "llvm/ExecutionEngine/ObjectCache.h"
+#include "llvm/ExecutionEngine/Orc/DebugUtils.h"
 #include "llvm/ExecutionEngine/Orc/ExecutionUtils.h"
 #include "llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h"
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
+#include "llvm/ExecutionEngine/Orc/MachOPlatform.h"
 #include "llvm/ExecutionEngine/Orc/OrcRemoteTargetClient.h"
 #include "llvm/ExecutionEngine/OrcMCJITReplacement.h"
 #include "llvm/ExecutionEngine/SectionMemoryManager.h"
@@ -115,6 +117,10 @@ namespace {
                 cl::desc("Specifies the JITDylib to be used for any subsequent "
                          "-extra-module arguments."));
 
+  cl::list<std::string>
+    Dylibs("dlopen", cl::desc("Dynamic libraries to load before linking"),
+           cl::ZeroOrMore);
+
   // The MCJIT supports building for a target address space separate from
   // the JIT compilation process. Use a forked process and a copying
   // memory manager with IPC to execute using this functionality.
@@ -201,6 +207,19 @@ namespace {
       "no-process-syms",
       cl::desc("Do not resolve lli process symbols in JIT'd code"),
       cl::init(false));
+
+  enum class LLJITPlatform { DetectHost, GenericIR, MachO };
+
+  cl::opt<LLJITPlatform>
+      Platform("lljit-platform", cl::desc("Platform to use with LLJIT"),
+               cl::init(LLJITPlatform::DetectHost),
+               cl::values(clEnumValN(LLJITPlatform::DetectHost, "DetectHost",
+                                     "Select based on JIT target triple"),
+                          clEnumValN(LLJITPlatform::GenericIR, "GenericIR",
+                                     "Use LLJITGenericIRPlatform"),
+                          clEnumValN(LLJITPlatform::MachO, "MachO",
+                                     "Use LLJITMachOPlatform")),
+               cl::Hidden);
 
   enum class DumpKind {
     NoDump,
@@ -355,6 +374,7 @@ static void reportError(SMDiagnostic Err, const char *ProgName) {
   exit(1);
 }
 
+Error loadDylibs();
 int runOrcLazyJIT(const char *ProgName);
 void disallowOrcOptions();
 
@@ -379,6 +399,8 @@ int main(int argc, char **argv, char * const *envp) {
   // If the user doesn't want core files, disable them.
   if (DisableCoreFiles)
     sys::Process::PreventCoreFiles();
+
+  ExitOnErr(loadDylibs());
 
   if (UseJITKind == JITKind::OrcLazy)
     return runOrcLazyJIT(argv[0]);
@@ -743,6 +765,16 @@ static std::function<void(Module &)> createDebugDumper() {
   llvm_unreachable("Unknown DumpKind");
 }
 
+Error loadDylibs() {
+  for (const auto &Dylib : Dylibs) {
+    std::string ErrMsg;
+    if (sys::DynamicLibrary::LoadLibraryPermanently(Dylib.c_str(), &ErrMsg))
+      return make_error<StringError>(ErrMsg, inconvertibleErrorCode());
+  }
+
+  return Error::success();
+}
+
 static void exitOnLazyCallThroughFailure() { exit(1); }
 
 int runOrcLazyJIT(const char *ProgName) {
@@ -755,15 +787,19 @@ int runOrcLazyJIT(const char *ProgName) {
   if (!MainModule)
     reportError(Err, ProgName);
 
-  const auto &TT = MainModule->getTargetTriple();
+  Triple TT(MainModule->getTargetTriple());
   orc::LLLazyJITBuilder Builder;
 
   Builder.setJITTargetMachineBuilder(
-      TT.empty() ? ExitOnErr(orc::JITTargetMachineBuilder::detectHost())
-                 : orc::JITTargetMachineBuilder(Triple(TT)));
+      MainModule->getTargetTriple().empty()
+          ? ExitOnErr(orc::JITTargetMachineBuilder::detectHost())
+          : orc::JITTargetMachineBuilder(TT));
 
   if (!MArch.empty())
     Builder.getJITTargetMachineBuilder()->getTargetTriple().setArchName(MArch);
+
+  if (!MainModule->getDataLayout().isDefault())
+    Builder.setDataLayout(MainModule->getDataLayout());
 
   Builder.getJITTargetMachineBuilder()
       ->setCPU(getCPUStr())
@@ -778,6 +814,29 @@ int runOrcLazyJIT(const char *ProgName) {
   Builder.setLazyCompileFailureAddr(
       pointerToJITTargetAddress(exitOnLazyCallThroughFailure));
   Builder.setNumCompileThreads(LazyJITCompileThreads);
+
+  // Set up LLJIT platform.
+  {
+    LLJITPlatform P = Platform;
+    if (P == LLJITPlatform::DetectHost) {
+      if (TT.isOSBinFormatMachO())
+        P = LLJITPlatform::MachO;
+      else
+        P = LLJITPlatform::GenericIR;
+    }
+
+    switch (P) {
+    case LLJITPlatform::GenericIR:
+      // Nothing to do: LLJITBuilder will use this by default.
+      break;
+    case LLJITPlatform::MachO:
+      Builder.setPlatformSetUp(orc::setUpMachOPlatform);
+      ExitOnErr(orc::enableObjCRegistration("libobjc.dylib"));
+      break;
+    default:
+      llvm_unreachable("Unrecognized platform value");
+    }
+  }
 
   auto J = ExitOnErr(Builder.create());
 
@@ -811,9 +870,6 @@ int runOrcLazyJIT(const char *ProgName) {
               return Name != MainName;
             })));
 
-  orc::LocalCXXRuntimeOverrides CXXRuntimeOverrides;
-  ExitOnErr(CXXRuntimeOverrides.enable(J->getMainJITDylib(), Mangle));
-
   // Add the main module.
   ExitOnErr(
       J->addLazyIRModule(orc::ThreadSafeModule(std::move(MainModule), TSCtx)));
@@ -828,8 +884,11 @@ int runOrcLazyJIT(const char *ProgName) {
     for (auto JDItr = JITDylibs.begin(), JDEnd = JITDylibs.end();
          JDItr != JDEnd; ++JDItr) {
       orc::JITDylib *JD = J->getJITDylibByName(*JDItr);
-      if (!JD)
-        JD = &J->createJITDylib(*JDItr);
+      if (!JD) {
+        JD = &ExitOnErr(J->createJITDylib(*JDItr));
+        J->getMainJITDylib().addToSearchOrder(*JD);
+        JD->addToSearchOrder(J->getMainJITDylib());
+      }
       IdxToDylib[JITDylibs.getPosition(JDItr - JITDylibs.begin())] = JD;
     }
 
@@ -865,7 +924,7 @@ int runOrcLazyJIT(const char *ProgName) {
   }
 
   // Run any static constructors.
-  ExitOnErr(J->runConstructors());
+  ExitOnErr(J->initialize(J->getMainJITDylib()));
 
   // Run any -thread-entry points.
   std::vector<std::thread> AltEntryThreads;
@@ -890,8 +949,7 @@ int runOrcLazyJIT(const char *ProgName) {
     AltEntryThread.join();
 
   // Run destructors.
-  ExitOnErr(J->runDestructors());
-  CXXRuntimeOverrides.runDestructors();
+  ExitOnErr(J->deinitialize(J->getMainJITDylib()));
 
   return Result;
 }

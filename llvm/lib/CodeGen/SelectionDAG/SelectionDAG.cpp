@@ -2407,10 +2407,12 @@ SDValue SelectionDAG::getSplatValue(SDValue V) {
   return SDValue();
 }
 
-/// If a SHL/SRA/SRL node has a constant or splat constant shift amount that
-/// is less than the element bit-width of the shift node, return it.
-static const APInt *getValidShiftAmountConstant(SDValue V,
-                                                const APInt &DemandedElts) {
+const APInt *
+SelectionDAG::getValidShiftAmountConstant(SDValue V,
+                                          const APInt &DemandedElts) const {
+  assert((V.getOpcode() == ISD::SHL || V.getOpcode() == ISD::SRL ||
+          V.getOpcode() == ISD::SRA) &&
+         "Unknown shift node");
   unsigned BitWidth = V.getScalarValueSizeInBits();
   if (ConstantSDNode *SA = isConstOrConstSplat(V.getOperand(1), DemandedElts)) {
     // Shifting more than the bitwidth is not valid.
@@ -2421,10 +2423,13 @@ static const APInt *getValidShiftAmountConstant(SDValue V,
   return nullptr;
 }
 
-/// If a SHL/SRA/SRL node has constant vector shift amounts that are all less
-/// than the element bit-width of the shift node, return the minimum value.
-static const APInt *
-getValidMinimumShiftAmountConstant(SDValue V, const APInt &DemandedElts) {
+const APInt *SelectionDAG::getValidMinimumShiftAmountConstant(
+    SDValue V, const APInt &DemandedElts) const {
+  assert((V.getOpcode() == ISD::SHL || V.getOpcode() == ISD::SRL ||
+          V.getOpcode() == ISD::SRA) &&
+         "Unknown shift node");
+  if (const APInt *ValidAmt = getValidShiftAmountConstant(V, DemandedElts))
+    return ValidAmt;
   unsigned BitWidth = V.getScalarValueSizeInBits();
   auto *BV = dyn_cast<BuildVectorSDNode>(V.getOperand(1));
   if (!BV)
@@ -2447,10 +2452,13 @@ getValidMinimumShiftAmountConstant(SDValue V, const APInt &DemandedElts) {
   return MinShAmt;
 }
 
-/// If a SHL/SRA/SRL node has constant vector shift amounts that are all less
-/// than the element bit-width of the shift node, return the maximum value.
-static const APInt *
-getValidMaximumShiftAmountConstant(SDValue V, const APInt &DemandedElts) {
+const APInt *SelectionDAG::getValidMaximumShiftAmountConstant(
+    SDValue V, const APInt &DemandedElts) const {
+  assert((V.getOpcode() == ISD::SHL || V.getOpcode() == ISD::SRL ||
+          V.getOpcode() == ISD::SRA) &&
+         "Unknown shift node");
+  if (const APInt *ValidAmt = getValidShiftAmountConstant(V, DemandedElts))
+    return ValidAmt;
   unsigned BitWidth = V.getScalarValueSizeInBits();
   auto *BV = dyn_cast<BuildVectorSDNode>(V.getOperand(1));
   if (!BV)
@@ -3061,12 +3069,12 @@ KnownBits SelectionDAG::computeKnownBits(SDValue Op, const APInt &DemandedElts,
     EVT InVT = Op.getOperand(0).getValueType();
     APInt InDemandedElts = DemandedElts.zextOrSelf(InVT.getVectorNumElements());
     Known = computeKnownBits(Op.getOperand(0), InDemandedElts, Depth + 1);
-    Known = Known.zext(BitWidth, true /* ExtendedBitsAreKnownZero */);
+    Known = Known.zext(BitWidth);
     break;
   }
   case ISD::ZERO_EXTEND: {
     Known = computeKnownBits(Op.getOperand(0), DemandedElts, Depth + 1);
-    Known = Known.zext(BitWidth, true /* ExtendedBitsAreKnownZero */);
+    Known = Known.zext(BitWidth);
     break;
   }
   case ISD::SIGN_EXTEND_VECTOR_INREG: {
@@ -3089,12 +3097,12 @@ KnownBits SelectionDAG::computeKnownBits(SDValue Op, const APInt &DemandedElts,
     EVT InVT = Op.getOperand(0).getValueType();
     APInt InDemandedElts = DemandedElts.zextOrSelf(InVT.getVectorNumElements());
     Known = computeKnownBits(Op.getOperand(0), InDemandedElts, Depth + 1);
-    Known = Known.zext(BitWidth, false /* ExtendedBitsAreKnownZero */);
+    Known = Known.anyext(BitWidth);
     break;
   }
   case ISD::ANY_EXTEND: {
     Known = computeKnownBits(Op.getOperand(0), DemandedElts, Depth + 1);
-    Known = Known.zext(BitWidth, false /* ExtendedBitsAreKnownZero */);
+    Known = Known.anyext(BitWidth);
     break;
   }
   case ISD::TRUNCATE: {
@@ -3257,7 +3265,7 @@ KnownBits SelectionDAG::computeKnownBits(SDValue Op, const APInt &DemandedElts,
 
     Known = computeKnownBits(InVec, DemandedSrcElts, Depth + 1);
     if (BitWidth > EltBitWidth)
-      Known = Known.zext(BitWidth, false /* => any extend */);
+      Known = Known.anyext(BitWidth);
     break;
   }
   case ISD::INSERT_VECTOR_ELT: {

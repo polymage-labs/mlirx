@@ -258,6 +258,21 @@ TEST_F(FormatTestCSharp, Attributes) {
       "// The const char* returned by hello_world must not be deleted.\n"
       "private static extern IntPtr HelloFromCpp();)");
 
+  // Class attributes go on their own line and do not affect layout of
+  // interfaces. Line wrapping decisions previously caused each interface to be
+  // on its own line.
+  verifyFormat("[SomeAttribute]\n"
+               "[SomeOtherAttribute]\n"
+               "public class A : IShape, IAnimal, IVehicle\n"
+               "{\n"
+               "    int X;\n"
+               "}");
+
+  // Attributes in a method declaration do not cause line wrapping.
+  verifyFormat("void MethodA([In][Out] ref double x)\n"
+               "{\n"
+               "}");
+
   //  Unwrappable lines go on a line of their own.
   // 'target:' is not treated as a label.
   // Modify Style to enforce a column limit.
@@ -498,7 +513,7 @@ var x = foo(className, $@"some code:
 TEST_F(FormatTestCSharp, CSharpObjectInitializers) {
   FormatStyle Style = getGoogleStyle(FormatStyle::LK_CSharp);
 
-  // Start code fragemnts with a comment line so that C++ raw string literals
+  // Start code fragments with a comment line so that C++ raw string literals
   // as seen are identical to expected formatted code.
 
   verifyFormat(R"(//
@@ -521,6 +536,21 @@ Shape[] shapes = new[] {new Circle {Radius = 2.7281, Colour = Colours.Red},
                             Side = 101.1,
                             Colour = Colours.Yellow,
                         }};)",
+               Style);
+}
+
+TEST_F(FormatTestCSharp, CSharpNamedArguments) {
+  FormatStyle Style = getGoogleStyle(FormatStyle::LK_CSharp);
+
+  verifyFormat(R"(//
+PrintOrderDetails(orderNum: 31, productName: "Red Mug",
+                  sellerName: "Gift Shop");)",
+               Style);
+
+  // Ensure that trailing comments do not cause problems.
+  verifyFormat(R"(//
+PrintOrderDetails(orderNum: 31, productName: "Red Mug",  // comment
+                  sellerName: "Gift Shop");)",
                Style);
 }
 

@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef liblldb_ClangASTSource_h_
-#define liblldb_ClangASTSource_h_
+#ifndef LLDB_SOURCE_PLUGINS_EXPRESSIONPARSER_CLANG_CLANGASTSOURCE_H
+#define LLDB_SOURCE_PLUGINS_EXPRESSIONPARSER_CLANG_CLANGASTSOURCE_H
 
 #include <set>
 
@@ -359,6 +359,11 @@ protected:
       unsigned int current_id, NameSearchContext &context,
       clang::ObjCInterfaceDecl *original_interface_decl, const char *log_info);
 
+  void FindDeclInModules(NameSearchContext &context, ConstString name,
+                         unsigned current_id);
+  void FindDeclInObjCRuntime(NameSearchContext &context, ConstString name,
+                             unsigned current_id);
+
   friend struct NameSearchContext;
 
   bool m_import_in_progress;
@@ -479,4 +484,4 @@ struct NameSearchContext {
 
 } // namespace lldb_private
 
-#endif // liblldb_ClangASTSource_h_
+#endif // LLDB_SOURCE_PLUGINS_EXPRESSIONPARSER_CLANG_CLANGASTSOURCE_H

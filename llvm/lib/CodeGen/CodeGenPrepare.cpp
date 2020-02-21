@@ -1272,7 +1272,8 @@ bool CodeGenPrepare::combineToUAddWithOverflow(CmpInst *Cmp,
       return false;
 
   if (!TLI->shouldFormOverflowOp(ISD::UADDO,
-                                 TLI->getValueType(*DL, Add->getType())))
+                                 TLI->getValueType(*DL, Add->getType()),
+                                 Add->hasNUsesOrMore(2)))
     return false;
 
   // We don't want to move around uses of condition values this late, so we
@@ -1339,7 +1340,8 @@ bool CodeGenPrepare::combineToUSubWithOverflow(CmpInst *Cmp,
     return false;
 
   if (!TLI->shouldFormOverflowOp(ISD::USUBO,
-                                 TLI->getValueType(*DL, Sub->getType())))
+                                 TLI->getValueType(*DL, Sub->getType()),
+                                 Sub->hasNUsesOrMore(2)))
     return false;
 
   if (!replaceMathCmpWithIntrinsic(Sub, Cmp, Intrinsic::usub_with_overflow))
@@ -1953,7 +1955,7 @@ bool CodeGenPrepare::optimizeCallInst(CallInst *CI, bool &ModifiedDT) {
     case Intrinsic::experimental_widenable_condition: {
       // Give up on future widening oppurtunties so that we can fold away dead
       // paths and merge blocks before going into block-local instruction
-      // selection.   
+      // selection.
       if (II->use_empty()) {
         II->eraseFromParent();
         return true;
@@ -2042,7 +2044,8 @@ bool CodeGenPrepare::optimizeCallInst(CallInst *CI, bool &ModifiedDT) {
   // to fortified library functions (e.g. __memcpy_chk) that have the default
   // "don't know" as the objectsize.  Anything else should be left alone.
   FortifiedLibCallSimplifier Simplifier(TLInfo, true);
-  if (Value *V = Simplifier.optimizeCall(CI)) {
+  IRBuilder<> Builder(CI);
+  if (Value *V = Simplifier.optimizeCall(CI, Builder)) {
     CI->replaceAllUsesWith(V);
     CI->eraseFromParent();
     return true;
@@ -6864,12 +6867,19 @@ static bool splitMergedValStore(StoreInst &SI, const DataLayout &DL,
     Value *Addr = Builder.CreateBitCast(
         SI.getOperand(1),
         SplitStoreType->getPointerTo(SI.getPointerAddressSpace()));
-    if ((IsLE && Upper) || (!IsLE && !Upper))
+    const bool IsOffsetStore = (IsLE && Upper) || (!IsLE && !Upper);
+    if (IsOffsetStore)
       Addr = Builder.CreateGEP(
           SplitStoreType, Addr,
           ConstantInt::get(Type::getInt32Ty(SI.getContext()), 1));
-    Builder.CreateAlignedStore(V, Addr,
-                               Upper ? SI.getAlign() / 2 : SI.getAlign());
+    MaybeAlign Alignment = SI.getAlign();
+    if (IsOffsetStore && Alignment) {
+      // When splitting the store in half, naturally one half will retain the
+      // alignment of the original wider store, regardless of whether it was
+      // over-aligned or not, while the other will require adjustment.
+      Alignment = commonAlignment(Alignment, HalfValBitSize / 8);
+    }
+    Builder.CreateAlignedStore(V, Addr, Alignment);
   };
 
   CreateSplitStore(LValue, false);
