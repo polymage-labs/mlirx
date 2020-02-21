@@ -2068,16 +2068,16 @@ uint64_t mlir::affineDataCopyGenerate(Block::iterator begin,
   return totalCopyBuffersSizeInBytes;
 }
 
-/// Returns scalars that are live in to 'forOp'.
-static void getLiveInScalars(AffineForOp forOp,
-                             SmallVectorImpl<Value> &scalars) {
+/// Returns scalars other than other those of index type that are live in to
+/// 'forOp'.
+static void getNonIndexLiveInScalars(AffineForOp forOp,
+                                     SmallVectorImpl<Value> &scalars) {
   SmallVector<AffineForOp, 4> ivs;
   forOp.walk([&](Operation *op) {
-    // Skip operands of affine.load/store.
-    if (isa<AffineLoadOp>(op) || isa<AffineStoreOp>(op) ||
-        isa<AffineApplyOp>(op))
-      return;
     for (auto value : op->getOperands()) {
+      auto type = value.getType();
+      if (type.isa<MemRefType>() || type.isa<IndexType>())
+        continue;
       if (auto *defOp = value.getDefiningOp()) {
         ivs.clear();
         // Check whether the defining op is outside iv.
@@ -2094,6 +2094,7 @@ static void getLiveInScalars(AffineForOp forOp,
 /// Given an input type, provides a vector type for it of the provided width.
 static VectorType getVectorizedType(Type inputType, unsigned width) {
   assert(width > 1 && "unexpected vector width");
+  assert(!inputType.isa<IndexType>() && "index type can't be vectorized");
   Type baseEltType = inputType;
   SmallVector<int64_t, 4> vecShape;
   if (auto vecEltType = inputType.dyn_cast<VectorType>()) {
@@ -2153,24 +2154,24 @@ static Operation *vectorizeMiscLeafOp(Operation *op, unsigned width) {
   if (op->getNumRegions() != 0)
     return nullptr;
 
-  SmallVector<Type, 8> vectorTypes;
-  for (auto v : op->getResults()) {
-    vectorTypes.push_back(getVectorizedType(v.getType(), width));
-  }
-  SmallVector<Value, 4> vectorOperands(op->getOperands());
+  LLVM_DEBUG(llvm::dbgs() << "Vectorizing leaf op " << *op << "\n");
 
-  // Check whether a single operand is null. If so, vectorization failed.
+  SmallVector<Type, 8> vectorTypes;
+  for (auto v : op->getResults())
+    vectorTypes.push_back(getVectorizedType(v.getType(), width));
+
+  // Check whether any operand is null; if so, vectorization failed.
   bool success = llvm::all_of(
-      vectorOperands, [](Value v) { return v.getType().isa<VectorType>(); });
+      op->getOperands(), [](Value v) { return v.getType().isa<VectorType>(); });
   if (!success) {
     LLVM_DEBUG(llvm::dbgs()
-               << "\n[affine-vect]+++++ operands shoulds have been vectorized");
+               << "\n[affine-vect]+++++ operands should've been vectorized\n");
     return nullptr;
   }
 
   OpBuilder b(op);
   OperationState newOp(op->getLoc(), op->getName().getStringRef(),
-                       vectorOperands, vectorTypes, op->getAttrs(),
+                       op->getOperands(), vectorTypes, op->getAttrs(),
                        /*successors=*/{},
                        /*regions=*/{}, op->hasResizableOperandsList());
   return b.createOperation(newOp);
@@ -2178,6 +2179,8 @@ static Operation *vectorizeMiscLeafOp(Operation *op, unsigned width) {
 
 LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
                                   DenseMap<Value, Value> *vecMemRefMap) {
+  LLVM_DEBUG(llvm::dbgs() << "Vectorizing " << *forOp << "\n");
+
   // Walk and collect all memrefs that need to be turned into vector types (or
   // to higher dimensional vector types).
   //
@@ -2275,13 +2278,16 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
     return failure();
   }
 
-  // Check if all live-in scalars are of non-memref/vector/tensor type since we
-  // can't splat these.
+  // Check if all live-in scalars are of non-memref/vector/tensor/index type
+  // since we can't splat these. Index types are use for subscript computations
+  // or loop bound calculations, and aren't supported as operands of operations
+  // that need to be vectorized.
   SmallVector<Value, 4> liveInScalars;
-  getLiveInScalars(forOp, liveInScalars);
+  getNonIndexLiveInScalars(forOp, liveInScalars);
   if (llvm::any_of(liveInScalars, [](Value v) {
         auto type = v.getType();
-        return type.isa<VectorType>() || type.isa<TensorType>();
+        return type.isa<VectorType>() || type.isa<TensorType>() ||
+               type.isa<IndexType>();
       })) {
     LLVM_DEBUG(llvm::dbgs() << "Non-scalar type live in - can't splat\n");
     return failure();
@@ -2341,26 +2347,13 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
   for (auto op : toVecStoreOps) {
     auto storeOp = cast<AffineStoreOp>(op);
     OpBuilder rewriter(storeOp);
-    SmallVector<Value, 4> mapOperands(storeOp.getMapOperands());
     rewriter.create<AffineStoreOp>(
         storeOp.getLoc(), storeOp.getValueToStore(),
         toVecMemRefMap[storeOp.getMemRef()],
-        scaleDownLastResult(storeOp.getAffineMap(), vectorWidth), mapOperands);
+        scaleDownLastResult(storeOp.getAffineMap(), vectorWidth),
+        storeOp.getMapOperands());
     storeOp.erase();
   }
-
-  // Vectorize remaining ops.
-  forOp.walk([&](Operation *op) {
-    if (isa<AffineLoadOp>(op) || isa<AffineStoreOp>(op) ||
-        isa<AffineApplyOp>(op) || isa<SplatOp>(op) ||
-        isa<AffineTerminatorOp>(op))
-      return;
-    if (auto *vecOp = vectorizeMiscLeafOp(op, vectorWidth)) {
-      op->replaceAllUsesWith(vecOp);
-      if (op->use_empty())
-        op->erase();
-    }
-  });
 
   // Splat live-in scalars.
   for (auto scalar : liveInScalars) {
@@ -2378,6 +2371,19 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
         loc, scalar, getVectorizedType(scalar.getType(), vectorWidth));
     replaceAllUsesInRegionWith(scalar, splat, forOp.region());
   }
+
+  // Vectorize remaining ops.
+  forOp.walk([&](Operation *op) {
+    if (isa<AffineLoadOp>(op) || isa<AffineStoreOp>(op) ||
+        isa<AffineApplyOp>(op) || isa<SplatOp>(op) ||
+        isa<AffineTerminatorOp>(op))
+      return;
+    if (auto *vecOp = vectorizeMiscLeafOp(op, vectorWidth)) {
+      op->replaceAllUsesWith(vecOp);
+      if (op->use_empty())
+        op->erase();
+    }
+  });
 
   assert(writeLastEltStoreOps.empty() && "unimplemented last write store ops");
 

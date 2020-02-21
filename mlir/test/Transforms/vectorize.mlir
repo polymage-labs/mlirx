@@ -99,3 +99,41 @@ func @sgemm_blis_tiled(%A: memref<2048x2048xf32>, %B: memref<2048x2048xf32>, %C:
   }
   return
 }
+
+// Mixed f32 and f64 for outer loop vectorization.
+// CHECK-LABEL: func @loop_mixed
+func @loop_mixed(%A: memref<2048x2048xf32>, %B: memref<2048x2048xf64>, %v: f64) {
+  affine.for %j = 0 to 1024 {
+    affine.for %i = 0 to 1024 {
+      affine.load %A[%i, %j] : memref<2048x2048xf32>
+      // affine.store %v, %B[%i, %j] : memref<2048x2048xf64>
+    }
+  }
+  return
+}
+
+// CHECK-LABEL: func @live_in_splat
+func @live_in_splat(%A: memref<2048xi32>) {
+  // CHECK-NEXT: %[[CST:.*]] = constant dense<5> : vector<8xi32>
+  %c5 = constant 5 : i32
+  affine.for %i = 0 to 2048 {
+    // CHECK: affine.load {{.*}} : memref<256xvector<8xi32>>
+    // CHECK-NEXT: %[[P:.*]] = muli {{.*}} : vector<8xi32>
+    // CHECK-NEXT: affine.store %[[P]], {{.*}} : memref<256xvector<8xi32>>
+    %v = affine.load %A[%i] : memref<2048xi32>
+    %p = muli %v, %c5 : i32
+    affine.store %p, %A[%i] : memref<2048xi32>
+  }
+  return
+}
+
+// CHECK-LABEL: func @outer_loop_vec_with_inner_for_op_operand
+func @outer_loop_vec_with_inner_for_op_operand(%arg0 : index, %arg1 : index, %A : memref<128xf32>) {
+  affine.for %i = affine_map<(d0) -> (d0 * 16)>(%arg0) to affine_map<(d0) -> (d0 * 16 + 16)>(%arg0) {
+    affine.for %j = affine_map<(d0) -> (d0 * 8)>(%arg1) to affine_map<(d0) -> (d0 * 8 + 8)>(%arg1) {
+      // CHECK: affine.load %{{.*}}[{{.*}}] : memref<16xvector<8xf32>>
+      affine.load %A[%j] : memref<128xf32>
+    }
+  }
+  return
+}
