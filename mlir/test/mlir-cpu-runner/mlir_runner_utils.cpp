@@ -62,11 +62,34 @@ extern "C" void _mlir_ciface_print_memref_f32(UnrankedMemRefType<float> *M) {
   }
 }
 
+extern "C" void _mlir_ciface_print_memref_f64(UnrankedMemRefType<double> *M) {
+  printUnrankedMemRefMetaData(std::cout, *M);
+  int rank = M->rank;
+  void *ptr = M->descriptor;
+
+  switch (rank) {
+    MEMREF_CASE(double, 0);
+    MEMREF_CASE(double, 1);
+    MEMREF_CASE(double, 2);
+    MEMREF_CASE(double, 3);
+    MEMREF_CASE(double, 4);
+  default:
+    assert(0 && "Unsupported rank to print");
+  }
+}
+
 extern "C" void print_memref_f32(int64_t rank, void *ptr) {
   UnrankedMemRefType<float> descriptor;
   descriptor.rank = rank;
   descriptor.descriptor = ptr;
   _mlir_ciface_print_memref_f32(&descriptor);
+}
+
+extern "C" void print_memref_f64(int64_t rank, void *ptr) {
+  UnrankedMemRefType<double> descriptor;
+  descriptor.rank = rank;
+  descriptor.descriptor = ptr;
+  _mlir_ciface_print_memref_f64(&descriptor);
 }
 
 extern "C" void
@@ -89,13 +112,13 @@ extern "C" void
 _mlir_ciface_print_memref_4d_f32(StridedMemRefType<float, 4> *M) {
   impl::printMemRef(*M);
 }
-
-extern "C" void print_memref_2d_f64(StridedMemRefType<double, 2> *M) {
+extern "C" void
+_mlir_ciface_print_memref_2d_f64(StridedMemRefType<double, 2> *M) {
   impl::printMemRef(*M);
 }
 
 extern "C" void print_flops(double flops) {
-  std::cerr << flops/1.0E9 << " GFLOPS" << std::endl;
+  std::cerr << flops / 1.0E9 << " GFLOPS" << std::endl;
 }
 
 extern "C" double rtclock() {

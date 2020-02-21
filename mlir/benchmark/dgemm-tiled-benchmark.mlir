@@ -18,7 +18,8 @@ func @main() {
     call @matmul_hop(%A, %B, %C) : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2088x2048xf64>) -> ()
   }
   %t_end = call @rtclock() : () -> (f64)
-  call @print_memref_2d_f64(%C): (memref<2088x2048xf64>) -> ()
+  %pC = memref_cast %C : memref<2088x2048xf64> to memref<*xf64>
+  call @print_memref_f64(%pC): (memref<*xf64>) -> ()
 
   %M = dim %C, 0 : memref<2088x2048xf64>
   %N = dim %C, 1 : memref<2088x2048xf64>
@@ -74,4 +75,4 @@ func @matmul_hop(%arg0: memref<2088x2048xf64>, %arg1: memref<2048x2048xf64>, %ar
 
 func @print_flops(f64)
 func @rtclock() -> f64
-func @print_memref_2d_f64(memref<2088x2048xf64>)
+func @print_memref_f64(memref<*xf64>)
