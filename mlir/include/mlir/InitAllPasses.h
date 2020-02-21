@@ -78,6 +78,8 @@ inline void registerAllPasses() {
   createSymbolDCEPass();
   createLocationSnapshotPass({});
 
+  createHigherOrderPolyhedralOptPass();
+
   // GPUtoRODCLPass
   createLowerGpuOpsToROCDLOpsPass();
 
