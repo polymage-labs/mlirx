@@ -2415,10 +2415,9 @@ static void print(OpAsmPrinter &p, AffineGrayBoxOp op) {
   p.printOperands(operands);
   p << ") ";
 
-  SmallVector<Type, 4> resultTypes(op.getOperation()->getResultTypes());
   SmallVector<Type, 4> argTypes(op.getOperandTypes());
   p << " : "
-    << FunctionType::get(argTypes, resultTypes,
+    << FunctionType::get(argTypes, op.getResultTypes(),
                          op.getOperation()->getContext());
 
   p.printRegion(op.region(),
