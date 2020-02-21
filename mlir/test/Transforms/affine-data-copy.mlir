@@ -11,8 +11,6 @@
 #map1 = affine_map<(d0) -> (d0 + 128)>
 
 // Map used to index the buffer while computing.
-// CHECK-DAG: [[BUF_IDX_MAP:map[0-9]+]] = affine_map<(d0, d1, d2, d3) -> (-d0 + d1, -d2 + d3)>
-
 // CHECK-DAG: [[MAP_IDENTITY:map[0-9]+]] = affine_map<(d0) -> (d0)>
 // CHECK-DAG: [[MAP_PLUS_128:map[0-9]+]] = affine_map<(d0) -> (d0 + 128)>
 
@@ -179,3 +177,39 @@ func @min_upper_bound(%A: memref<4096xf32>) -> memref<4096xf32> {
 // CHECK:      }
 // CHECK:      dealloc %0 : memref<100xf32>
 // CHECK:    }
+
+// -----
+
+#lb = affine_map<(d0, d1) -> (d0 * 512, d1 * 6)>
+#ub = affine_map<(d0, d1) -> (d0 * 512 + 512, d1 * 6 + 6)>
+
+// A buffer of size 2048 x 6 should be created here; it should be
+// indexed by jj - 6 * j. This pattern typically appears with
+// multi-level tiling when the tile sizes used don't divide the memref
+// extent.
+
+// CHECK-LABEL: lower_bound_max(%{{.*}}: memref<2048x516xf64>,
+// CHECK-SAME: [[i:arg[0-9]+]]
+// CHECK-SAME: [[j:arg[0-9]+]]
+func @lower_bound_max(%M: memref<2048x516xf64>, %i : index, %j : index) {
+  affine.for %ii = 0 to 2048 {
+    affine.for %jj = max #lb(%i, %j) to min #ub(%i, %j) {
+      affine.load %M[%ii, %jj] : memref<2048x516xf64>
+    }
+  }
+  return
+}
+
+// CHECK: alloc() : memref<2048x6xf64>
+// CHECK: affine.for %[[ii:.*]] = 0 to 2048 {
+// CHECK:   affine.for %[[jj:.*]] = max #map{{.*}}()[%[[i]], %[[j]]] to min #map{{.*}}()[%[[i]], %[[j]]] {
+// CHECK:      affine.load %{{.*}}[%[[ii]], %[[jj]]] : memref<2048x516xf64>
+// CHECK:      affine.store %{{.*}}, %0[%[[ii]], %[[jj]] - symbol(%[[j]]) * 6] : memref<2048x6xf64>
+// CHECK:   }
+// CHECK: }
+// CHECK: affine.for %{{.*}} = 0 to 2048 {
+// CHECK:   affine.for %{{.*}} = max #map{{.*}}()[%{{.*}}, %{{.*}}] to min #map{{.*}}()[%{{.*}}, %{{.*}}] {
+// CHECK:     affine.load %0[%{{.*}}, %{{.*}} - symbol(%{{.*}}) * 6] : memref<2048x6xf64>
+// CHECK:    }
+// CHECK: }
+// CHECK: dealloc %{{.*}} : memref<2048x6xf64>

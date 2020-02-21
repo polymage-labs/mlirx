@@ -1431,14 +1431,25 @@ static void getMultiLevelStrides(const MemRefRegion &region,
 }
 
 /// Generates a point-wise copy from/to `memref' to/from `fastMemRef' and
-/// returns the outermost AffineForOp of the copy loop nest. `memIndicesStart'
-/// holds the lower coordinates of the region in the original memref to copy
-/// in/out. If `copyOut' is true, generates a copy-out; otherwise a copy-in.
+/// returns the outermost AffineForOp of the copy loop nest. `lbMaps` and
+/// `ubMaps` along with `lbOperands` and `ubOperands` hold the lower and upper
+/// bound information for the copy loop nest. `fastBufOffsets` contain the
+/// expressions to be subtracted out from the respective copy loop iterators in
+/// order to index the fast buffer. If `copyOut' is true, generates a copy-out;
+/// otherwise a copy-in. Builder `b` should be set to the point the copy nest is
+/// inserted.
+//
+/// The copy-in nest is generated as follows as an example for a 2-d region:
+/// for x = ...
+///   for y = ...
+///     fast_buf[x - offset_x][y - offset_y] = memref[x][y]
+///
 static AffineForOp
 generatePointWiseCopy(Location loc, Value memref, Value fastMemRef,
                       ArrayRef<AffineMap> lbMaps, ArrayRef<Value> lbOperands,
                       ArrayRef<AffineMap> ubMaps, ArrayRef<Value> ubOperands,
-                      bool isCopyOut, OpBuilder b) {
+                      ArrayRef<AffineExpr> fastBufOffsets, bool isCopyOut,
+                      OpBuilder b) {
   assert(llvm::all_of(lbMaps, [&](AffineMap lbMap) {
     return lbMap.getNumInputs() == lbOperands.size();
   }));
@@ -1451,16 +1462,11 @@ generatePointWiseCopy(Location loc, Value memref, Value fastMemRef,
   assert(lbMaps.size() == rank && "wrong number of lb maps");
   assert(ubMaps.size() == rank && "wrong number of ub maps");
 
-  // The copy-in nest is generated as follows as an example for a 2-d region:
-  // for x = ...
-  //   for y = ...
-  //     fast_buf[x][y] = buf[mem_x + x][mem_y + y]
-
   SmallVector<Value, 4> memIndices;
   SmallVector<AffineExpr, 4> fastBufExprs;
   SmallVector<Value, 4> fastBufMapOperands;
   AffineForOp copyNestRoot;
-  for (unsigned d = 0, e = ubMaps.size(); d < e; ++d) {
+  for (unsigned d = 0; d < rank; ++d) {
     SmallVector<Value, 4> thisUbOperands(ubOperands.begin(), ubOperands.end());
     AffineMap ubMap = ubMaps[d];
     canonicalizeMapAndOperands(&ubMap, &thisUbOperands);
@@ -1477,37 +1483,37 @@ generatePointWiseCopy(Location loc, Value memref, Value fastMemRef,
     b = forOp.getBodyBuilder();
 
     // TODO: get rid of this affine.apply as well.
-    Value lb = (lbMap.getNumResults() == 1 &&
-                lbMap == b.getMultiDimIdentityMap(lbMap.getNumDims()))
-                   ? thisLbOperands[0]
-                   : b.create<AffineApplyOp>(loc, lbMap, thisLbOperands);
+    auto fastBufOffsetMap =
+        AffineMap::get(lbOperands.size(), 0, {fastBufOffsets[d]});
+    auto op = b.create<AffineApplyOp>(loc, fastBufOffsetMap, lbOperands);
 
-    // Construct the subscript for the fast memref being copied.
+    // Construct the subscript for the fast memref being copied into/from.
+    // x - offset_x.
     fastBufExprs.push_back(b.getAffineDimExpr(2 * d + 1) -
                            b.getAffineDimExpr(2 * d));
-    fastBufMapOperands.push_back(lb);
+    fastBufMapOperands.push_back(op);
     fastBufMapOperands.push_back(forOp.getInductionVar());
 
     // Subscript for the slow memref being copied.
     memIndices.push_back(forOp.getInductionVar());
   }
 
-  auto fastBufAccessMap = AffineMap::get(2 * ubMaps.size(), 0, fastBufExprs);
-  fullyComposeAffineMapAndOperands(&fastBufAccessMap, &fastBufMapOperands);
-  fastBufAccessMap = simplifyAffineMap(fastBufAccessMap);
-  canonicalizeMapAndOperands(&fastBufAccessMap, &fastBufMapOperands);
+  auto fastBufMap = AffineMap::get(2 * rank, 0, fastBufExprs);
+  fullyComposeAffineMapAndOperands(&fastBufMap, &fastBufMapOperands);
+  fastBufMap = simplifyAffineMap(fastBufMap);
+  canonicalizeMapAndOperands(&fastBufMap, &fastBufMapOperands);
 
   if (!isCopyOut) {
     // Copy in.
     auto load = b.create<AffineLoadOp>(loc, memref, memIndices);
-    b.create<AffineStoreOp>(loc, load, fastMemRef, fastBufAccessMap,
+    b.create<AffineStoreOp>(loc, load, fastMemRef, fastBufMap,
                             fastBufMapOperands);
     return copyNestRoot;
   }
 
   // Copy out.
-  auto load = b.create<AffineLoadOp>(loc, fastMemRef, fastBufAccessMap,
-                                     fastBufMapOperands);
+  auto load =
+      b.create<AffineLoadOp>(loc, fastMemRef, fastBufMap, fastBufMapOperands);
   b.create<AffineStoreOp>(loc, load, memref, memIndices);
   return copyNestRoot;
 }
@@ -1618,15 +1624,14 @@ static LogicalResult generateCopy(
   // along the corresponding dimension.
 
   // Index start offsets for faster memory buffer relative to the original.
-  SmallVector<AffineExpr, 4> offsets;
-  offsets.reserve(rank);
+  SmallVector<AffineExpr, 4> fastBufOffsets;
+  fastBufOffsets.reserve(rank);
   for (unsigned d = 0; d < rank; d++) {
     assert(lbs[d].size() == cst->getNumCols() - rank && "incorrect bound size");
 
     AffineExpr offset = top.getAffineConstantExpr(0);
-    for (unsigned j = 0, e = cst->getNumCols() - rank - 1; j < e; j++) {
+    for (unsigned j = 0, e = cst->getNumCols() - rank - 1; j < e; j++)
       offset = offset + lbs[d][j] * top.getAffineDimExpr(j);
-    }
     assert(lbDivisors[d] > 0);
     offset =
         (offset + lbs[d][cst->getNumCols() - 1 - rank]).floorDiv(lbDivisors[d]);
@@ -1653,7 +1658,7 @@ static LogicalResult generateCopy(
 
     // Record the offsets since they are needed to remap the memory accesses of
     // the original memref further below.
-    offsets.push_back(offset);
+    fastBufOffsets.push_back(offset);
   }
 
   // The faster memory space buffer.
@@ -1718,10 +1723,11 @@ static LogicalResult generateCopy(
 
   if (!copyOptions.generateDma) {
     // Point-wise copy generation.
-    auto copyNest = generatePointWiseCopy(loc, memref, fastMemRef, lbMaps,
-                                          /*lbOperands=*/regionSymbols, ubMaps,
-                                          /*ubOperands=*/regionSymbols,
-                                          /*isCopyOut=*/region.isWrite(), b);
+    auto copyNest =
+        generatePointWiseCopy(loc, memref, fastMemRef, lbMaps,
+                              /*lbOperands=*/regionSymbols, ubMaps,
+                              /*ubOperands=*/regionSymbols, fastBufOffsets,
+                              /*isCopyOut=*/region.isWrite(), b);
 
     // Record this so that we can skip it from yet another copy.
     copyNests.insert(copyNest);
@@ -1793,7 +1799,7 @@ static LogicalResult generateCopy(
     // which the memref region is parametric); then those corresponding to
     // the memref's original indices follow.
     auto dimExpr = b.getAffineDimExpr(regionSymbols.size() + i);
-    remapExprs.push_back(dimExpr - offsets[i]);
+    remapExprs.push_back(dimExpr - fastBufOffsets[i]);
   }
   auto indexRemap = AffineMap::get(regionSymbols.size() + rank, 0, remapExprs);
 
