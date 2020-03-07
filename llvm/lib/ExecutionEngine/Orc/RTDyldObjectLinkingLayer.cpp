@@ -88,8 +88,7 @@ RTDyldObjectLinkingLayer::~RTDyldObjectLinkingLayer() {
 void RTDyldObjectLinkingLayer::emit(MaterializationResponsibility R,
                                     std::unique_ptr<MemoryBuffer> O) {
   assert(O && "Object must not be null");
-  dbgs() << "Emitting via RTDyldObjectLinkingLayer:\n"
-         << R.getSymbols() << "\n";
+
   // This method launches an asynchronous link step that will fulfill our
   // materialization responsibility. We need to switch R to be heap
   // allocated before that happens so it can live as long as the asynchronous
@@ -117,6 +116,18 @@ void RTDyldObjectLinkingLayer::emit(MaterializationResponsibility R,
   auto InternalSymbols = std::make_shared<std::set<StringRef>>();
   {
     for (auto &Sym : (*Obj)->symbols()) {
+
+      // Skip file symbols.
+      if (auto SymType = Sym.getType()) {
+        if (*SymType == object::SymbolRef::ST_File)
+          continue;
+      } else {
+        ES.reportError(SymType.takeError());
+        R.failMaterialization();
+        return;
+      }
+
+      // Don't include symbols that aren't global.
       if (!(Sym.getFlags() & object::BasicSymbolRef::SF_Global)) {
         if (auto SymName = Sym.getName())
           InternalSymbols->insert(*SymName);

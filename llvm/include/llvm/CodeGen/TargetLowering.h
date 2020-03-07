@@ -1043,7 +1043,9 @@ public:
     case ISD::UMULFIX:
     case ISD::UMULFIXSAT:
     case ISD::SDIVFIX:
+    case ISD::SDIVFIXSAT:
     case ISD::UDIVFIX:
+    case ISD::UDIVFIXSAT:
       Supported = isSupportedFixedPointOperation(Op, VT, Scale);
       break;
     }
@@ -2752,6 +2754,13 @@ public:
   /// The default implementation just freezes the set of reserved registers.
   virtual void finalizeLowering(MachineFunction &MF) const;
 
+  //===----------------------------------------------------------------------===//
+  //  GlobalISel Hooks
+  //===----------------------------------------------------------------------===//
+  /// Check whether or not \p MI needs to be moved close to its uses.
+  virtual bool shouldLocalize(const MachineInstr &MI, const TargetTransformInfo *TTI) const;
+
+
 private:
   const TargetMachine &TM;
 
@@ -4269,7 +4278,7 @@ public:
   /// method accepts integers as its arguments.
   SDValue expandFixedPointMul(SDNode *Node, SelectionDAG &DAG) const;
 
-  /// Method for building the DAG expansion of ISD::[US]DIVFIX. This
+  /// Method for building the DAG expansion of ISD::[US]DIVFIX[SAT]. This
   /// method accepts integers as its arguments.
   /// Note: This method may fail if the division could not be performed
   /// within the type. Clients must retry with a wider type if this happens.

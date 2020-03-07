@@ -62,9 +62,12 @@ public:
   /// provide a valid type for the attribute.
   virtual void printAttributeWithoutType(Attribute attr) = 0;
 
-  /// Print a successor, and use list, of a terminator operation given the
-  /// terminator and the successor index.
-  virtual void printSuccessorAndUseList(Operation *term, unsigned index) = 0;
+  /// Print the given successor.
+  virtual void printSuccessor(Block *successor) = 0;
+
+  /// Print the successor and its operands.
+  virtual void printSuccessorAndUseList(Block *successor,
+                                        ValueRange succOperands) = 0;
 
   /// If the specified operation has attributes, print out an attribute
   /// dictionary with their values.  elidedAttrs allows the client to ignore
@@ -120,8 +123,7 @@ public:
 
   /// Print the complete type of an operation in functional form.
   void printFunctionalType(Operation *op) {
-    printFunctionalType(op->getNonSuccessorOperands().getTypes(),
-                        op->getResultTypes());
+    printFunctionalType(op->getOperandTypes(), op->getResultTypes());
   }
   /// Print the two given type ranges in a functional form.
   template <typename InputRangeT, typename ResultRangeT>
@@ -186,6 +188,11 @@ inline OpAsmPrinter &operator<<(OpAsmPrinter &p, const T &other) {
 
 inline OpAsmPrinter &operator<<(OpAsmPrinter &p, bool value) {
   return p << (value ? StringRef("true") : "false");
+}
+
+inline OpAsmPrinter &operator<<(OpAsmPrinter &p, Block *value) {
+  p.printSuccessor(value);
+  return p;
 }
 
 template <typename ValueRangeT>
@@ -496,6 +503,12 @@ public:
         return failure();
     return success();
   }
+  template <typename Operands>
+  ParseResult resolveOperands(Operands &&operands, Type type, llvm::SMLoc loc,
+                              SmallVectorImpl<Value> &result) {
+    return resolveOperands(std::forward<Operands>(operands),
+                           ArrayRef<Type>(type), loc, result);
+  }
   template <typename Operands, typename Types>
   ParseResult resolveOperands(Operands &&operands, Types &&types,
                               llvm::SMLoc loc, SmallVectorImpl<Value> &result) {
@@ -567,6 +580,12 @@ public:
   //===--------------------------------------------------------------------===//
   // Successor Parsing
   //===--------------------------------------------------------------------===//
+
+  /// Parse a single operation successor.
+  virtual ParseResult parseSuccessor(Block *&dest) = 0;
+
+  /// Parse an optional operation successor.
+  virtual OptionalParseResult parseOptionalSuccessor(Block *&dest) = 0;
 
   /// Parse a single operation successor and its operand list.
   virtual ParseResult

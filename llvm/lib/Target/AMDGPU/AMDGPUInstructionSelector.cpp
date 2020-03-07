@@ -2191,7 +2191,17 @@ bool AMDGPUInstructionSelector::selectG_SHUFFLE_VECTOR(
         .addReg(SrcVec)
         .addImm(16);
     }
-  } else if (isZeroOrUndef(Mask[0]) && Mask[1] == 0) {
+  } else if (Mask[0] == -1 && Mask[1] == 0) {
+    if (IsVALU) {
+      BuildMI(*MBB, MI, DL, TII.get(AMDGPU::V_LSHLREV_B32_e64), DstReg)
+        .addImm(16)
+        .addReg(SrcVec);
+    } else {
+      BuildMI(*MBB, MI, DL, TII.get(AMDGPU::S_LSHL_B32), DstReg)
+        .addReg(SrcVec)
+        .addImm(16);
+    }
+  } else if (Mask[0] == 0 && Mask[1] == 0) {
     if (IsVALU) {
       // Write low half of the register into the high half.
       MachineInstr *MovSDWA =
@@ -2469,7 +2479,10 @@ AMDGPUInstructionSelector::selectVOP3PModsImpl(
   unsigned Mods = 0;
   MachineInstr *MI = MRI.getVRegDef(Src);
 
-  if (MI && MI->getOpcode() == AMDGPU::G_FNEG) {
+  if (MI && MI->getOpcode() == AMDGPU::G_FNEG &&
+      // It's possible to see an f32 fneg here, but unlikely.
+      // TODO: Treat f32 fneg as only high bit.
+      MRI.getType(Src) == LLT::vector(2, 16)) {
     Mods ^= (SISrcMods::NEG | SISrcMods::NEG_HI);
     Src = MI->getOperand(1).getReg();
     MI = MRI.getVRegDef(Src);
@@ -2499,23 +2512,6 @@ AMDGPUInstructionSelector::selectVOP3PMods(MachineOperand &Root) const {
 }
 
 InstructionSelector::ComplexRendererFns
-AMDGPUInstructionSelector::selectVOP3PMods0(MachineOperand &Root) const {
-  MachineRegisterInfo &MRI
-    = Root.getParent()->getParent()->getParent()->getRegInfo();
-
-  Register Src;
-  unsigned Mods;
-  std::tie(Src, Mods) = selectVOP3PModsImpl(Root.getReg(), MRI);
-
-  return {{
-      [=](MachineInstrBuilder &MIB) { MIB.addReg(Src); },
-      [=](MachineInstrBuilder &MIB) { MIB.addImm(Mods); } , // src_mods
-      // FIXME: Handle clamp and op_sel
-      [=](MachineInstrBuilder &MIB) { MIB.addImm(0); }
-  }};
-}
-
-InstructionSelector::ComplexRendererFns
 AMDGPUInstructionSelector::selectVOP3Mods_nnan(MachineOperand &Root) const {
   Register Src;
   unsigned Mods;
@@ -2526,16 +2522,6 @@ AMDGPUInstructionSelector::selectVOP3Mods_nnan(MachineOperand &Root) const {
   return {{
       [=](MachineInstrBuilder &MIB) { MIB.addReg(Src); },
       [=](MachineInstrBuilder &MIB) { MIB.addImm(Mods); }  // src_mods
-  }};
-}
-
-InstructionSelector::ComplexRendererFns
-AMDGPUInstructionSelector::selectVOP3OpSelMods0(MachineOperand &Root) const {
-  // FIXME: Handle clamp and op_sel
-  return {{
-      [=](MachineInstrBuilder &MIB) { MIB.addReg(Root.getReg()); },
-      [=](MachineInstrBuilder &MIB) { MIB.addImm(0); }, // src_mods
-      [=](MachineInstrBuilder &MIB) { MIB.addImm(0); }  // clamp
   }};
 }
 

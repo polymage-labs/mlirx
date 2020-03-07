@@ -4820,17 +4820,6 @@ static llvm::Optional<APInt> FoldValue(unsigned Opcode, const APInt &C1,
   return llvm::None;
 }
 
-SDValue SelectionDAG::FoldConstantArithmetic(unsigned Opcode, const SDLoc &DL,
-                                             EVT VT, const ConstantSDNode *C1,
-                                             const ConstantSDNode *C2) {
-  if (C1->isOpaque() || C2->isOpaque())
-    return SDValue();
-  if (Optional<APInt> Folded =
-          FoldValue(Opcode, C1->getAPIntValue(), C2->getAPIntValue()))
-    return getConstant(Folded.getValue(), DL, VT);
-  return SDValue();
-}
-
 SDValue SelectionDAG::FoldSymbolOffset(unsigned Opcode, EVT VT,
                                        const GlobalAddressSDNode *GA,
                                        const SDNode *N2) {
@@ -4899,7 +4888,15 @@ SDValue SelectionDAG::FoldConstantArithmetic(unsigned Opcode, const SDLoc &DL,
   // Handle the case of two scalars.
   if (auto *C1 = dyn_cast<ConstantSDNode>(N1)) {
     if (auto *C2 = dyn_cast<ConstantSDNode>(N2)) {
-      SDValue Folded = FoldConstantArithmetic(Opcode, DL, VT, C1, C2);
+      if (C1->isOpaque() || C2->isOpaque())
+        return SDValue();
+
+      Optional<APInt> FoldAttempt =
+          FoldValue(Opcode, C1->getAPIntValue(), C2->getAPIntValue());
+      if (!FoldAttempt)
+        return SDValue();
+
+      SDValue Folded = getConstant(FoldAttempt.getValue(), DL, VT);
       assert((!Folded || !VT.isVector()) &&
              "Can't fold vectors ops with scalar operands");
       return Folded;
@@ -5112,8 +5109,13 @@ SDValue SelectionDAG::foldConstantFPMath(unsigned Opcode, const SDLoc &DL,
   }
 
   switch (Opcode) {
-  case ISD::FADD:
   case ISD::FSUB:
+    // -0.0 - undef --> undef (consistent with "fneg undef")
+    if (N1CFP && N1CFP->getValueAPF().isNegZero() && N2.isUndef())
+      return getUNDEF(VT);
+    LLVM_FALLTHROUGH;
+
+  case ISD::FADD:
   case ISD::FMUL:
   case ISD::FDIV:
   case ISD::FREM:
@@ -5227,7 +5229,7 @@ SDValue SelectionDAG::getNode(unsigned Opcode, const SDLoc &DL, EVT VT,
     assert(VT.isFloatingPoint() && "This operator only applies to FP types!");
     assert(N1.getValueType() == N2.getValueType() &&
            N1.getValueType() == VT && "Binary operator types must match!");
-    if (SDValue V = simplifyFPBinop(Opcode, N1, N2))
+    if (SDValue V = simplifyFPBinop(Opcode, N1, N2, Flags))
       return V;
     break;
   case ISD::FCOPYSIGN:   // N1 and result must match.  N1/N2 need not match.
@@ -6696,8 +6698,6 @@ SDValue SelectionDAG::getMemIntrinsicNode(unsigned Opcode, const SDLoc &dl,
   assert((Opcode == ISD::INTRINSIC_VOID ||
           Opcode == ISD::INTRINSIC_W_CHAIN ||
           Opcode == ISD::PREFETCH ||
-          Opcode == ISD::LIFETIME_START ||
-          Opcode == ISD::LIFETIME_END ||
           ((int)Opcode <= std::numeric_limits<int>::max() &&
            (int)Opcode >= ISD::FIRST_TARGET_MEMORY_OPCODE)) &&
          "Opcode is not a memory-accessing opcode!");
@@ -7301,9 +7301,24 @@ SDValue SelectionDAG::simplifyShift(SDValue X, SDValue Y) {
   return SDValue();
 }
 
-// TODO: Use fast-math-flags to enable more simplifications.
-SDValue SelectionDAG::simplifyFPBinop(unsigned Opcode, SDValue X, SDValue Y) {
+SDValue SelectionDAG::simplifyFPBinop(unsigned Opcode, SDValue X, SDValue Y,
+                                      SDNodeFlags Flags) {
+  // If this operation has 'nnan' or 'ninf' and at least 1 disallowed operand
+  // (an undef operand can be chosen to be Nan/Inf), then the result of this
+  // operation is poison. That result can be relaxed to undef.
+  ConstantFPSDNode *XC = isConstOrConstSplatFP(X, /* AllowUndefs */ true);
   ConstantFPSDNode *YC = isConstOrConstSplatFP(Y, /* AllowUndefs */ true);
+  bool HasNan = (XC && XC->getValueAPF().isNaN()) ||
+                (YC && YC->getValueAPF().isNaN());
+  bool HasInf = (XC && XC->getValueAPF().isInfinity()) ||
+                (YC && YC->getValueAPF().isInfinity());
+
+  if (Flags.hasNoNaNs() && (HasNan || X.isUndef() || Y.isUndef()))
+    return getUNDEF(X.getValueType());
+
+  if (Flags.hasNoInfs() && (HasInf || X.isUndef() || Y.isUndef()))
+    return getUNDEF(X.getValueType());
+
   if (!YC)
     return SDValue();
 

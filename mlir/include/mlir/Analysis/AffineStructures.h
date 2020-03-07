@@ -659,13 +659,6 @@ private:
   constexpr static unsigned kExplosionFactor = 32;
 };
 
-/// Simplify an affine expression by flattening and some amount of
-/// simple analysis. This has complexity linear in the number of nodes in
-/// 'expr'. Returns the simplified expression, which is the same as the input
-///  expression if it can't be simplified.
-AffineExpr simplifyAffineExpr(AffineExpr expr, unsigned numDims,
-                              unsigned numSymbols);
-
 /// Flattens 'expr' into 'flattenedExpr', which contains the coefficients of the
 /// dimensions, symbols, and additional variables that represent floor divisions
 /// of dimensions, symbols, and in turn other floor divisions.  Returns failure
@@ -676,7 +669,7 @@ AffineExpr simplifyAffineExpr(AffineExpr expr, unsigned numDims,
 LogicalResult
 getFlattenedAffineExpr(AffineExpr expr, unsigned numDims, unsigned numSymbols,
                        SmallVectorImpl<int64_t> *flattenedExpr,
-                       FlatAffineConstraints *cst);
+                       FlatAffineConstraints *cst = nullptr);
 
 /// Flattens the result expressions of the map to their corresponding flattened
 /// forms and set in 'flattenedExprs'. Returns failure if any expression in the

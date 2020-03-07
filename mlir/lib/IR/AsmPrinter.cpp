@@ -1372,17 +1372,18 @@ void ModulePrinter::printAttribute(Attribute attr,
 
 /// Print the integer element of the given DenseElementsAttr at 'index'.
 static void printDenseIntElement(DenseElementsAttr attr, raw_ostream &os,
-                                 unsigned index) {
+                                 unsigned index, bool isSigned) {
   APInt value = *std::next(attr.int_value_begin(), index);
   if (value.getBitWidth() == 1)
     os << (value.getBoolValue() ? "true" : "false");
   else
-    value.print(os, /*isSigned=*/true);
+    value.print(os, isSigned);
 }
 
 /// Print the float element of the given DenseElementsAttr at 'index'.
 static void printDenseFloatElement(DenseElementsAttr attr, raw_ostream &os,
-                                   unsigned index) {
+                                   unsigned index, bool isSigned) {
+  assert(isSigned && "floating point values are always signed");
   APFloat value = *std::next(attr.float_value_begin(), index);
   printFloatValue(value, os);
 }
@@ -1392,6 +1393,7 @@ void ModulePrinter::printDenseElementsAttr(DenseElementsAttr attr,
   auto type = attr.getType();
   auto shape = type.getShape();
   auto rank = type.getRank();
+  bool isSigned = !type.getElementType().isUnsignedInteger();
 
   // The function used to print elements of this attribute.
   auto printEltFn = type.getElementType().isa<IntegerType>()
@@ -1400,7 +1402,7 @@ void ModulePrinter::printDenseElementsAttr(DenseElementsAttr attr,
 
   // Special case for 0-d and splat tensors.
   if (attr.isSplat()) {
-    printEltFn(attr, os, 0);
+    printEltFn(attr, os, 0, isSigned);
     return;
   }
 
@@ -1452,7 +1454,7 @@ void ModulePrinter::printDenseElementsAttr(DenseElementsAttr attr,
     while (openBrackets++ < rank)
       os << '[';
     openBrackets = rank;
-    printEltFn(attr, os, idx);
+    printEltFn(attr, os, idx, isSigned);
     bumpCounter();
   }
   while (openBrackets-- > 0)
@@ -1962,9 +1964,13 @@ public:
                                          /*withKeyword=*/true);
   }
 
+  /// Print the given successor.
+  void printSuccessor(Block *successor) override;
+
   /// Print an operation successor with the operands used for the block
   /// arguments.
-  void printSuccessorAndUseList(Operation *term, unsigned index) override;
+  void printSuccessorAndUseList(Block *successor,
+                                ValueRange succOperands) override;
 
   /// Print the given region.
   void printRegion(Region &region, bool printEntryBlockArgs,
@@ -2060,23 +2066,14 @@ void OperationPrinter::printGenericOp(Operation *op) {
   os << '"';
   printEscapedString(op->getName().getStringRef(), os);
   os << "\"(";
-
-  // Get the list of operands that are not successor operands.
-  unsigned totalNumSuccessorOperands = 0;
-  unsigned numSuccessors = op->getNumSuccessors();
-  for (unsigned i = 0; i < numSuccessors; ++i)
-    totalNumSuccessorOperands += op->getNumSuccessorOperands(i);
-  unsigned numProperOperands = op->getNumOperands() - totalNumSuccessorOperands;
-  interleaveComma(op->getOperands().take_front(numProperOperands),
-                  [&](Value value) { printValueID(value); });
-
+  interleaveComma(op->getOperands(), [&](Value value) { printValueID(value); });
   os << ')';
 
   // For terminators, print the list of successors and their operands.
-  if (numSuccessors != 0) {
+  if (op->getNumSuccessors() != 0) {
     os << '[';
-    interleaveComma(llvm::seq<unsigned>(0, numSuccessors),
-                    [&](unsigned i) { printSuccessorAndUseList(op, i); });
+    interleaveComma(op->getSuccessors(),
+                    [&](Block *successor) { printBlockName(successor); });
     os << ']';
   }
 
@@ -2165,12 +2162,14 @@ void OperationPrinter::printValueID(Value value, bool printResultNo) const {
   state->getSSANameState().printValueID(value, printResultNo, os);
 }
 
-void OperationPrinter::printSuccessorAndUseList(Operation *term,
-                                                unsigned index) {
-  printBlockName(term->getSuccessor(index));
+void OperationPrinter::printSuccessor(Block *successor) {
+  printBlockName(successor);
+}
 
-  auto succOperands = term->getSuccessorOperands(index);
-  if (succOperands.begin() == succOperands.end())
+void OperationPrinter::printSuccessorAndUseList(Block *successor,
+                                                ValueRange succOperands) {
+  printBlockName(successor);
+  if (succOperands.empty())
     return;
 
   os << '(';

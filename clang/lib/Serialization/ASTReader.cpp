@@ -3224,8 +3224,7 @@ ASTReader::ReadASTBlock(ModuleFile &F, unsigned ClientLoadCapabilities) {
     case MODULAR_CODEGEN_DECLS:
       // FIXME: Skip reading this record if our ASTConsumer doesn't care about
       // them (ie: if we're not codegenerating this module).
-      if (F.Kind == MK_MainFile ||
-          getContext().getLangOpts().BuildingPCHWithObjectFile)
+      if (F.Kind == MK_MainFile)
         for (unsigned I = 0, N = Record.size(); I != N; ++I)
           EagerlyDeserializedDecls.push_back(getGlobalDeclID(F, Record[I]));
       break;
@@ -11658,7 +11657,7 @@ OMPClause *OMPClauseReader::readClause() {
     C = new (Context) OMPWriteClause();
     break;
   case OMPC_update:
-    C = new (Context) OMPUpdateClause();
+    C = OMPUpdateClause::CreateEmpty(Context, Record.readInt());
     break;
   case OMPC_capture:
     C = new (Context) OMPCaptureClause();
@@ -11737,6 +11736,9 @@ OMPClause *OMPClauseReader::readClause() {
     break;
   case OMPC_flush:
     C = OMPFlushClause::CreateEmpty(Context, Record.readInt());
+    break;
+  case OMPC_depobj:
+    C = OMPDepobjClause::CreateEmpty(Context);
     break;
   case OMPC_depend: {
     unsigned NumVars = Record.readInt();
@@ -11824,6 +11826,9 @@ OMPClause *OMPClauseReader::readClause() {
     break;
   case OMPC_order:
     C = new (Context) OMPOrderClause();
+    break;
+  case OMPC_destroy:
+    C = new (Context) OMPDestroyClause();
     break;
   }
   assert(C && "Unknown OMPClause type");
@@ -11933,7 +11938,13 @@ void OMPClauseReader::VisitOMPReadClause(OMPReadClause *) {}
 
 void OMPClauseReader::VisitOMPWriteClause(OMPWriteClause *) {}
 
-void OMPClauseReader::VisitOMPUpdateClause(OMPUpdateClause *) {}
+void OMPClauseReader::VisitOMPUpdateClause(OMPUpdateClause *C) {
+  if (C->isExtended()) {
+    C->setLParenLoc(Record.readSourceLocation());
+    C->setArgumentLoc(Record.readSourceLocation());
+    C->setDependencyKind(Record.readEnum<OpenMPDependClauseKind>());
+  }
+}
 
 void OMPClauseReader::VisitOMPCaptureClause(OMPCaptureClause *) {}
 
@@ -11952,6 +11963,8 @@ void OMPClauseReader::VisitOMPThreadsClause(OMPThreadsClause *) {}
 void OMPClauseReader::VisitOMPSIMDClause(OMPSIMDClause *) {}
 
 void OMPClauseReader::VisitOMPNogroupClause(OMPNogroupClause *) {}
+
+void OMPClauseReader::VisitOMPDestroyClause(OMPDestroyClause *) {}
 
 void OMPClauseReader::VisitOMPUnifiedAddressClause(OMPUnifiedAddressClause *) {}
 
@@ -12248,6 +12261,11 @@ void OMPClauseReader::VisitOMPFlushClause(OMPFlushClause *C) {
   for (unsigned i = 0; i != NumVars; ++i)
     Vars.push_back(Record.readSubExpr());
   C->setVarRefs(Vars);
+}
+
+void OMPClauseReader::VisitOMPDepobjClause(OMPDepobjClause *C) {
+  C->setDepobj(Record.readSubExpr());
+  C->setLParenLoc(Record.readSourceLocation());
 }
 
 void OMPClauseReader::VisitOMPDependClause(OMPDependClause *C) {

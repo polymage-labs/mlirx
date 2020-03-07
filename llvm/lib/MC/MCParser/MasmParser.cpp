@@ -182,7 +182,7 @@ private:
   bool IsDarwin = false;
 
   /// Are we parsing ms-style inline assembly?
-  bool ParsingInlineAsm = false;
+  bool ParsingMSInlineAsm = false;
 
   /// Did we already inform the user about inconsistent MD5 usage?
   bool ReportedInconsistentMD5 = false;
@@ -237,13 +237,13 @@ public:
 
   const AsmToken &Lex() override;
 
-  void setParsingInlineAsm(bool V) override {
-    ParsingInlineAsm = V;
+  void setParsingMSInlineAsm(bool V) override {
+    ParsingMSInlineAsm = V;
     // When parsing MS inline asm, we must lex 0b1101 and 0ABCH as binary and
     // hex integer literals.
     Lexer.setLexMasmIntegers(V);
   }
-  bool isParsingInlineAsm() override { return ParsingInlineAsm; }
+  bool isParsingMSInlineAsm() override { return ParsingMSInlineAsm; }
 
   bool parseMSInlineAsm(void *AsmLoc, std::string &AsmString,
                         unsigned &NumOutputs, unsigned &NumInputs,
@@ -482,12 +482,25 @@ private:
   /// Codeview def_range types parsed by this class.
   StringMap<CVDefRangeType> CVDefRangeTypeMap;
 
+  bool parseInitValue(unsigned Size);
+
   // ".ascii", ".asciz", ".string"
   bool parseDirectiveAscii(StringRef IDVal, bool ZeroTerminated);
-  bool parseDirectiveValue(StringRef IDVal,
-                           unsigned Size);       // "byte", "word", ...
-  bool parseDirectiveRealValue(StringRef IDVal,
-                               const fltSemantics &);  // "real4", ...
+
+  // "byte", "word", ...
+  bool parseScalarInstList(unsigned Size,
+                           SmallVectorImpl<const MCExpr *> &Values);
+  bool parseDirectiveValue(StringRef IDVal, unsigned Size);
+  bool parseDirectiveNamedValue(StringRef IDVal, unsigned Size, StringRef Name,
+                                SMLoc NameLoc);
+
+  // "real4", "real8"
+  bool parseDirectiveRealValue(StringRef IDVal, const fltSemantics &Semantics);
+  bool parseRealInstList(const fltSemantics &Semantics,
+                         SmallVectorImpl<APInt> &Values);
+  bool parseDirectiveNamedRealValue(StringRef IDVal,
+                                    const fltSemantics &Semantics,
+                                    StringRef Name, SMLoc NameLoc);
 
   // "=", "equ", "textequ"
   bool parseDirectiveEquate(StringRef IDVal, StringRef Name,
@@ -909,7 +922,7 @@ bool MasmParser::Run(bool NoInitialTextSection, bool NoFinalize) {
 }
 
 bool MasmParser::checkForValidSection() {
-  if (!ParsingInlineAsm && !getStreamer().getCurrentSectionOnly()) {
+  if (!ParsingMSInlineAsm && !getStreamer().getCurrentSectionOnly()) {
     Out.InitSections(false);
     return Error(getTok().getLoc(),
                  "expected section directive before assembly directive");
@@ -1593,7 +1606,7 @@ bool MasmParser::parseStatement(ParseStatementInfo &Info,
     // implicitly marked as external.
     MCSymbol *Sym;
     if (LocalLabelVal == -1) {
-      if (ParsingInlineAsm && SI) {
+      if (ParsingMSInlineAsm && SI) {
         StringRef RewrittenLabel =
             SI->LookupInlineAsmLabel(IDVal, getSourceManager(), IDLoc, true);
         assert(!RewrittenLabel.empty() &&
@@ -1624,7 +1637,7 @@ bool MasmParser::parseStatement(ParseStatementInfo &Info,
     getTargetParser().doBeforeLabelEmit(Sym);
 
     // Emit the label.
-    if (!getTargetParser().isParsingInlineAsm())
+    if (!getTargetParser().isParsingMSInlineAsm())
       Out.emitLabel(Sym, IDLoc);
 
     // If we are generating dwarf for assembly source files then gather the
@@ -1903,18 +1916,45 @@ bool MasmParser::parseStatement(ParseStatementInfo &Info,
   case DK_TEXTEQU:
     Lex();
     return parseDirectiveEquate(nextVal, IDVal, DirKind);
+  case DK_BYTE:
+  case DK_DB:
+    Lex();
+    return parseDirectiveNamedValue(nextVal, 1, IDVal, IDLoc);
+  case DK_WORD:
+  case DK_DW:
+    Lex();
+    return parseDirectiveNamedValue(nextVal, 2, IDVal, IDLoc);
+  case DK_DWORD:
+  case DK_DD:
+    Lex();
+    return parseDirectiveNamedValue(nextVal, 4, IDVal, IDLoc);
+  case DK_FWORD:
+    Lex();
+    return parseDirectiveNamedValue(nextVal, 6, IDVal, IDLoc);
+  case DK_QWORD:
+  case DK_DQ:
+    Lex();
+    return parseDirectiveNamedValue(nextVal, 8, IDVal, IDLoc);
+  case DK_REAL4:
+    Lex();
+    return parseDirectiveNamedRealValue(nextVal, APFloat::IEEEsingle(), IDVal,
+                                        IDLoc);
+  case DK_REAL8:
+    Lex();
+    return parseDirectiveNamedRealValue(nextVal, APFloat::IEEEdouble(), IDVal,
+                                        IDLoc);
   }
 
   // __asm _emit or __asm __emit
-  if (ParsingInlineAsm && (IDVal == "_emit" || IDVal == "__emit" ||
-                           IDVal == "_EMIT" || IDVal == "__EMIT"))
+  if (ParsingMSInlineAsm && (IDVal == "_emit" || IDVal == "__emit" ||
+                             IDVal == "_EMIT" || IDVal == "__EMIT"))
     return parseDirectiveMSEmit(IDLoc, Info, IDVal.size());
 
   // __asm align
-  if (ParsingInlineAsm && (IDVal == "align" || IDVal == "ALIGN"))
+  if (ParsingMSInlineAsm && (IDVal == "align" || IDVal == "ALIGN"))
     return parseDirectiveMSAlign(IDLoc, Info);
 
-  if (ParsingInlineAsm && (IDVal == "even" || IDVal == "EVEN"))
+  if (ParsingMSInlineAsm && (IDVal == "even" || IDVal == "EVEN"))
     Info.AsmRewrites->emplace_back(AOK_EVEN, IDLoc, 4);
   if (checkForValidSection())
     return true;
@@ -1981,7 +2021,7 @@ bool MasmParser::parseStatement(ParseStatementInfo &Info,
     uint64_t ErrorInfo;
     if (getTargetParser().MatchAndEmitInstruction(
             IDLoc, Info.Opcode, Info.ParsedOperands, Out, ErrorInfo,
-            getTargetParser().isParsingInlineAsm()))
+            getTargetParser().isParsingMSInlineAsm()))
       return true;
   }
   return false;
@@ -2739,29 +2779,99 @@ bool MasmParser::parseDirectiveAscii(StringRef IDVal, bool ZeroTerminated) {
   return false;
 }
 
+bool MasmParser::parseScalarInstList(unsigned Size,
+                                     SmallVectorImpl<const MCExpr *> &Values) {
+  do {
+    if (getTok().is(AsmToken::String)) {
+      StringRef Value = getTok().getStringContents();
+      if (Size == 1) {
+        // Treat each character as an initializer.
+        for (const char CharVal : Value)
+          Values.push_back(MCConstantExpr::create(CharVal, getContext()));
+      } else {
+        // Treat the string as an initial value in big-endian representation.
+        if (Value.size() > Size)
+          return Error(getTok().getLoc(), "out of range literal value");
+
+        uint64_t IntValue = 0;
+        for (const unsigned char CharVal : Value.bytes())
+          IntValue = (IntValue << 8) | CharVal;
+        Values.push_back(MCConstantExpr::create(IntValue, getContext()));
+      }
+      Lex();
+    } else {
+      const MCExpr *Value;
+      if (checkForValidSection() || parseExpression(Value))
+        return true;
+      if (getTok().is(AsmToken::Identifier) &&
+          getTok().getString().equals_lower("dup")) {
+        Lex();  // eat 'dup'
+        const MCConstantExpr *MCE = dyn_cast<MCConstantExpr>(Value);
+        if (!MCE)
+          return Error(Value->getLoc(),
+                       "cannot repeat value a non-constant number of times");
+        const int64_t Repetitions = MCE->getValue();
+        if (Repetitions < 0)
+          return Error(Value->getLoc(),
+                       "cannot repeat value a negative number of times");
+
+        SmallVector<const MCExpr *, 1> DuplicatedValues;
+        if (parseToken(AsmToken::LParen,
+                       "parentheses required for 'dup' contents") ||
+            parseScalarInstList(Size, DuplicatedValues) ||
+            parseToken(AsmToken::RParen, "unmatched parentheses"))
+          return true;
+
+        for (int i = 0; i < Repetitions; ++i)
+          Values.append(DuplicatedValues.begin(), DuplicatedValues.end());
+      } else {
+        Values.push_back(Value);
+      }
+    }
+
+    // Continue if we see a comma. (Also, allow line continuation.)
+  } while (parseOptionalToken(AsmToken::Comma) &&
+           (getTok().isNot(AsmToken::EndOfStatement) ||
+            !parseToken(AsmToken::EndOfStatement)));
+
+  return false;
+}
+
 /// parseDirectiveValue
 ///  ::= (byte | word | ... ) [ expression (, expression)* ]
 bool MasmParser::parseDirectiveValue(StringRef IDVal, unsigned Size) {
-  auto parseOp = [&]() -> bool {
-    const MCExpr *Value;
-    SMLoc ExprLoc = getLexer().getLoc();
-    if (checkForValidSection() || parseExpression(Value))
-      return true;
+  SmallVector<const MCExpr *, 1> Values;
+  if (parseScalarInstList(Size, Values))
+    return addErrorSuffix(" in '" + Twine(IDVal) + "' directive");
+
+  for (const MCExpr *Value : Values) {
     // Special case constant expressions to match code generator.
     if (const MCConstantExpr *MCE = dyn_cast<MCConstantExpr>(Value)) {
       assert(Size <= 8 && "Invalid size");
       int64_t IntValue = MCE->getValue();
       if (!isUIntN(8 * Size, IntValue) && !isIntN(8 * Size, IntValue))
-        return Error(ExprLoc, "out of range literal value");
+        return Error(MCE->getLoc(), "out of range literal value");
       getStreamer().emitIntValue(IntValue, Size);
-    } else
-      getStreamer().emitValue(Value, Size, ExprLoc);
-    return false;
-  };
-
-  if (parseMany(parseOp))
-    return addErrorSuffix(" in '" + Twine(IDVal) + "' directive");
+    } else {
+      const MCSymbolRefExpr *MSE = dyn_cast<MCSymbolRefExpr>(Value);
+      if (MSE && MSE->getSymbol().getName() == "?") {
+        // ? initializer; treat as 0.
+        getStreamer().emitIntValue(0, Size);
+      } else {
+        getStreamer().emitValue(Value, Size, Value->getLoc());
+      }
+    }
+  }
   return false;
+}
+
+/// parseDirectiveNamedValue
+///  ::= name (byte | word | ... ) [ expression (, expression)* ]
+bool MasmParser::parseDirectiveNamedValue(StringRef IDVal, unsigned Size,
+                                          StringRef Name, SMLoc NameLoc) {
+  MCSymbol *Sym = getContext().getOrCreateSymbol(Name);
+  getStreamer().emitLabel(Sym);
+  return parseDirectiveValue(IDVal, Size);
 }
 
 static bool parseHexOcta(MasmParser &Asm, uint64_t &hi, uint64_t &lo) {
@@ -2824,22 +2934,73 @@ bool MasmParser::parseRealValue(const fltSemantics &Semantics, APInt &Res) {
   return false;
 }
 
+bool MasmParser::parseRealInstList(const fltSemantics &Semantics,
+                                   SmallVectorImpl<APInt> &ValuesAsInt) {
+  do {
+    const AsmToken NextTok = Lexer.peekTok();
+    if (NextTok.is(AsmToken::Identifier) &&
+        NextTok.getString().equals_lower("dup")) {
+      const MCExpr *Value;
+      if (parseExpression(Value) || parseToken(AsmToken::Identifier))
+        return true;
+      const MCConstantExpr *MCE = dyn_cast<MCConstantExpr>(Value);
+      if (!MCE)
+        return Error(Value->getLoc(),
+                     "cannot repeat value a non-constant number of times");
+      const int64_t Repetitions = MCE->getValue();
+      if (Repetitions < 0)
+        return Error(Value->getLoc(),
+                     "cannot repeat value a negative number of times");
+
+      SmallVector<APInt, 1> DuplicatedValues;
+      if (parseToken(AsmToken::LParen,
+                     "parentheses required for 'dup' contents") ||
+          parseRealInstList(Semantics, DuplicatedValues) ||
+          parseToken(AsmToken::RParen, "unmatched parentheses"))
+        return true;
+
+      for (int i = 0; i < Repetitions; ++i)
+        ValuesAsInt.append(DuplicatedValues.begin(), DuplicatedValues.end());
+    } else {
+      APInt AsInt;
+      if (parseRealValue(Semantics, AsInt))
+        return true;
+      ValuesAsInt.push_back(AsInt);
+    }
+    // Continue if we see a comma. (Also, allow line continuation.)
+  } while (parseOptionalToken(AsmToken::Comma) &&
+           (getTok().isNot(AsmToken::EndOfStatement) ||
+            !parseToken(AsmToken::EndOfStatement)));
+
+  return false;
+}
+
 /// parseDirectiveRealValue
 ///  ::= (real4 | real8) [ expression (, expression)* ]
 bool MasmParser::parseDirectiveRealValue(StringRef IDVal,
                                          const fltSemantics &Semantics) {
-  auto parseOp = [&]() -> bool {
-    APInt AsInt;
-    if (checkForValidSection() || parseRealValue(Semantics, AsInt))
-      return true;
+  if (checkForValidSection())
+    return true;
+
+  SmallVector<APInt, 1> ValuesAsInt;
+  if (parseRealInstList(Semantics, ValuesAsInt))
+    return addErrorSuffix(" in '" + Twine(IDVal) + "' directive");
+
+  for (const APInt &AsInt : ValuesAsInt) {
     getStreamer().emitIntValue(AsInt.getLimitedValue(),
                                AsInt.getBitWidth() / 8);
-    return false;
-  };
-
-  if (parseMany(parseOp))
-    return addErrorSuffix(" in '" + Twine(IDVal) + "' directive");
+  }
   return false;
+}
+
+/// parseDirectiveNamedRealValue
+///  ::= name (real4 | real8) [ expression (, expression)* ]
+bool MasmParser::parseDirectiveNamedRealValue(StringRef IDVal,
+                                              const fltSemantics &Semantics,
+                                              StringRef Name, SMLoc NameLoc) {
+  MCSymbol *Sym = getContext().getOrCreateSymbol(Name);
+  getStreamer().emitLabel(Sym);
+  return parseDirectiveRealValue(IDVal, Semantics);
 }
 
 /// parseDirectiveOrg

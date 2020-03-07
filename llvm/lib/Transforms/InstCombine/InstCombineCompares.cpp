@@ -3451,7 +3451,8 @@ foldShiftIntoShiftInAnotherHandOfAndInICmp(ICmpInst &I, const SimplifyQuery SQ,
   Instruction *NarrowestShift = XShift;
 
   Type *WidestTy = WidestShift->getType();
-  assert(NarrowestShift->getType() == I.getOperand(0)->getType() &&
+  Type *NarrowestTy = NarrowestShift->getType();
+  assert(NarrowestTy == I.getOperand(0)->getType() &&
          "We did not look past any shifts while matching XShift though.");
   bool HadTrunc = WidestTy != I.getOperand(0)->getType();
 
@@ -3488,6 +3489,23 @@ foldShiftIntoShiftInAnotherHandOfAndInICmp(ICmpInst &I, const SimplifyQuery SQ,
   // We have two shift amounts from two different shifts. The types of those
   // shift amounts may not match. If that's the case let's bailout now.
   if (XShAmt->getType() != YShAmt->getType())
+    return nullptr;
+
+  // As input, we have the following pattern:
+  //   icmp eq/ne (and ((x shift Q), (y oppositeshift K))), 0
+  // We want to rewrite that as:
+  //   icmp eq/ne (and (x shift (Q+K)), y), 0  iff (Q+K) u< bitwidth(x)
+  // While we know that originally (Q+K) would not overflow
+  // (because  2 * (N-1) u<= iN -1), we have looked past extensions of
+  // shift amounts. so it may now overflow in smaller bitwidth.
+  // To ensure that does not happen, we need to ensure that the total maximal
+  // shift amount is still representable in that smaller bit width.
+  unsigned MaximalPossibleTotalShiftAmount =
+      (WidestTy->getScalarSizeInBits() - 1) +
+      (NarrowestTy->getScalarSizeInBits() - 1);
+  APInt MaximalRepresentableShiftAmount =
+      APInt::getAllOnesValue(XShAmt->getType()->getScalarSizeInBits());
+  if (MaximalRepresentableShiftAmount.ult(MaximalPossibleTotalShiftAmount))
     return nullptr;
 
   // Can we fold (XShAmt+YShAmt) ?
@@ -5568,8 +5586,11 @@ Instruction *InstCombiner::visitICmpInst(ICmpInst &I) {
         isa<IntegerType>(A->getType())) {
       Value *Result;
       Constant *Overflow;
-      if (OptimizeOverflowCheck(Instruction::Add, /*Signed*/false, A, B,
-                                *AddI, Result, Overflow)) {
+      // m_UAddWithOverflow can match patterns that do not include  an explicit
+      // "add" instruction, so check the opcode of the matched op.
+      if (AddI->getOpcode() == Instruction::Add &&
+          OptimizeOverflowCheck(Instruction::Add, /*Signed*/ false, A, B, *AddI,
+                                Result, Overflow)) {
         replaceInstUsesWith(*AddI, Result);
         return replaceInstUsesWith(I, Overflow);
       }
@@ -5657,7 +5678,7 @@ Instruction *InstCombiner::foldFCmpIntToFPConst(FCmpInst &I, Instruction *LHSI,
       // TODO: Can never be -0.0 and other non-representable values
       APFloat RHSRoundInt(RHS);
       RHSRoundInt.roundToIntegral(APFloat::rmNearestTiesToEven);
-      if (RHS.compare(RHSRoundInt) != APFloat::cmpEqual) {
+      if (RHS != RHSRoundInt) {
         if (P == FCmpInst::FCMP_OEQ || P == FCmpInst::FCMP_UEQ)
           return replaceInstUsesWith(I, Builder.getFalse());
 
@@ -5745,7 +5766,7 @@ Instruction *InstCombiner::foldFCmpIntToFPConst(FCmpInst &I, Instruction *LHSI,
     APFloat SMax(RHS.getSemantics());
     SMax.convertFromAPInt(APInt::getSignedMaxValue(IntWidth), true,
                           APFloat::rmNearestTiesToEven);
-    if (SMax.compare(RHS) == APFloat::cmpLessThan) {  // smax < 13123.0
+    if (SMax < RHS) { // smax < 13123.0
       if (Pred == ICmpInst::ICMP_NE  || Pred == ICmpInst::ICMP_SLT ||
           Pred == ICmpInst::ICMP_SLE)
         return replaceInstUsesWith(I, Builder.getTrue());
@@ -5757,7 +5778,7 @@ Instruction *InstCombiner::foldFCmpIntToFPConst(FCmpInst &I, Instruction *LHSI,
     APFloat UMax(RHS.getSemantics());
     UMax.convertFromAPInt(APInt::getMaxValue(IntWidth), false,
                           APFloat::rmNearestTiesToEven);
-    if (UMax.compare(RHS) == APFloat::cmpLessThan) {  // umax < 13123.0
+    if (UMax < RHS) { // umax < 13123.0
       if (Pred == ICmpInst::ICMP_NE  || Pred == ICmpInst::ICMP_ULT ||
           Pred == ICmpInst::ICMP_ULE)
         return replaceInstUsesWith(I, Builder.getTrue());
@@ -5770,7 +5791,7 @@ Instruction *InstCombiner::foldFCmpIntToFPConst(FCmpInst &I, Instruction *LHSI,
     APFloat SMin(RHS.getSemantics());
     SMin.convertFromAPInt(APInt::getSignedMinValue(IntWidth), true,
                           APFloat::rmNearestTiesToEven);
-    if (SMin.compare(RHS) == APFloat::cmpGreaterThan) { // smin > 12312.0
+    if (SMin > RHS) { // smin > 12312.0
       if (Pred == ICmpInst::ICMP_NE || Pred == ICmpInst::ICMP_SGT ||
           Pred == ICmpInst::ICMP_SGE)
         return replaceInstUsesWith(I, Builder.getTrue());
@@ -5778,10 +5799,10 @@ Instruction *InstCombiner::foldFCmpIntToFPConst(FCmpInst &I, Instruction *LHSI,
     }
   } else {
     // See if the RHS value is < UnsignedMin.
-    APFloat SMin(RHS.getSemantics());
-    SMin.convertFromAPInt(APInt::getMinValue(IntWidth), true,
+    APFloat UMin(RHS.getSemantics());
+    UMin.convertFromAPInt(APInt::getMinValue(IntWidth), false,
                           APFloat::rmNearestTiesToEven);
-    if (SMin.compare(RHS) == APFloat::cmpGreaterThan) { // umin > 12312.0
+    if (UMin > RHS) { // umin > 12312.0
       if (Pred == ICmpInst::ICMP_NE || Pred == ICmpInst::ICMP_UGT ||
           Pred == ICmpInst::ICMP_UGE)
         return replaceInstUsesWith(I, Builder.getTrue());
@@ -6122,8 +6143,7 @@ Instruction *InstCombiner::visitFCmpInst(FCmpInst &I) {
       APFloat Fabs = TruncC;
       Fabs.clearSign();
       if (!Lossy &&
-          ((Fabs.compare(APFloat::getSmallestNormalized(FPSem)) !=
-            APFloat::cmpLessThan) || Fabs.isZero())) {
+          (!(Fabs < APFloat::getSmallestNormalized(FPSem)) || Fabs.isZero())) {
         Constant *NewC = ConstantFP::get(X->getType(), TruncC);
         return new FCmpInst(Pred, X, NewC, "", &I);
       }

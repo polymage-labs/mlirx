@@ -218,6 +218,8 @@ enum NodeType : unsigned {
   DUP_PRED,
   INDEX_VECTOR,
 
+  REINTERPRET_CAST,
+
   LDNF1,
   LDNF1S,
   LDFF1,
@@ -240,6 +242,29 @@ enum NodeType : unsigned {
   GLD1S_UXTW_SCALED,
   GLD1S_SXTW_SCALED,
   GLD1S_IMM,
+
+  // Unsigned gather loads.
+  GLDFF1,
+  GLDFF1_SCALED,
+  GLDFF1_UXTW,
+  GLDFF1_SXTW,
+  GLDFF1_UXTW_SCALED,
+  GLDFF1_SXTW_SCALED,
+  GLDFF1_IMM,
+
+  // Signed gather loads.
+  GLDFF1S,
+  GLDFF1S_SCALED,
+  GLDFF1S_UXTW,
+  GLDFF1S_SXTW,
+  GLDFF1S_UXTW_SCALED,
+  GLDFF1S_SXTW_SCALED,
+  GLDFF1S_IMM,
+
+  // Non-temporal gather loads
+  GLDNT1,
+  GLDNT1S,
+
   // Scatter store
   SST1,
   SST1_SCALED,
@@ -248,6 +273,9 @@ enum NodeType : unsigned {
   SST1_UXTW_SCALED,
   SST1_SXTW_SCALED,
   SST1_IMM,
+
+  // Non-temporal scatter store
+  SSTNT1,
 
   // Strict (exception-raising) floating point comparison
   STRICT_FCMP = ISD::FIRST_TARGET_STRICTFP_OPCODE,
@@ -745,6 +773,7 @@ private:
   SDValue LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerVECTOR_SHUFFLE(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerSPLAT_VECTOR(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerDUPQLane(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerEXTRACT_SUBVECTOR(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerVectorSRA_SRL_SHL(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerShiftLeftParts(SDValue Op, SelectionDAG &DAG) const;

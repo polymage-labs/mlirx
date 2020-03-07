@@ -1077,7 +1077,8 @@ public:
 
   /// Try to simplify a floating-point binary operation into 1 of its operands
   /// or a constant.
-  SDValue simplifyFPBinop(unsigned Opcode, SDValue X, SDValue Y);
+  SDValue simplifyFPBinop(unsigned Opcode, SDValue X, SDValue Y,
+                          SDNodeFlags Flags);
 
   /// VAArg produces a result and token chain, and takes a pointer
   /// and a source value as input.
@@ -1208,13 +1209,6 @@ public:
   SDValue getMaskedScatter(SDVTList VTs, EVT VT, const SDLoc &dl,
                            ArrayRef<SDValue> Ops, MachineMemOperand *MMO,
                            ISD::MemIndexType IndexType);
-
-  /// Return (create a new or find existing) a target-specific node.
-  /// TargetMemSDNode should be derived class from MemSDNode.
-  template <class TargetMemSDNode>
-  SDValue getTargetMemSDNode(SDVTList VTs, ArrayRef<SDValue> Ops,
-                             const SDLoc &dl, EVT MemVT,
-                             MachineMemOperand *MMO);
 
   /// Construct a node to track a Value* through the backend.
   SDValue getSrcValue(const Value *v);
@@ -1509,10 +1503,6 @@ public:
 
   SDValue FoldConstantArithmetic(unsigned Opcode, const SDLoc &DL, EVT VT,
                                  ArrayRef<SDValue> Ops);
-
-  SDValue FoldConstantArithmetic(unsigned Opcode, const SDLoc &DL, EVT VT,
-                                 const ConstantSDNode *C1,
-                                 const ConstantSDNode *C2);
 
   SDValue FoldConstantVectorArithmetic(unsigned Opcode, const SDLoc &DL, EVT VT,
                                        ArrayRef<SDValue> Ops,
@@ -1855,41 +1845,6 @@ template <> struct GraphTraits<SelectionDAG*> : public GraphTraits<SDNode*> {
     return nodes_iterator(G->allnodes_end());
   }
 };
-
-template <class TargetMemSDNode>
-SDValue SelectionDAG::getTargetMemSDNode(SDVTList VTs,
-                                         ArrayRef<SDValue> Ops,
-                                         const SDLoc &dl, EVT MemVT,
-                                         MachineMemOperand *MMO) {
-  /// Compose node ID and try to find an existing node.
-  FoldingSetNodeID ID;
-  unsigned Opcode =
-    TargetMemSDNode(dl.getIROrder(), DebugLoc(), VTs, MemVT, MMO).getOpcode();
-  ID.AddInteger(Opcode);
-  ID.AddPointer(VTs.VTs);
-  for (auto& Op : Ops) {
-    ID.AddPointer(Op.getNode());
-    ID.AddInteger(Op.getResNo());
-  }
-  ID.AddInteger(MemVT.getRawBits());
-  ID.AddInteger(MMO->getPointerInfo().getAddrSpace());
-  ID.AddInteger(getSyntheticNodeSubclassData<TargetMemSDNode>(
-    dl.getIROrder(), VTs, MemVT, MMO));
-
-  void *IP = nullptr;
-  if (SDNode *E = FindNodeOrInsertPos(ID, dl, IP)) {
-    cast<TargetMemSDNode>(E)->refineAlignment(MMO);
-    return SDValue(E, 0);
-  }
-
-  /// Existing node was not found. Create a new one.
-  auto *N = newSDNode<TargetMemSDNode>(dl.getIROrder(), dl.getDebugLoc(), VTs,
-                                       MemVT, MMO);
-  createOperands(N, Ops);
-  CSEMap.InsertNode(N, IP);
-  InsertNode(N);
-  return SDValue(N, 0);
-}
 
 } // end namespace llvm
 

@@ -2032,15 +2032,18 @@ struct AANonNullFloating
     const DataLayout &DL = A.getDataLayout();
 
     DominatorTree *DT = nullptr;
+    AssumptionCache *AC = nullptr;
     InformationCache &InfoCache = A.getInfoCache();
-    if (const Function *Fn = getAnchorScope())
+    if (const Function *Fn = getAnchorScope()) {
       DT = InfoCache.getAnalysisResultForFunction<DominatorTreeAnalysis>(*Fn);
+      AC = InfoCache.getAnalysisResultForFunction<AssumptionAnalysis>(*Fn);
+    }
 
     auto VisitValueCB = [&](Value &V, AANonNull::StateType &T,
                             bool Stripped) -> bool {
       const auto &AA = A.getAAFor<AANonNull>(*this, IRPosition::value(V));
       if (!Stripped && this == &AA) {
-        if (!isKnownNonZero(&V, DL, 0, /* TODO: AC */ nullptr, getCtxI(), DT))
+        if (!isKnownNonZero(&V, DL, 0, AC, getCtxI(), DT))
           T.indicatePessimisticFixpoint();
       } else {
         // Use abstract attribute information.
@@ -4627,9 +4630,7 @@ struct AAValueSimplifyArgument final : AAValueSimplifyImpl {
     Value &V = getAssociatedValue();
     if (V.getType()->isPointerTy() &&
         V.getType()->getPointerElementType()->isFunctionTy() &&
-        !A.isModulePass() &&
-        A.getInfoCache().getAnalysisResultForFunction<LoopAnalysis>(
-            *getAnchorScope()))
+        !A.isModulePass())
       indicatePessimisticFixpoint();
   }
 
@@ -4756,7 +4757,9 @@ struct AAValueSimplifyFloating : AAValueSimplifyImpl {
 
   /// See AbstractAttribute::initialize(...).
   void initialize(Attributor &A) override {
-    AAValueSimplifyImpl::initialize(A);
+    // FIXME: This might have exposed a SCC iterator update bug in the old PM.
+    //        Needs investigation.
+    // AAValueSimplifyImpl::initialize(A);
     Value &V = getAnchorValue();
 
     // TODO: add other stuffs

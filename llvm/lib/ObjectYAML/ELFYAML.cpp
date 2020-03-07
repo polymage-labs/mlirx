@@ -1013,7 +1013,7 @@ static void commonSectionMapping(IO &IO, ELFYAML::Section &Section) {
   IO.mapOptional("Name", Section.Name, StringRef());
   IO.mapRequired("Type", Section.Type);
   IO.mapOptional("Flags", Section.Flags);
-  IO.mapOptional("Address", Section.Address, Hex64(0));
+  IO.mapOptional("Address", Section.Address);
   IO.mapOptional("Link", Section.Link, StringRef());
   IO.mapOptional("AddressAlign", Section.AddressAlign, Hex64(0));
   IO.mapOptional("EntSize", Section.EntSize);
@@ -1568,7 +1568,7 @@ void MappingTraits<ELFYAML::Relocation>::mapping(IO &IO,
   const auto *Object = static_cast<ELFYAML::Object *>(IO.getContext());
   assert(Object && "The IO context is not initialized");
 
-  IO.mapRequired("Offset", Rel.Offset);
+  IO.mapOptional("Offset", Rel.Offset, (Hex64)0);
   IO.mapOptional("Symbol", Rel.Symbol);
 
   if (Object->Header.Machine == ELFYAML::ELF_EM(ELF::EM_MIPS) &&

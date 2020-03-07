@@ -112,6 +112,8 @@ inline void registerAllPasses() {
 
   // LoopOps
   createParallelLoopFusionPass();
+  createParallelLoopSpecializationPass();
+  createParallelLoopTilingPass();
 
   // QuantOps
   quant::createConvertSimulatedQuantPass();

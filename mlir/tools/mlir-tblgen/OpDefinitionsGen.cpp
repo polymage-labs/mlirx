@@ -20,6 +20,8 @@
 #include "mlir/TableGen/OpInterfaces.h"
 #include "mlir/TableGen/OpTrait.h"
 #include "mlir/TableGen/Operator.h"
+#include "mlir/TableGen/SideEffects.h"
+#include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/TableGen/Error.h"
@@ -183,6 +185,9 @@ private:
   // Generates getters for named regions.
   void genNamedRegionGetters();
 
+  // Generates getters for named successors.
+  void genNamedSuccessorGetters();
+
   // Generates builder methods for the operation.
   void genBuilder();
 
@@ -203,7 +208,7 @@ private:
   // Generates the build() method that takes aggregate operands/attributes
   // parameters. This build() method uses inferred types as result types.
   // Requires: The type needs to be inferable via InferTypeOpInterface.
-  void genInferedTypeCollectiveParamBuilder();
+  void genInferredTypeCollectiveParamBuilder();
 
   // Generates the build() method that takes each operand/attribute as a
   // stand-alone parameter. The generated build() method uses first attribute's
@@ -266,11 +271,18 @@ private:
   // The generated code will be attached to `body`.
   void genRegionVerifier(OpMethodBody &body);
 
+  // Generates verify statements for successors in the operation.
+  // The generated code will be attached to `body`.
+  void genSuccessorVerifier(OpMethodBody &body);
+
   // Generates the traits used by the object.
   void genTraits();
 
   // Generate the OpInterface methods.
   void genOpInterfaceMethods();
+
+  // Generate the side effect interface methods.
+  void genSideEffectInterfaceMethods();
 
 private:
   // The TableGen record for this op.
@@ -302,6 +314,7 @@ OpEmitter::OpEmitter(const Operator &op)
   genNamedOperandGetters();
   genNamedResultGetters();
   genNamedRegionGetters();
+  genNamedSuccessorGetters();
   genAttrGetters();
   genAttrSetters();
   genBuilder();
@@ -312,6 +325,7 @@ OpEmitter::OpEmitter(const Operator &op)
   genFolderDecls();
   genOpInterfaceMethods();
   generateOpFormat(op, opClass);
+  genSideEffectInterfaceMethods();
 }
 
 void OpEmitter::emitDecl(const Operator &op, raw_ostream &os) {
@@ -383,6 +397,20 @@ void OpEmitter::genAttrGetters() {
       emitAttrWithReturnType(name, attr);
     }
   }
+
+  // Generate helper method to query whether a named attribute is a derived
+  // attribute. This enables, for example, avoiding adding an attribute that
+  // overlaps with a derived attribute.
+  auto &method =
+      opClass.newMethod("bool", "isDerivedAttribute", "StringRef name");
+  auto &body = method.body();
+  auto derivedAttr = make_filter_range(op.getAttributes(),
+                                       [](const NamedAttribute &namedAttr) {
+                                         return namedAttr.attr.isDerivedAttr();
+                                       });
+  for (auto namedAttr : derivedAttr)
+    body << "    if (name == \"" << namedAttr.name << "\") return true;\n";
+  body << " return false;";
 }
 
 void OpEmitter::genAttrSetters() {
@@ -579,6 +607,28 @@ void OpEmitter::genNamedRegionGetters() {
   }
 }
 
+void OpEmitter::genNamedSuccessorGetters() {
+  unsigned numSuccessors = op.getNumSuccessors();
+  for (unsigned i = 0; i < numSuccessors; ++i) {
+    const NamedSuccessor &successor = op.getSuccessor(i);
+    if (successor.name.empty())
+      continue;
+
+    // Generate the accessors for a variadic successor list.
+    if (successor.isVariadic()) {
+      auto &m = opClass.newMethod("SuccessorRange", successor.name);
+      m.body() << formatv(
+          "  return {std::next(this->getOperation()->successor_begin(), {0}), "
+          "this->getOperation()->successor_end()};",
+          i);
+      continue;
+    }
+
+    auto &m = opClass.newMethod("Block *", successor.name);
+    m.body() << formatv("  return this->getOperation()->getSuccessor({0});", i);
+  }
+}
+
 static bool canGenerateUnwrappedBuilder(Operator &op) {
   // If this op does not have native attributes at all, return directly to avoid
   // redefining builders.
@@ -625,14 +675,14 @@ void OpEmitter::genSeparateArgParamBuilder() {
     if (inferType) {
       // Generate builder that infers type too.
       // TODO(jpienaar): Subsume this with general checking if type can be
-      // infered automatically.
+      // inferred automatically.
       // TODO(jpienaar): Expand to handle regions.
       body << formatv(R"(
-        SmallVector<Type, 2> inferedReturnTypes;
+        SmallVector<Type, 2> inferredReturnTypes;
         if (succeeded({0}::inferReturnTypes(odsBuilder->getContext(),
                       {1}.location, {1}.operands, {1}.attributes,
-                      /*regions=*/{{}, inferedReturnTypes)))
-          {1}.addTypes(inferedReturnTypes);
+                      /*regions=*/{{}, inferredReturnTypes)))
+          {1}.addTypes(inferredReturnTypes);
         else
           llvm::report_fatal_error("Failed to infer result type(s).");)",
                       opClass.getClassName(), builderOpState);
@@ -679,7 +729,7 @@ void OpEmitter::genUseOperandAsResultTypeCollectiveParamBuilder() {
 
   // Signature
   std::string params =
-      std::string("Builder *, OperationState &") + builderOpState +
+      std::string("Builder *odsBuilder, OperationState &") + builderOpState +
       ", ValueRange operands, ArrayRef<NamedAttribute> attributes";
   auto &m = opClass.newMethod("void", "build", params, OpMethod::MP_Static);
   auto &body = m.body();
@@ -702,7 +752,7 @@ void OpEmitter::genUseOperandAsResultTypeCollectiveParamBuilder() {
        << llvm::join(resultTypes, ", ") << "});\n\n";
 }
 
-void OpEmitter::genInferedTypeCollectiveParamBuilder() {
+void OpEmitter::genInferredTypeCollectiveParamBuilder() {
   // TODO(jpienaar): Expand to support regions.
   const char *params =
       "Builder *odsBuilder, OperationState &{0}, "
@@ -712,11 +762,11 @@ void OpEmitter::genInferedTypeCollectiveParamBuilder() {
                         OpMethod::MP_Static);
   auto &body = m.body();
   body << formatv(R"(
-    SmallVector<Type, 2> inferedReturnTypes;
+    SmallVector<Type, 2> inferredReturnTypes;
     if (succeeded({0}::inferReturnTypes(odsBuilder->getContext(),
                   {1}.location, operands, attributes,
-                  /*regions=*/{{}, inferedReturnTypes)))
-      build(odsBuilder, odsState, inferedReturnTypes, operands, attributes);
+                  /*regions=*/{{}, inferredReturnTypes)))
+      build(odsBuilder, odsState, inferredReturnTypes, operands, attributes);
     else
       llvm::report_fatal_error("Failed to infer result type(s).");)",
                   opClass.getClassName(), builderOpState);
@@ -746,7 +796,7 @@ void OpEmitter::genUseOperandAsResultTypeSeparateParamBuilder() {
 
 void OpEmitter::genUseAttrAsResultTypeBuilder() {
   std::string params =
-      std::string("Builder *, OperationState &") + builderOpState +
+      std::string("Builder *odsBuilder, OperationState &") + builderOpState +
       ", ValueRange operands, ArrayRef<NamedAttribute> attributes";
   auto &m = opClass.newMethod("void", "build", params, OpMethod::MP_Static);
   auto &body = m.body();
@@ -867,11 +917,12 @@ void OpEmitter::genCollectiveParamBuilder() {
   body << "  " << builderOpState << ".addTypes(resultTypes);\n";
 
   // Generate builder that infers type too.
-  // TODO(jpienaar): Subsume this with general checking if type can be infered
+  // TODO(jpienaar): Subsume this with general checking if type can be inferred
   // automatically.
-  // TODO(jpienaar): Expand to handle regions.
-  if (op.getTrait("InferTypeOpInterface::Trait") && op.getNumRegions() == 0)
-    genInferedTypeCollectiveParamBuilder();
+  // TODO(jpienaar): Expand to handle regions and successors.
+  if (op.getTrait("InferTypeOpInterface::Trait") && op.getNumRegions() == 0 &&
+      op.getNumSuccessors() == 0)
+    genInferredTypeCollectiveParamBuilder();
 }
 
 void OpEmitter::buildParamList(std::string &paramList,
@@ -982,17 +1033,37 @@ void OpEmitter::buildParamList(std::string &paramList,
       ++numAttrs;
     }
   }
+
+  /// Insert parameters for the block and operands for each successor.
+  for (const NamedSuccessor &succ : op.getSuccessors()) {
+    paramList += (succ.isVariadic() ? ", ArrayRef<Block *> " : ", Block *");
+    paramList += succ.name;
+  }
 }
 
 void OpEmitter::genCodeForAddingArgAndRegionForBuilder(OpMethodBody &body,
                                                        bool isRawValueAttr) {
-  // Push all operands to the result
+  // Push all operands to the result.
   for (int i = 0, e = op.getNumOperands(); i < e; ++i) {
     body << "  " << builderOpState << ".addOperands(" << getArgumentName(op, i)
          << ");\n";
   }
 
-  // Push all attributes to the result
+  // If the operation has the operand segment size attribute, add it here.
+  if (op.getTrait("OpTrait::AttrSizedOperandSegments")) {
+    body << "  " << builderOpState
+         << ".addAttribute(\"operand_segment_sizes\", "
+            "odsBuilder->getI32VectorAttr({";
+    interleaveComma(llvm::seq<int>(0, op.getNumOperands()), body, [&](int i) {
+      if (op.getOperand(i).isVariadic())
+        body << "static_cast<int32_t>(" << getArgumentName(op, i) << ".size())";
+      else
+        body << "1";
+    });
+    body << "}));\n";
+  }
+
+  // Push all attributes to the result.
   for (const auto &namedAttr : op.getAttributes()) {
     auto &attr = namedAttr.attr;
     if (!attr.isDerivedAttr()) {
@@ -1030,10 +1101,16 @@ void OpEmitter::genCodeForAddingArgAndRegionForBuilder(OpMethodBody &body,
     }
   }
 
-  // Create the correct number of regions
+  // Create the correct number of regions.
   if (int numRegions = op.getNumRegions()) {
     for (int i = 0; i < numRegions; ++i)
       body << "  (void)" << builderOpState << ".addRegion();\n";
+  }
+
+  // Push all successors to the result.
+  for (const NamedSuccessor &namedSuccessor : op.getSuccessors()) {
+    body << formatv("  {0}.addSuccessors({1});\n", builderOpState,
+                    namedSuccessor.name);
   }
 }
 
@@ -1072,8 +1149,8 @@ void OpEmitter::genOpInterfaceMethods() {
       continue;
     auto interface = opTrait->getOpInterface();
     for (auto method : interface.getMethods()) {
-      // Don't declare if the method has a body.
-      if (method.getBody())
+      // Don't declare if the method has a body or a default implementation.
+      if (method.getBody() || method.getDefaultImplementation())
         continue;
       std::string args;
       llvm::raw_string_ostream os(args);
@@ -1085,6 +1162,75 @@ void OpEmitter::genOpInterfaceMethods() {
                         method.isStatic() ? OpMethod::MP_Static
                                           : OpMethod::MP_None,
                         /*declOnly=*/true);
+    }
+  }
+}
+
+void OpEmitter::genSideEffectInterfaceMethods() {
+  enum EffectKind { Operand, Result, Static };
+  struct EffectLocation {
+    /// The effect applied.
+    SideEffect effect;
+
+    /// The index if the kind is either operand or result.
+    unsigned index : 30;
+
+    /// The kind of the location.
+    EffectKind kind : 2;
+  };
+
+  StringMap<SmallVector<EffectLocation, 1>> interfaceEffects;
+  auto resolveDecorators = [&](Operator::var_decorator_range decorators,
+                               unsigned index, EffectKind kind) {
+    for (auto decorator : decorators)
+      if (SideEffect *effect = dyn_cast<SideEffect>(&decorator))
+        interfaceEffects[effect->getInterfaceTrait()].push_back(
+            EffectLocation{*effect, index, kind});
+  };
+
+  // Collect effects that were specified via:
+  /// Traits.
+  for (const auto &trait : op.getTraits())
+    if (const auto *opTrait = dyn_cast<tblgen::SideEffectTrait>(&trait))
+      resolveDecorators(opTrait->getEffects(), /*index=*/0, EffectKind::Static);
+  /// Operands.
+  for (unsigned i = 0, operandIt = 0, e = op.getNumArgs(); i != e; ++i) {
+    if (op.getArg(i).is<NamedTypeConstraint *>()) {
+      resolveDecorators(op.getArgDecorators(i), operandIt, EffectKind::Operand);
+      ++operandIt;
+    }
+  }
+  /// Results.
+  for (unsigned i = 0, e = op.getNumResults(); i != e; ++i)
+    resolveDecorators(op.getResultDecorators(i), i, EffectKind::Result);
+
+  for (auto &it : interfaceEffects) {
+    StringRef baseEffect = it.second.front().effect.getBaseName();
+    auto effectsParam =
+        llvm::formatv(
+            "SmallVectorImpl<SideEffects::EffectInstance<{0}>> &effects",
+            baseEffect)
+            .str();
+
+    // Generate the 'getEffects' method.
+    auto &getEffects = opClass.newMethod("void", "getEffects", effectsParam);
+    auto &body = getEffects.body();
+
+    // Add effect instances for each of the locations marked on the operation.
+    for (auto &location : it.second) {
+      if (location.kind != EffectKind::Static) {
+        body << "  for (Value value : getODS"
+             << (location.kind == EffectKind::Operand ? "Operands" : "Results")
+             << "(" << location.index << "))\n  ";
+      }
+
+      body << "  effects.emplace_back(" << location.effect.getName()
+           << "::get()";
+
+      // If the effect isn't static, it has a specific value attached to it.
+      if (location.kind != EffectKind::Static)
+        body << ", value";
+      body << ", " << location.effect.getResource() << "::get());\n";
     }
   }
 }
@@ -1228,6 +1374,7 @@ void OpEmitter::genVerifier() {
   }
 
   genRegionVerifier(body);
+  genSuccessorVerifier(body);
 
   if (hasCustomVerify) {
     FmtContext fctx;
@@ -1305,31 +1452,78 @@ void OpEmitter::genRegionVerifier(OpMethodBody &body) {
   }
 }
 
+void OpEmitter::genSuccessorVerifier(OpMethodBody &body) {
+  // If we have no successors, there is nothing more to do.
+  unsigned numSuccessors = op.getNumSuccessors();
+  if (numSuccessors == 0)
+    return;
+
+  body << "{\n";
+  body << "    unsigned index = 0; (void)index;\n";
+
+  for (unsigned i = 0; i < numSuccessors; ++i) {
+    const auto &successor = op.getSuccessor(i);
+    if (successor.constraint.getPredicate().isNull())
+      continue;
+
+    body << "    for (Block *successor : ";
+    body << formatv(successor.isVariadic() ? "{0}()"
+                                           : "ArrayRef<Block *>({0}())",
+                    successor.name);
+    body << ") {\n";
+    auto constraint = tgfmt(successor.constraint.getConditionTemplate(),
+                            &verifyCtx.withSelf("successor"))
+                          .str();
+
+    body << formatv(
+        "      (void)successor;\n"
+        "      if (!({0})) {\n        "
+        "return emitOpError(\"successor #\") << index << \"('{2}') failed to "
+        "verify constraint: {3}\";\n      }\n",
+        constraint, i, successor.name, successor.constraint.getDescription());
+    body << "    }\n";
+  }
+  body << "  }\n";
+}
+
+/// Add a size count trait to the given operation class.
+static void addSizeCountTrait(OpClass &opClass, StringRef traitKind,
+                              int numNonVariadic, int numVariadic) {
+  if (numVariadic != 0) {
+    if (numNonVariadic == numVariadic)
+      opClass.addTrait("OpTrait::Variadic" + traitKind + "s");
+    else
+      opClass.addTrait("OpTrait::AtLeastN" + traitKind + "s<" +
+                       Twine(numNonVariadic - numVariadic) + ">::Impl");
+    return;
+  }
+  switch (numNonVariadic) {
+  case 0:
+    opClass.addTrait("OpTrait::Zero" + traitKind);
+    break;
+  case 1:
+    opClass.addTrait("OpTrait::One" + traitKind);
+    break;
+  default:
+    opClass.addTrait("OpTrait::N" + traitKind + "s<" + Twine(numNonVariadic) +
+                     ">::Impl");
+    break;
+  }
+}
+
 void OpEmitter::genTraits() {
   int numResults = op.getNumResults();
   int numVariadicResults = op.getNumVariadicResults();
 
   // Add return size trait.
-  if (numVariadicResults != 0) {
-    if (numResults == numVariadicResults)
-      opClass.addTrait("OpTrait::VariadicResults");
-    else
-      opClass.addTrait("OpTrait::AtLeastNResults<" +
-                       Twine(numResults - numVariadicResults) + ">::Impl");
-  } else {
-    switch (numResults) {
-    case 0:
-      opClass.addTrait("OpTrait::ZeroResult");
-      break;
-    case 1:
-      opClass.addTrait("OpTrait::OneResult");
-      break;
-    default:
-      opClass.addTrait("OpTrait::NResults<" + Twine(numResults) + ">::Impl");
-      break;
-    }
-  }
+  addSizeCountTrait(opClass, "Result", numResults, numVariadicResults);
 
+  // Add successor size trait.
+  unsigned numSuccessors = op.getNumSuccessors();
+  unsigned numVariadicSuccessors = op.getNumVariadicSuccessors();
+  addSizeCountTrait(opClass, "Successor", numSuccessors, numVariadicSuccessors);
+
+  // Add the native and interface traits.
   for (const auto &trait : op.getTraits()) {
     if (auto opTrait = dyn_cast<tblgen::NativeOpTrait>(&trait))
       opClass.addTrait(opTrait->getTrait());

@@ -15,15 +15,15 @@
 // limitations under the License.
 // =============================================================================
 //
-// This file implements a new vectorizer for affine loop nests that is able to 
+// This file implements a new vectorizer for affine loop nests that is able to
 // perform inner or outer loop vectorization.
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Analysis/Utils.h"
 #include "mlir/Analysis/LoopAnalysis.h"
+#include "mlir/Analysis/Utils.h"
 #include "mlir/Dialect/AffineOps/AffineOps.h"
-#include "mlir/Dialect/StandardOps/Ops.h"
+#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/LoopUtils.h"

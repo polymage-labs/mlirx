@@ -12,11 +12,11 @@
 #include <list>
 #include <map>
 #include <mutex>
-#include <set>
 #include <unordered_map>
 #include <vector>
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Threading.h"
 
 #include "lldb/Core/UniqueCStringMap.h"
@@ -292,6 +292,8 @@ public:
 
   lldb_private::DWARFContext &GetDWARFContext() { return m_context; }
 
+  const std::shared_ptr<SymbolFileDWARFDwo> &GetDwpSymbolFile();
+
   lldb_private::FileSpec GetFile(DWARFUnit &unit, size_t file_idx);
 
   static llvm::Expected<lldb_private::TypeSystem &>
@@ -437,7 +439,7 @@ protected:
 
   bool FixupAddress(lldb_private::Address &addr);
 
-  typedef std::set<lldb_private::Type *> TypeSet;
+  typedef llvm::SetVector<lldb_private::Type *> TypeSet;
 
   void GetTypes(const DWARFDIE &die, dw_offset_t min_die_offset,
                 dw_offset_t max_die_offset, uint32_t type_mask,

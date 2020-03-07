@@ -11,7 +11,7 @@
 #include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
 #include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVMPass.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/StandardOps/Ops.h"
+#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/VectorOps/VectorOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
@@ -319,15 +319,22 @@ public:
     } else if (eltType.isF32() || eltType.isF64()) {
       // Floating-point reductions: add/mul/min/max
       if (kind == "add") {
-        Value zero = rewriter.create<LLVM::ConstantOp>(
-            op->getLoc(), llvmType, rewriter.getZeroAttr(eltType));
+        // Optional accumulator (or zero).
+        Value acc = operands.size() > 1 ? operands[1]
+                                        : rewriter.create<LLVM::ConstantOp>(
+                                              op->getLoc(), llvmType,
+                                              rewriter.getZeroAttr(eltType));
         rewriter.replaceOpWithNewOp<LLVM::experimental_vector_reduce_v2_fadd>(
-            op, llvmType, zero, operands[0]);
+            op, llvmType, acc, operands[0]);
       } else if (kind == "mul") {
-        Value one = rewriter.create<LLVM::ConstantOp>(
-            op->getLoc(), llvmType, rewriter.getFloatAttr(eltType, 1.0));
+        // Optional accumulator (or one).
+        Value acc = operands.size() > 1
+                        ? operands[1]
+                        : rewriter.create<LLVM::ConstantOp>(
+                              op->getLoc(), llvmType,
+                              rewriter.getFloatAttr(eltType, 1.0));
         rewriter.replaceOpWithNewOp<LLVM::experimental_vector_reduce_v2_fmul>(
-            op, llvmType, one, operands[0]);
+            op, llvmType, acc, operands[0]);
       } else if (kind == "min")
         rewriter.replaceOpWithNewOp<LLVM::experimental_vector_reduce_fmin>(
             op, llvmType, operands[0]);
@@ -336,33 +343,6 @@ public:
             op, llvmType, operands[0]);
       else
         return matchFailure();
-      return matchSuccess();
-    }
-    return matchFailure();
-  }
-};
-
-// TODO(ajcbik): merge Reduction and ReductionV2
-class VectorReductionV2OpConversion : public ConvertToLLVMPattern {
-public:
-  explicit VectorReductionV2OpConversion(MLIRContext *context,
-                                         LLVMTypeConverter &typeConverter)
-      : ConvertToLLVMPattern(vector::ReductionV2Op::getOperationName(), context,
-                             typeConverter) {}
-  PatternMatchResult
-  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto reductionOp = cast<vector::ReductionV2Op>(op);
-    auto kind = reductionOp.kind();
-    Type eltType = reductionOp.dest().getType();
-    Type llvmType = typeConverter.convertType(eltType);
-    if (kind == "add") {
-      rewriter.replaceOpWithNewOp<LLVM::experimental_vector_reduce_v2_fadd>(
-          op, llvmType, operands[1], operands[0]);
-      return matchSuccess();
-    } else if (kind == "mul") {
-      rewriter.replaceOpWithNewOp<LLVM::experimental_vector_reduce_v2_fmul>(
-          op, llvmType, operands[1], operands[0]);
       return matchSuccess();
     }
     return matchFailure();
@@ -1154,12 +1134,11 @@ void mlir::populateVectorToLLVMConversionPatterns(
                   VectorInsertStridedSliceOpSameRankRewritePattern,
                   VectorStridedSliceOpConversion>(ctx);
   patterns.insert<VectorBroadcastOpConversion, VectorReductionOpConversion,
-                  VectorReductionV2OpConversion, VectorShuffleOpConversion,
-                  VectorExtractElementOpConversion, VectorExtractOpConversion,
-                  VectorFMAOp1DConversion, VectorInsertElementOpConversion,
-                  VectorInsertOpConversion, VectorOuterProductOpConversion,
-                  VectorTypeCastOpConversion, VectorPrintOpConversion>(
-      ctx, converter);
+                  VectorShuffleOpConversion, VectorExtractElementOpConversion,
+                  VectorExtractOpConversion, VectorFMAOp1DConversion,
+                  VectorInsertElementOpConversion, VectorInsertOpConversion,
+                  VectorOuterProductOpConversion, VectorTypeCastOpConversion,
+                  VectorPrintOpConversion>(ctx, converter);
 }
 
 namespace {
@@ -1184,8 +1163,7 @@ void LowerVectorToLLVMPass::runOnModule() {
   populateVectorToLLVMConversionPatterns(converter, patterns);
   populateStdToLLVMConversionPatterns(converter, patterns);
 
-  ConversionTarget target(getContext());
-  target.addLegalDialect<LLVM::LLVMDialect>();
+  LLVMConversionTarget target(getContext());
   target.addDynamicallyLegalOp<FuncOp>(
       [&](FuncOp op) { return converter.isSignatureLegal(op.getType()); });
   if (failed(

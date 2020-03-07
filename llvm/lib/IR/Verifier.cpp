@@ -2364,8 +2364,7 @@ void Verifier::visitFunction(const Function &F) {
   if (!HasDebugInfo)
     return;
 
-  // Check that all !dbg attachments lead to back to N (or, at least, another
-  // subprogram that describes the same function).
+  // Check that all !dbg attachments lead to back to N.
   //
   // FIXME: Check this incrementally while visiting !dbg attachments.
   // FIXME: Only check when N is the canonical subprogram for F.
@@ -2394,7 +2393,6 @@ void Verifier::visitFunction(const Function &F) {
     if (SP && ((Scope != SP) && !Seen.insert(SP).second))
       return;
 
-    // FIXME: Once N is canonical, check "SP == &N".
     AssertDI(SP->describes(&F),
              "!dbg attachment points at wrong subprogram for function", N, &F,
              &I, DL, Scope, SP);
@@ -2532,8 +2530,6 @@ void Verifier::visitIndirectBrInst(IndirectBrInst &BI) {
 
 void Verifier::visitCallBrInst(CallBrInst &CBI) {
   Assert(CBI.isInlineAsm(), "Callbr is currently only used for asm-goto!",
-         &CBI);
-  Assert(CBI.getType()->isVoidTy(), "Callbr return value is not supported!",
          &CBI);
   for (unsigned i = 0, e = CBI.getNumSuccessors(); i != e; ++i)
     Assert(CBI.getSuccessor(i)->getType()->isLabelTy(),
@@ -4727,7 +4723,9 @@ void Verifier::visitIntrinsicCall(Intrinsic::ID ID, CallBase &Call) {
   case Intrinsic::umul_fix:
   case Intrinsic::umul_fix_sat:
   case Intrinsic::sdiv_fix:
-  case Intrinsic::udiv_fix: {
+  case Intrinsic::sdiv_fix_sat:
+  case Intrinsic::udiv_fix:
+  case Intrinsic::udiv_fix_sat: {
     Value *Op1 = Call.getArgOperand(0);
     Value *Op2 = Call.getArgOperand(1);
     Assert(Op1->getType()->isIntOrIntVectorTy(),
@@ -4742,7 +4740,7 @@ void Verifier::visitIntrinsicCall(Intrinsic::ID ID, CallBase &Call) {
            "third argument of [us][mul|div]_fix[_sat] must fit within 32 bits");
 
     if (ID == Intrinsic::smul_fix || ID == Intrinsic::smul_fix_sat ||
-        ID == Intrinsic::sdiv_fix) {
+        ID == Intrinsic::sdiv_fix || ID == Intrinsic::sdiv_fix_sat) {
       Assert(
           Op3->getZExtValue() < Op1->getType()->getScalarSizeInBits(),
           "the scale of s[mul|div]_fix[_sat] must be less than the width of "

@@ -676,6 +676,10 @@ private:
   SmallVector<Value, 8> reorderedDims;
   SmallVector<Value, 8> concatenatedSymbols;
 
+  /// The number of symbols in concatenated symbols that belong to the original
+  /// map as opposed to those concatendated during map composition.
+  unsigned numProperSymbols;
+
   AffineMap affineMap;
 
   /// Used with RAII to control the depth at which AffineApply are composed
@@ -689,7 +693,7 @@ private:
   }
   static constexpr unsigned kMaxAffineApplyDepth = 1;
 
-  AffineApplyNormalizer() { affineApplyDepth()++; }
+  AffineApplyNormalizer() : numProperSymbols(0) { affineApplyDepth()++; }
 
 public:
   ~AffineApplyNormalizer() { affineApplyDepth()--; }

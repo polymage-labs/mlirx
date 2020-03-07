@@ -4,6 +4,7 @@ set(LLVM_OPTIONAL_SOURCES
 
 set(LIB_LIBS
   MLIRAnalysis
+  MLIRIR
   MLIRLLVMIR
   MLIROptLib
   MLIRParser
@@ -15,52 +16,29 @@ add_llvm_library(MLIRMlirOptMain
   mlir-opt.cpp
 )
 target_link_libraries(MLIRMlirOptMain
+  PUBLIC
   ${LIB_LIBS}
 )
 
+get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
+get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 set(LIBS
+  ${dialect_libs}
+  ${conversion_libs}
   MLIRLoopOpsTransforms
   MLIRLoopAnalysis
   MLIRAnalysis
-  MLIRAffineOps
-  MLIRAffineToStandard
   MLIRDialect
-  MLIRLoopsToGPU
-  MLIRLinalgToLLVM
-
-  MLIRLoopToStandard
   MLIREDSC
-  MLIRFxpMathOps
-  MLIRGPU
-  MLIRGPUtoCUDATransforms
-  MLIRGPUtoNVVMTransforms
-  MLIRGPUtoROCDLTransforms
-  MLIRGPUtoSPIRVTransforms
-  MLIRGPUtoVulkanTransforms
-  MLIRLinalgOps
-  MLIRLinalgAnalysis
-  MLIRLinalgEDSC
-  MLIRLinalgTransforms
-  MLIRLinalgUtils
-  MLIRLLVMIR
-  MLIRLoopOps
-  MLIRNVVMIR
-  MLIROpenMP
   MLIROptLib
   MLIRParser
   MLIRPass
   MLIRQuantizerFxpMathConfig
   MLIRQuantizerSupport
   MLIRQuantizerTransforms
-  MLIRQuantOps
-  MLIRROCDLIR
   MLIRSPIRV
-  MLIRLinalgToSPIRVTransforms
-  MLIRStandardToSPIRVTransforms
   MLIRSPIRVTestPasses
   MLIRSPIRVTransforms
-  MLIRStandardOps
-  MLIRStandardToLLVM
   MLIRTransforms
   MLIRTransformUtils
   MLIRTestDialect
@@ -68,9 +46,6 @@ set(LIBS
   MLIRTestPass
   MLIRTestTransforms
   MLIRSupport
-  MLIRVectorOps
-  MLIRVectorToLLVM
-  MLIRVectorToLoops
   MLIRIR
   MLIROptLib
   LLVMSupport

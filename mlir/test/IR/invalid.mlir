@@ -153,7 +153,7 @@ func @block_arg_no_type() {
 
 func @block_arg_no_close_paren() {
 ^bb42:
-  br ^bb2( // expected-error@+1 {{expected ')' to close argument list}}
+  br ^bb2( // expected-error@+1 {{expected ':'}}
   return
 }
 
@@ -402,7 +402,6 @@ func @condbr_notbool() {
 ^bb0:
   %a = "foo"() : () -> i32 // expected-note {{prior use here}}
   cond_br %a, ^bb0, ^bb0 // expected-error {{use of value '%a' expects different type than prior uses: 'i1' vs 'i32'}}
-// expected-error@-1 {{expected condition type was boolean (i1)}}
 }
 
 // -----

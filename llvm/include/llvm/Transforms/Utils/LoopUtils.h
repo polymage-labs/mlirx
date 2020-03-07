@@ -24,6 +24,7 @@
 #include "llvm/Analysis/DemandedBits.h"
 #include "llvm/Analysis/EHPersonalities.h"
 #include "llvm/Analysis/IVDescriptors.h"
+#include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/MustExecute.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Dominators.h"
@@ -31,6 +32,7 @@
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Transforms/Utils/ValueMapper.h"
 
 namespace llvm {
 
@@ -380,8 +382,9 @@ enum ReplaceExitVal { NeverRepl, OnlyCheapRepl, NoHardUse, AlwaysRepl };
 /// Return the number of loop exit values that have been replaced, and the
 /// corresponding phi node will be added to DeadInsts.
 int rewriteLoopExitValues(Loop *L, LoopInfo *LI, TargetLibraryInfo *TLI,
-                          ScalarEvolution *SE, SCEVExpander &Rewriter,
-                          DominatorTree *DT, ReplaceExitVal ReplaceExitValue,
+                          ScalarEvolution *SE, const TargetTransformInfo *TTI,
+                          SCEVExpander &Rewriter, DominatorTree *DT,
+                          ReplaceExitVal ReplaceExitValue,
                           SmallVector<WeakTrackingVH, 16> &DeadInsts);
 
 /// Set weights for \p UnrolledLoop and \p RemainderLoop based on weights for
@@ -425,6 +428,12 @@ void appendReversedLoopsToWorklist(RangeT &&,
 /// already reversed loops in LI.
 /// FIXME: Consider changing the order in LoopInfo.
 void appendLoopsToWorklist(LoopInfo &, SmallPriorityWorklist<Loop *, 4> &);
+
+/// Recursively clone the specified loop and all of its children,
+/// mapping the blocks with the specified map.
+Loop *cloneLoop(Loop *L, Loop *PL, ValueToValueMapTy &VM,
+                LoopInfo *LI, LPPassManager *LPM);
+
 } // end namespace llvm
 
 #endif // LLVM_TRANSFORMS_UTILS_LOOPUTILS_H

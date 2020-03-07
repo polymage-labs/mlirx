@@ -66,6 +66,13 @@ New Compiler Flags
   attack for x86 architecture through automatic probing of each page of
   allocated stack.
 
+- -ffp-exception-behavior={ignore,maytrap,strict} allows the user to specify
+  the floating-point exception behavior.  The default setting is ``ignore``.
+
+- -ffp-model={precise,strict,fast} provides the user an umbrella option to
+  simplify access to the many single purpose floating point options. The default
+  setting is ``precise``.
+
 Deprecated Compiler Flags
 -------------------------
 
@@ -94,12 +101,10 @@ Windows Support
 C Language Changes in Clang
 ---------------------------
 
+- The default C language standard used when `-std=` is not specified has been
+  upgraded from gnu11 to gnu17.
+
 - ...
-
-C11 Feature Support
-^^^^^^^^^^^^^^^^^^^
-
-...
 
 C++ Language Changes in Clang
 -----------------------------

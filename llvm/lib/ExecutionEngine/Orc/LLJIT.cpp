@@ -21,6 +21,8 @@
 
 #include <map>
 
+#define DEBUG_TYPE "orc"
+
 using namespace llvm;
 using namespace llvm::orc;
 
@@ -107,12 +109,16 @@ private:
 /// llvm.global_ctors.
 class GlobalCtorDtorScraper {
 public:
-  GlobalCtorDtorScraper(GenericLLVMIRPlatformSupport &PS) : PS(PS) {}
+
+  GlobalCtorDtorScraper(GenericLLVMIRPlatformSupport &PS,
+                        StringRef InitFunctionPrefix)
+    : PS(PS), InitFunctionPrefix(InitFunctionPrefix) {}
   Expected<ThreadSafeModule> operator()(ThreadSafeModule TSM,
                                         MaterializationResponsibility &R);
 
 private:
   GenericLLVMIRPlatformSupport &PS;
+  StringRef InitFunctionPrefix;
 };
 
 /// Generic IR Platform Support
@@ -125,12 +131,14 @@ public:
   // GenericLLVMIRPlatform &P) : P(P) {
   GenericLLVMIRPlatformSupport(LLJIT &J) : J(J) {
 
+    MangleAndInterner Mangle(getExecutionSession(), J.getDataLayout());
+    InitFunctionPrefix = Mangle("__orc_init_func.");
+
     getExecutionSession().setPlatform(
         std::make_unique<GenericLLVMIRPlatform>(*this));
 
-    setInitTransform(J, GlobalCtorDtorScraper(*this));
+    setInitTransform(J, GlobalCtorDtorScraper(*this, *InitFunctionPrefix));
 
-    MangleAndInterner Mangle(getExecutionSession(), J.getDataLayout());
     SymbolMap StdInterposes;
 
     StdInterposes[Mangle("__lljit.platform_support_instance")] =
@@ -169,12 +177,33 @@ public:
     std::lock_guard<std::mutex> Lock(PlatformSupportMutex);
     if (auto &InitSym = MU.getInitializerSymbol())
       InitSymbols[&JD].add(InitSym);
+    else {
+      // If there's no identified init symbol attached, but there is a symbol
+      // with the GenericIRPlatform::InitFunctionPrefix, then treat that as
+      // an init function. Add the symbol to both the InitSymbols map (which
+      // will trigger a lookup to materialize the module) and the InitFunctions
+      // map (which holds the names of the symbols to execute).
+      for (auto &KV : MU.getSymbols())
+        if ((*KV.first).startswith(*InitFunctionPrefix)) {
+          InitSymbols[&JD].add(KV.first);
+          InitFunctions[&JD].add(KV.first);
+        }
+    }
     return Error::success();
   }
 
   Error initialize(JITDylib &JD) override {
+    LLVM_DEBUG({
+      dbgs() << "GenericLLVMIRPlatformSupport getting initializers to run\n";
+    });
     if (auto Initializers = getInitializers(JD)) {
+      LLVM_DEBUG(
+          { dbgs() << "GenericLLVMIRPlatformSupport running initializers\n"; });
       for (auto InitFnAddr : *Initializers) {
+        LLVM_DEBUG({
+          dbgs() << "  Running init " << formatv("{0:x16}", InitFnAddr)
+                 << "...\n";
+        });
         auto *InitFn = jitTargetAddressToFunction<void (*)()>(InitFnAddr);
         InitFn();
       }
@@ -184,8 +213,18 @@ public:
   }
 
   Error deinitialize(JITDylib &JD) override {
+    LLVM_DEBUG({
+      dbgs() << "GenericLLVMIRPlatformSupport getting deinitializers to run\n";
+    });
     if (auto Deinitializers = getDeinitializers(JD)) {
+      LLVM_DEBUG({
+        dbgs() << "GenericLLVMIRPlatformSupport running deinitializers\n";
+      });
       for (auto DeinitFnAddr : *Deinitializers) {
+        LLVM_DEBUG({
+          dbgs() << "  Running init " << formatv("{0:x16}", DeinitFnAddr)
+                 << "...\n";
+        });
         auto *DeinitFn = jitTargetAddressToFunction<void (*)()>(DeinitFnAddr);
         DeinitFn();
       }
@@ -220,6 +259,16 @@ private:
         }
       }
     }
+
+    LLVM_DEBUG({
+      dbgs() << "JITDylib init order is [ ";
+      for (auto *JD : llvm::reverse(DFSLinkOrder))
+        dbgs() << "\"" << JD->getName() << "\" ";
+      dbgs() << "]\n";
+      dbgs() << "Looking up init functions:\n";
+      for (auto &KV : LookupSymbols)
+        dbgs() << "  \"" << KV.first->getName() << "\": " << KV.second << "\n";
+    });
 
     auto &ES = getExecutionSession();
     auto LookupResult = Platform::lookupInitSymbols(ES, LookupSymbols);
@@ -387,6 +436,7 @@ private:
 
   std::mutex PlatformSupportMutex;
   LLJIT &J;
+  SymbolStringPtr InitFunctionPrefix;
   DenseMap<JITDylib *, SymbolLookupSet> InitSymbols;
   DenseMap<JITDylib *, SymbolLookupSet> InitFunctions;
   DenseMap<JITDylib *, SymbolLookupSet> DeInitFunctions;
@@ -415,7 +465,7 @@ GlobalCtorDtorScraper::operator()(ThreadSafeModule TSM,
 
     std::string InitFunctionName;
     raw_string_ostream(InitFunctionName)
-        << "__orc_init." << M.getModuleIdentifier();
+        << InitFunctionPrefix << M.getModuleIdentifier();
 
     MangleAndInterner Mangle(PS.getExecutionSession(), M.getDataLayout());
     auto InternedName = Mangle(InitFunctionName);
@@ -500,18 +550,39 @@ public:
   }
 
   Error initialize(JITDylib &JD) override {
-    if (auto InitSeq = MP.getInitializerSequence(JD)) {
+    LLVM_DEBUG({
+      dbgs() << "MachOPlatformSupport initializing \"" << JD.getName()
+             << "\"\n";
+    });
+
+    auto InitSeq = MP.getInitializerSequence(JD);
+    if (!InitSeq)
+      return InitSeq.takeError();
+
+    // If ObjC is not enabled but there are JIT'd ObjC inits then return
+    // an error.
+    if (!objCRegistrationEnabled())
       for (auto &KV : *InitSeq) {
+        if (!KV.second.getObjCSelRefsSections().empty() ||
+            !KV.second.getObjCClassListSections().empty())
+          return make_error<StringError>("JITDylib " + KV.first->getName() +
+                                             " contains objc metadata but objc"
+                                             " is not enabled",
+                                         inconvertibleErrorCode());
+      }
+
+    // Run the initializers.
+    for (auto &KV : *InitSeq) {
+      if (objCRegistrationEnabled()) {
         KV.second.registerObjCSelectors();
         if (auto Err = KV.second.registerObjCClasses()) {
           // FIXME: Roll back registrations on error?
           return Err;
         }
       }
-      for (auto &KV : *InitSeq)
-        KV.second.runModInits();
-    } else
-      return InitSeq.takeError();
+      KV.second.runModInits();
+    }
+
     return Error::success();
   }
 
@@ -1020,10 +1091,13 @@ Error LLJIT::applyDataLayout(Module &M) {
 }
 
 void setUpGenericLLVMIRPlatform(LLJIT &J) {
+  LLVM_DEBUG(
+      { dbgs() << "Setting up GenericLLVMIRPlatform support for LLJIT\n"; });
   J.setPlatformSupport(std::make_unique<GenericLLVMIRPlatformSupport>(J));
 }
 
 Error setUpMachOPlatform(LLJIT &J) {
+  LLVM_DEBUG({ dbgs() << "Setting up MachOPlatform support for LLJIT\n"; });
   auto MP = MachOPlatformSupport::Create(J, J.getMainJITDylib());
   if (!MP)
     return MP.takeError();

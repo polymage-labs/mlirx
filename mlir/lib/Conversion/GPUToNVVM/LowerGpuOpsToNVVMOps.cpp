@@ -90,8 +90,7 @@ private:
 
       // Add branch before inserted body, into body.
       block = block->getNextNode();
-      rewriter.create<LLVM::BrOp>(loc, ArrayRef<Value>{},
-                                  llvm::makeArrayRef(block), ValueRange());
+      rewriter.create<LLVM::BrOp>(loc, ValueRange(), block);
 
       // Replace all gpu.yield ops with branch out of body.
       for (; block != split; block = block->getNextNode()) {
@@ -100,8 +99,7 @@ private:
           continue;
         rewriter.setInsertionPointToEnd(block);
         rewriter.replaceOpWithNewOp<LLVM::BrOp>(
-            terminator, ArrayRef<Value>{}, llvm::makeArrayRef(split),
-            ValueRange(terminator->getOperand(0)));
+            terminator, terminator->getOperand(0), split);
       }
 
       // Return accumulator result.
@@ -254,13 +252,10 @@ private:
     Block *continueBlock = rewriter.splitBlock(elseBlock, elseBlock->begin());
 
     rewriter.setInsertionPointToEnd(currentBlock);
-    rewriter.create<LLVM::CondBrOp>(loc, llvm::makeArrayRef(condition),
-                                    ArrayRef<Block *>{thenBlock, elseBlock});
+    rewriter.create<LLVM::CondBrOp>(loc, condition, thenBlock, elseBlock);
 
     auto addBranch = [&](ValueRange operands) {
-      rewriter.create<LLVM::BrOp>(loc, ArrayRef<Value>{},
-                                  llvm::makeArrayRef(continueBlock),
-                                  llvm::makeArrayRef(operands));
+      rewriter.create<LLVM::BrOp>(loc, operands, continueBlock);
     };
 
     rewriter.setInsertionPointToStart(thenBlock);
@@ -645,8 +640,7 @@ struct GPUReturnOpLowering : public ConvertToLLVMPattern {
   PatternMatchResult
   matchAndRewrite(Operation *op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(op, operands,
-                                                ArrayRef<Block *>());
+    rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(op, operands);
     return matchSuccess();
   }
 };
@@ -679,12 +673,11 @@ public:
     OwningRewritePatternList patterns;
     populateStdToLLVMConversionPatterns(converter, patterns);
     populateGpuToNVVMConversionPatterns(converter, patterns);
-    ConversionTarget target(getContext());
+    LLVMConversionTarget target(getContext());
     target.addIllegalDialect<gpu::GPUDialect>();
-    target.addIllegalOp<LLVM::FAbsOp, LLVM::FCeilOp, LLVM::CosOp,
-                        LLVM::ExpOp>();
+    target.addIllegalOp<LLVM::CosOp, LLVM::ExpOp, LLVM::FAbsOp, LLVM::FCeilOp,
+                        LLVM::LogOp, LLVM::Log10Op, LLVM::Log2Op>();
     target.addIllegalOp<FuncOp>();
-    target.addLegalDialect<LLVM::LLVMDialect>();
     target.addLegalDialect<NVVM::NVVMDialect>();
     target.addDynamicallyLegalOp<mlir::LLVM::CallOp>(
         gpu::filterIllegalLLVMIntrinsics({"tanh", "tanhf"}, m.getContext()));
@@ -719,6 +712,12 @@ void mlir::populateGpuToNVVMConversionPatterns(
                                                "__nv_cos");
   patterns.insert<OpToFuncCallLowering<ExpOp>>(converter, "__nv_expf",
                                                "__nv_exp");
+  patterns.insert<OpToFuncCallLowering<LogOp>>(converter, "__nv_logf",
+                                               "__nv_log");
+  patterns.insert<OpToFuncCallLowering<Log10Op>>(converter, "__nv_log10f",
+                                                 "__nv_log10");
+  patterns.insert<OpToFuncCallLowering<Log2Op>>(converter, "__nv_log2f",
+                                                "__nv_log2");
   patterns.insert<OpToFuncCallLowering<TanhOp>>(converter, "__nv_tanhf",
                                                 "__nv_tanh");
 }
