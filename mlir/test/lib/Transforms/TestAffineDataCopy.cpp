@@ -71,7 +71,8 @@ void TestAffineDataCopy::runOnFunction() {
                                    /*slowMemorySpace=*/0,
                                    /*fastMemorySpace=*/0,
                                    /*tagMemorySpace=*/0,
-                                   /*fastMemCapacityBytes=*/32 * 1024 * 1024UL};
+                                   /*fastMemCapacityBytes=*/32 * 1024 * 1024UL,
+                                   /*fastBufLayout*/{}};
   DenseSet<Operation *> copyNests;
   affineDataCopyGenerate(loopNest.getBody()->begin(),
                          std::prev(loopNest.getBody()->end()), copyOptions,
