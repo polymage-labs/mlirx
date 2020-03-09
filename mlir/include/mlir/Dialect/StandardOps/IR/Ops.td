@@ -1044,25 +1044,25 @@ def ExtractElementOp : Std_Op<"extract_element",
 }
 
 //===----------------------------------------------------------------------===//
-// InlinedCallOp
+// ExecuteRegionOp
 //===----------------------------------------------------------------------===//
 
-def InlinedCallOp : Std_Op<"inlined_call"> {
-  let summary = "inlined_call operation";
+def ExecuteRegionOp : Std_Op<"execute_region"> {
+  let summary = "execute_region operation";
   let description = [{
-      The inlined_call operation executes the region held exactly once with
+      The execute_region operation executes the region held exactly once with
       control returning to right after the op. The op cannot have any operands,
       nor does its region have any arguments. All SSA values that dominate the
       op can be accessed inside. Its region's blocks can have terminators the
       same way as MLIR functions (FuncOp) can. Control from any return ops
-      from the top level of its region returns to right after the inlined_call
-      op. The results of the inlined_call op match 1:1 with the return values
+      from the top level of its region returns to right after the execute_region
+      op. The results of the execute_region op match 1:1 with the return values
       from its region's blocks;
 
       Ex:
 
       loop.for %i = 0 to 128 {
-        %y = std.inlined_call -> i32 {
+        %y = std.execute_region -> i32 {
           %x = load %A[%i] : memref<128xi32>
           return %x : i32
         }
@@ -1075,8 +1075,6 @@ def InlinedCallOp : Std_Op<"inlined_call"> {
 
   let verifier = ?;
 
-  // TODO: Single block inlined_call ops can be readily inlined irrespective of
-  // which op is a parent. Add a fold for this.
   // TODO: If the parent is a Func op (which would be the case if all
   // other ops are from the std dialect), the inliner could be used to inline.
   let hasCanonicalizer = 0;

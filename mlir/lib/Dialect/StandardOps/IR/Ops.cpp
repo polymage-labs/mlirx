@@ -1449,24 +1449,23 @@ OpFoldResult IndexCastOp::fold(ArrayRef<Attribute> cstOperands) {
   return {};
 }
 
-
 //===----------------------------------------------------------------------===//
-// InlinedCallOp
+// ExecuteRegionOp
 //===----------------------------------------------------------------------===//
 
 //
-// (ssa-id `=`)? `inlined_call` `->` function-result-type `{`
+// (ssa-id `=`)? `execute_region` `->` function-result-type `{`
 //    block+
 // `}`
 //
 // Ex:
-//    std.inlined_call -> i32 {
+//    std.execute_region -> i32 {
 //      %idx = load %rI[%i] : memref<128xi32>
 //      return %idx : i32
 //    }
 //
-static ParseResult parseInlinedCallOp(OpAsmParser &parser,
-                                      OperationState &result) {
+static ParseResult parseExecuteRegionOp(OpAsmParser &parser,
+                                        OperationState &result) {
   if (parser.parseOptionalArrowTypeList(result.types))
     return failure();
 
@@ -1483,8 +1482,8 @@ static ParseResult parseInlinedCallOp(OpAsmParser &parser,
   return success();
 }
 
-static void print(OpAsmPrinter &p, InlinedCallOp op) {
-  p << InlinedCallOp::getOperationName();
+static void print(OpAsmPrinter &p, ExecuteRegionOp op) {
+  p << ExecuteRegionOp::getOperationName();
   if (op.getNumResults() > 0)
     p << " -> " << op.getResultTypes();
 
