@@ -31,6 +31,8 @@ $ mlir-opt -hopt -hopt-vect -hopt-copy -hopt-unroll -hopt-scalrep benchmark/dgem
 
 **-hopt-unroll**: Enable unroll-and-jam and unroll.
 
+**-hopt-scalrep**: Perform scalar replacement.
+
 Any combination of these could be used. The only optimization step not included
 here is of loop tiling: as such, we start from an already tiled loop nest in
 dgemm-tiled-benchmark.mlir (albeit with no other optimizations on it).
