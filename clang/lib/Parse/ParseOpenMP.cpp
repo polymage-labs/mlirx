@@ -1843,6 +1843,7 @@ Parser::DeclGroupPtrTy Parser::ParseOpenMPDeclarativeDirectiveWithExtDecl(
   case OMPD_taskgroup:
   case OMPD_flush:
   case OMPD_depobj:
+  case OMPD_scan:
   case OMPD_for:
   case OMPD_for_simd:
   case OMPD_sections:
@@ -2066,6 +2067,7 @@ Parser::ParseOpenMPDeclarativeOrExecutableDirective(ParsedStmtContext StmtCtx) {
   }
   case OMPD_flush:
   case OMPD_depobj:
+  case OMPD_scan:
   case OMPD_taskyield:
   case OMPD_barrier:
   case OMPD_taskwait:
@@ -2287,12 +2289,14 @@ bool Parser::ParseOpenMPSimpleVarList(
     NoIdentIsFound = false;
 
     if (AllowScopeSpecifier && getLangOpts().CPlusPlus &&
-        ParseOptionalCXXScopeSpecifier(SS, nullptr, false)) {
+        ParseOptionalCXXScopeSpecifier(SS, /*ObjectType=*/nullptr,
+                                       /*ObjectHadErrors=*/false, false)) {
       IsCorrect = false;
       SkipUntil(tok::comma, tok::r_paren, tok::annot_pragma_openmp_end,
                 StopBeforeMatch);
-    } else if (ParseUnqualifiedId(SS, false, false, false, false, nullptr,
-                                  nullptr, Name)) {
+    } else if (ParseUnqualifiedId(SS, /*ObjectType=*/nullptr,
+                                  /*ObjectHadErrors=*/false, false, false,
+                                  false, false, nullptr, Name)) {
       IsCorrect = false;
       SkipUntil(tok::comma, tok::r_paren, tok::annot_pragma_openmp_end,
                 StopBeforeMatch);
@@ -2340,7 +2344,7 @@ bool Parser::ParseOpenMPSimpleVarList(
 ///       from-clause | is_device_ptr-clause | task_reduction-clause |
 ///       in_reduction-clause | allocator-clause | allocate-clause |
 ///       acq_rel-clause | acquire-clause | release-clause | relaxed-clause |
-///       depobj-clause | destroy-clause
+///       depobj-clause | destroy-clause | detach-clause | inclusive-clause
 ///
 OMPClause *Parser::ParseOpenMPClause(OpenMPDirectiveKind DKind,
                                      OpenMPClauseKind CKind, bool FirstClause) {
@@ -2363,7 +2367,6 @@ OMPClause *Parser::ParseOpenMPClause(OpenMPDirectiveKind DKind,
   case OMPC_simdlen:
   case OMPC_collapse:
   case OMPC_ordered:
-  case OMPC_device:
   case OMPC_num_teams:
   case OMPC_thread_limit:
   case OMPC_priority:
@@ -2372,14 +2375,13 @@ OMPClause *Parser::ParseOpenMPClause(OpenMPDirectiveKind DKind,
   case OMPC_hint:
   case OMPC_allocator:
   case OMPC_depobj:
+  case OMPC_detach:
     // OpenMP [2.5, Restrictions]
     //  At most one num_threads clause can appear on the directive.
     // OpenMP [2.8.1, simd construct, Restrictions]
     //  Only one safelen  clause can appear on a simd directive.
     //  Only one simdlen  clause can appear on a simd directive.
     //  Only one collapse clause can appear on a simd directive.
-    // OpenMP [2.9.1, target data construct, Restrictions]
-    //  At most one device clause can appear on the directive.
     // OpenMP [2.11.1, task Construct, Restrictions]
     //  At most one if clause can appear on the directive.
     //  At most one final clause can appear on the directive.
@@ -2394,6 +2396,8 @@ OMPClause *Parser::ParseOpenMPClause(OpenMPDirectiveKind DKind,
     // At most one num_tasks clause can appear on the directive.
     // OpenMP [2.11.3, allocate Directive, Restrictions]
     // At most one allocator clause can appear on the directive.
+    // OpenMP 5.0, 2.10.1 task Construct, Restrictions.
+    // At most one detach clause can appear on the directive.
     if (!FirstClause) {
       Diag(Tok, diag::err_omp_more_one_clause)
           << getOpenMPDirectiveName(DKind) << getOpenMPClauseName(CKind) << 0;
@@ -2425,6 +2429,7 @@ OMPClause *Parser::ParseOpenMPClause(OpenMPDirectiveKind DKind,
 
     Clause = ParseOpenMPSimpleClause(CKind, WrongDirective);
     break;
+  case OMPC_device:
   case OMPC_schedule:
   case OMPC_dist_schedule:
   case OMPC_defaultmap:
@@ -2432,6 +2437,8 @@ OMPClause *Parser::ParseOpenMPClause(OpenMPDirectiveKind DKind,
     //  Only one schedule clause can appear on a loop directive.
     // OpenMP 4.5 [2.10.4, Restrictions, p. 106]
     //  At most one defaultmap clause can appear on the directive.
+    // OpenMP 5.0 [2.12.5, target construct, Restrictions]
+    //  At most one device clause can appear on the directive.
     if ((getLangOpts().OpenMP < 50 || CKind != OMPC_defaultmap) &&
         !FirstClause) {
       Diag(Tok, diag::err_omp_more_one_clause)
@@ -2440,7 +2447,7 @@ OMPClause *Parser::ParseOpenMPClause(OpenMPDirectiveKind DKind,
     }
     LLVM_FALLTHROUGH;
   case OMPC_if:
-    Clause = ParseOpenMPSingleExprWithArgClause(CKind, WrongDirective);
+    Clause = ParseOpenMPSingleExprWithArgClause(DKind, CKind, WrongDirective);
     break;
   case OMPC_nowait:
   case OMPC_untied:
@@ -2506,6 +2513,7 @@ OMPClause *Parser::ParseOpenMPClause(OpenMPDirectiveKind DKind,
   case OMPC_is_device_ptr:
   case OMPC_allocate:
   case OMPC_nontemporal:
+  case OMPC_inclusive:
     Clause = ParseOpenMPVarListClause(DKind, CKind, WrongDirective);
     break;
   case OMPC_device_type:
@@ -2552,7 +2560,8 @@ ExprResult Parser::ParseOpenMPParensExpr(StringRef ClauseName,
 
 /// Parsing of OpenMP clauses with single expressions like 'final',
 /// 'collapse', 'safelen', 'num_threads', 'simdlen', 'num_teams',
-/// 'thread_limit', 'simdlen', 'priority', 'grainsize', 'num_tasks' or 'hint'.
+/// 'thread_limit', 'simdlen', 'priority', 'grainsize', 'num_tasks', 'hint' or
+/// 'detach'.
 ///
 ///    final-clause:
 ///      'final' '(' expression ')'
@@ -2583,6 +2592,9 @@ ExprResult Parser::ParseOpenMPParensExpr(StringRef ClauseName,
 ///
 ///    allocator-clause:
 ///      'allocator' '(' expression ')'
+///
+///    detach-clause:
+///      'detach' '(' event-handler-expression ')'
 ///
 OMPClause *Parser::ParseOpenMPSingleExprClause(OpenMPClauseKind Kind,
                                                bool ParseOnly) {
@@ -2670,7 +2682,11 @@ OMPClause *Parser::ParseOpenMPClause(OpenMPClauseKind Kind, bool ParseOnly) {
 ///    defaultmap:
 ///      'defaultmap' '(' modifier ':' kind ')'
 ///
-OMPClause *Parser::ParseOpenMPSingleExprWithArgClause(OpenMPClauseKind Kind,
+///    device-clause:
+///      'device' '(' [ device-modifier ':' ] expression ')'
+///
+OMPClause *Parser::ParseOpenMPSingleExprWithArgClause(OpenMPDirectiveKind DKind,
+                                                      OpenMPClauseKind Kind,
                                                       bool ParseOnly) {
   SourceLocation Loc = ConsumeToken();
   SourceLocation DelimLoc;
@@ -2764,6 +2780,21 @@ OMPClause *Parser::ParseOpenMPSingleExprWithArgClause(OpenMPClauseKind Kind,
     if (Tok.isNot(tok::r_paren) && Tok.isNot(tok::comma) &&
         Tok.isNot(tok::annot_pragma_openmp_end))
       ConsumeAnyToken();
+  } else if (Kind == OMPC_device) {
+    // Only target executable directives support extended device construct.
+    if (isOpenMPTargetExecutionDirective(DKind) && getLangOpts().OpenMP >= 50 &&
+        NextToken().is(tok::colon)) {
+      // Parse optional <device modifier> ':'
+      Arg.push_back(getOpenMPSimpleClauseType(
+          Kind, Tok.isAnnotation() ? "" : PP.getSpelling(Tok)));
+      KLoc.push_back(Tok.getLocation());
+      ConsumeAnyToken();
+      // Parse ':'
+      ConsumeAnyToken();
+    } else {
+      Arg.push_back(OMPC_DEVICE_unknown);
+      KLoc.emplace_back();
+    }
   } else {
     assert(Kind == OMPC_if);
     KLoc.push_back(Tok.getLocation());
@@ -2786,7 +2817,7 @@ OMPClause *Parser::ParseOpenMPSingleExprWithArgClause(OpenMPClauseKind Kind,
 
   bool NeedAnExpression = (Kind == OMPC_schedule && DelimLoc.isValid()) ||
                           (Kind == OMPC_dist_schedule && DelimLoc.isValid()) ||
-                          Kind == OMPC_if;
+                          Kind == OMPC_if || Kind == OMPC_device;
   if (NeedAnExpression) {
     SourceLocation ELoc = Tok.getLocation();
     ExprResult LHS(ParseCastExpression(AnyCastExpr, false, NotTypeCast));
@@ -2848,11 +2879,12 @@ static bool ParseReductionId(Parser &P, CXXScopeSpec &ReductionIdScopeSpec,
       return false;
     }
   }
-  return P.ParseUnqualifiedId(ReductionIdScopeSpec, /*EnteringContext*/ false,
-                              /*AllowDestructorName*/ false,
-                              /*AllowConstructorName*/ false,
-                              /*AllowDeductionGuide*/ false,
-                              nullptr, nullptr, ReductionId);
+  return P.ParseUnqualifiedId(
+      ReductionIdScopeSpec, /*ObjectType=*/nullptr,
+      /*ObjectHadErrors=*/false, /*EnteringContext*/ false,
+      /*AllowDestructorName*/ false,
+      /*AllowConstructorName*/ false,
+      /*AllowDeductionGuide*/ false, nullptr, ReductionId);
 }
 
 /// Checks if the token is a valid map-type-modifier.
@@ -2880,6 +2912,7 @@ bool Parser::parseMapperModifier(OpenMPVarListDataTy &Data) {
   if (getLangOpts().CPlusPlus)
     ParseOptionalCXXScopeSpecifier(Data.ReductionOrMapperIdScopeSpec,
                                    /*ObjectType=*/nullptr,
+                                   /*ObjectHadErrors=*/false,
                                    /*EnteringContext=*/false);
   if (Tok.isNot(tok::identifier) && Tok.isNot(tok::kw_default)) {
     Diag(Tok.getLocation(), diag::err_omp_mapper_illegal_identifier);
@@ -2985,6 +3018,7 @@ bool Parser::ParseOpenMPVarList(OpenMPDirectiveKind DKind,
     if (getLangOpts().CPlusPlus)
       ParseOptionalCXXScopeSpecifier(Data.ReductionOrMapperIdScopeSpec,
                                      /*ObjectType=*/nullptr,
+                                     /*ObjectHadErrors=*/false,
                                      /*EnteringContext=*/false);
     InvalidReductionId = ParseReductionId(
         *this, Data.ReductionOrMapperIdScopeSpec, UnqualifiedReductionId);
@@ -3204,8 +3238,8 @@ bool Parser::ParseOpenMPVarList(OpenMPDirectiveKind DKind,
 }
 
 /// Parsing of OpenMP clause 'private', 'firstprivate', 'lastprivate',
-/// 'shared', 'copyin', 'copyprivate', 'flush', 'reduction', 'task_reduction' or
-/// 'in_reduction'.
+/// 'shared', 'copyin', 'copyprivate', 'flush', 'reduction', 'task_reduction',
+/// 'in_reduction', 'nontemporal' or 'inclusive'.
 ///
 ///    private-clause:
 ///       'private' '(' list ')'
@@ -3245,6 +3279,10 @@ bool Parser::ParseOpenMPVarList(OpenMPDirectiveKind DKind,
 ///       'is_device_ptr' '(' list ')'
 ///    allocate-clause:
 ///       'allocate' '(' [ allocator ':' ] list ')'
+///    nontemporal-clause:
+///       'nontemporal' '(' list ')'
+///    inclusive-clause:
+///       'inclusive' '(' list ')'
 ///
 /// For 'linear' clause linear-list may have the following forms:
 ///  list

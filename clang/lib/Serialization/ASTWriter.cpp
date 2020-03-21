@@ -4317,7 +4317,7 @@ ASTFileSignature ASTWriter::WriteAST(Sema &SemaRef,
   WritingAST = false;
   if (ShouldCacheASTInMemory) {
     // Construct MemoryBuffer and update buffer manager.
-    ModuleCache.addFinalPCM(OutputFile,
+    ModuleCache.addBuiltPCM(OutputFile,
                             llvm::MemoryBuffer::getMemBufferCopy(
                                 StringRef(Buffer.begin(), Buffer.size())));
   }
@@ -6096,6 +6096,11 @@ void OMPClauseWriter::VisitOMPCollapseClause(OMPCollapseClause *C) {
   Record.AddSourceLocation(C->getLParenLoc());
 }
 
+void OMPClauseWriter::VisitOMPDetachClause(OMPDetachClause *C) {
+  Record.AddStmt(C->getEventHandler());
+  Record.AddSourceLocation(C->getLParenLoc());
+}
+
 void OMPClauseWriter::VisitOMPDefaultClause(OMPDefaultClause *C) {
   Record.push_back(unsigned(C->getDefaultKind()));
   Record.AddSourceLocation(C->getLParenLoc());
@@ -6371,7 +6376,9 @@ void OMPClauseWriter::VisitOMPDependClause(OMPDependClause *C) {
 
 void OMPClauseWriter::VisitOMPDeviceClause(OMPDeviceClause *C) {
   VisitOMPClauseWithPreInit(C);
+  Record.writeEnum(C->getModifier());
   Record.AddStmt(C->getDevice());
+  Record.AddSourceLocation(C->getModifierLoc());
   Record.AddSourceLocation(C->getLParenLoc());
 }
 
@@ -6584,6 +6591,13 @@ void OMPClauseWriter::VisitOMPNontemporalClause(OMPNontemporalClause *C) {
     Record.AddStmt(VE);
   for (auto *E : C->private_refs())
     Record.AddStmt(E);
+}
+
+void OMPClauseWriter::VisitOMPInclusiveClause(OMPInclusiveClause *C) {
+  Record.push_back(C->varlist_size());
+  Record.AddSourceLocation(C->getLParenLoc());
+  for (auto *VE : C->varlists())
+    Record.AddStmt(VE);
 }
 
 void OMPClauseWriter::VisitOMPOrderClause(OMPOrderClause *C) {

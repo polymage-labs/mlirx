@@ -11,18 +11,22 @@
 
 include "mlir/IR/OpBase.td"
 include "mlir/IR/OpAsmInterface.td"
-include "mlir/IR/SideEffects.td"
-include "mlir/Analysis/ControlFlowInterfaces.td"
-include "mlir/Analysis/CallInterfaces.td"
-include "mlir/Analysis/InferTypeOpInterface.td"
+include "mlir/Interfaces/SideEffects.td"
+include "mlir/Interfaces/CallInterfaces.td"
+include "mlir/Interfaces/ControlFlowInterfaces.td"
+include "mlir/Interfaces/InferTypeOpInterface.td"
+include "mlir/Interfaces/SideEffects.td"
 
-def TEST_Dialect : Dialect {
+def Test_Dialect : Dialect {
   let name = "test";
   let cppNamespace = "";
+  let hasOperationAttrVerify = 1;
+  let hasRegionArgAttrVerify = 1;
+  let hasRegionResultAttrVerify = 1;
 }
 
 class TEST_Op<string mnemonic, list<OpTrait> traits = []> :
-    Op<TEST_Dialect, mnemonic, traits>;
+    Op<Test_Dialect, mnemonic, traits>;
 
 //===----------------------------------------------------------------------===//
 // Test Types
@@ -32,7 +36,8 @@ def IntTypesOp : TEST_Op<"int_types"> {
   let results = (outs
     AnyI16:$any_i16,
     SI32:$si32,
-    UI64:$ui64
+    UI64:$ui64,
+    AnyInteger:$any_int
   );
 }
 

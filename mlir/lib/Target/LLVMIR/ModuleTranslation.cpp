@@ -94,10 +94,13 @@ llvm::Constant *ModuleTranslation::getLLVMConstant(llvm::Type *llvmType,
   }
   if (auto intAttr = attr.dyn_cast<IntegerAttr>())
     return llvm::ConstantInt::get(llvmType, intAttr.getValue());
+  if (auto boolAttr = attr.dyn_cast<BoolAttr>())
+    return llvm::ConstantInt::get(llvmType, boolAttr.getValue());
   if (auto floatAttr = attr.dyn_cast<FloatAttr>())
     return llvm::ConstantFP::get(llvmType, floatAttr.getValue());
   if (auto funcAttr = attr.dyn_cast<FlatSymbolRefAttr>())
-    return functionMapping.lookup(funcAttr.getValue());
+    return llvm::ConstantExpr::getBitCast(
+        functionMapping.lookup(funcAttr.getValue()), llvmType);
   if (auto splatAttr = attr.dyn_cast<SplatElementsAttr>()) {
     auto *sequentialType = cast<llvm::SequentialType>(llvmType);
     auto elementType = sequentialType->getElementType();
@@ -113,7 +116,8 @@ llvm::Constant *ModuleTranslation::getLLVMConstant(llvm::Type *llvmType,
     if (!child)
       return nullptr;
     if (llvmType->isVectorTy())
-      return llvm::ConstantVector::getSplat(numElements, child);
+      return llvm::ConstantVector::getSplat(
+          llvm::ElementCount(numElements, /*Scalable=*/false), child);
     if (llvmType->isArrayTy()) {
       auto arrayType = llvm::ArrayType::get(elementType, numElements);
       SmallVector<llvm::Constant *, 8> constants(numElements, child);
@@ -350,6 +354,7 @@ LogicalResult ModuleTranslation::convertOperation(Operation &opInst,
       if (auto constOperand = dyn_cast<llvm::Constant>(operand))
         lpi->addClause(constOperand);
     }
+    valueMapping[lpOp.getResult()] = lpi;
     return success();
   }
 
@@ -467,7 +472,8 @@ LogicalResult ModuleTranslation::convertGlobals() {
 
     auto linkage = convertLinkageToLLVM(op.linkage());
     bool anyExternalLinkage =
-        (linkage == llvm::GlobalVariable::ExternalLinkage ||
+        ((linkage == llvm::GlobalVariable::ExternalLinkage &&
+          isa<llvm::UndefValue>(cst)) ||
          linkage == llvm::GlobalVariable::ExternalWeakLinkage);
     auto addrSpace = op.addr_space().getLimitedValue();
     auto *var = new llvm::GlobalVariable(
@@ -581,6 +587,14 @@ LogicalResult ModuleTranslation::convertOneFunction(LLVMFuncOp func) {
     argIdx++;
   }
 
+  // Check the personality and set it.
+  if (func.personality().hasValue()) {
+    llvm::Type *ty = llvm::Type::getInt8PtrTy(llvmFunc->getContext());
+    if (llvm::Constant *pfunc =
+            getLLVMConstant(ty, func.personalityAttr(), func.getLoc()))
+      llvmFunc->setPersonalityFn(pfunc);
+  }
+
   // First, create all blocks so we can jump to them.
   llvm::LLVMContext &llvmContext = llvmFunc->getContext();
   for (auto &bb : func) {
@@ -642,8 +656,10 @@ SmallVector<llvm::Value *, 8>
 ModuleTranslation::lookupValues(ValueRange values) {
   SmallVector<llvm::Value *, 8> remapped;
   remapped.reserve(values.size());
-  for (Value v : values)
+  for (Value v : values) {
+    assert(valueMapping.count(v) && "referencing undefined value");
     remapped.push_back(valueMapping.lookup(v));
+  }
   return remapped;
 }
 

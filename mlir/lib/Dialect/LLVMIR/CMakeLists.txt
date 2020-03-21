@@ -1,3 +1,5 @@
+add_subdirectory(Transforms)
+
 add_mlir_dialect_library(MLIRLLVMIR
   IR/LLVMDialect.cpp
 
@@ -5,7 +7,6 @@ add_mlir_dialect_library(MLIRLLVMIR
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/LLVMIR
 
   DEPENDS
-  MLIRControlFlowInterfacesIncGen
   MLIRLLVMOpsIncGen
   MLIRLLVMConversionsIncGen
   )
@@ -15,10 +16,32 @@ target_link_libraries(MLIRLLVMIR
   LLVMCore
   LLVMSupport
   LLVMFrontendOpenMP
-  MLIRAnalysis
+  MLIRCallInterfaces
+  MLIRControlFlowInterfaces
   MLIROpenMP
   MLIRIR
+  MLIRSideEffects
   MLIRSupport
+  )
+
+add_mlir_dialect_library(MLIRLLVMAVX512
+  IR/LLVMAVX512Dialect.cpp
+
+  ADDITIONAL_HEADER_DIRS
+  ${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/LLVMIR
+
+  DEPENDS
+  MLIRLLVMAVX512IncGen
+  MLIRLLVMAVX512ConversionsIncGen
+  )
+target_link_libraries(MLIRLLVMAVX512
+  PUBLIC
+  LLVMAsmParser
+  MLIRIR
+  MLIRLLVMIR
+  MLIRSideEffects
+  LLVMSupport
+  LLVMCore
   )
 
 add_mlir_dialect_library(MLIRNVVMIR
@@ -36,6 +59,7 @@ target_link_libraries(MLIRNVVMIR
   LLVMAsmParser
   MLIRIR
   MLIRLLVMIR
+  MLIRSideEffects
   LLVMSupport
   LLVMCore
   )
@@ -56,4 +80,5 @@ target_link_libraries(MLIRROCDLIR
   LLVMCore
   LLVMSupport
   MLIRIR
+  MLIRSideEffects
   )

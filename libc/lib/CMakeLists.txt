@@ -2,12 +2,16 @@
 add_entrypoint_library(
   llvmlibc
   DEPENDS
+    # assert.h entrypoints
+    __assert_fail
+
     # errno.h entrypoints
     __errno_location
 
     # string.h entrypoints
     strcpy
     strcat
+    memcpy
 
     # sys/mman.h entrypoints
     mmap
@@ -15,6 +19,7 @@ add_entrypoint_library(
 
     # signal.h entrypoints
     raise
+    sigaction
     sigaddset
     sigemptyset
     sigprocmask
@@ -22,6 +27,13 @@ add_entrypoint_library(
     # stdlib.h entrypoints
     _Exit
     abort
+
+    # threads.h entrypoints
+    mtx_init
+    mtx_lock
+    mtx_unlock
+    thrd_create
+    thrd_join
 )
 
 add_entrypoint_library(

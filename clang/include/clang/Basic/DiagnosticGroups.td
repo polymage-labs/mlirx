@@ -99,6 +99,7 @@ def FloatConversion :
   DiagGroup<"float-conversion", [FloatOverflowConversion,
                                  FloatZeroConversion]>;
 
+def FrameAddress : DiagGroup<"frame-address">;
 def DoublePromotion : DiagGroup<"double-promotion">;
 def EnumTooLarge : DiagGroup<"enum-too-large">;
 def UnsupportedNan : DiagGroup<"unsupported-nan">;
@@ -872,6 +873,7 @@ def Most : DiagGroup<"most", [
     DeleteNonVirtualDtor,
     Format,
     ForLoopAnalysis,
+    FrameAddress,
     Implicit,
     InfiniteRecursion,
     IntInBoolContext,
@@ -1088,9 +1090,8 @@ def ObjCSignedCharBool : DiagGroup<"objc-signed-char-bool",
 
 // Inline ASM warnings.
 def ASMOperandWidths : DiagGroup<"asm-operand-widths">;
-def ASMIgnoredQualifier : DiagGroup<"asm-ignored-qualifier">;
 def ASM : DiagGroup<"asm", [
-    ASMOperandWidths, ASMIgnoredQualifier
+    ASMOperandWidths
   ]>;
 
 // OpenMP warnings.

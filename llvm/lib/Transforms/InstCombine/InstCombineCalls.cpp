@@ -48,6 +48,7 @@
 #include "llvm/IR/IntrinsicsNVPTX.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/IR/IntrinsicsPowerPC.h"
+#include "llvm/IR/KnowledgeRetention.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/PatternMatch.h"
@@ -295,78 +296,138 @@ static Value *simplifyX86immShift(const IntrinsicInst &II,
                                   InstCombiner::BuilderTy &Builder) {
   bool LogicalShift = false;
   bool ShiftLeft = false;
+  bool IsImm = false;
 
   switch (II.getIntrinsicID()) {
   default: llvm_unreachable("Unexpected intrinsic!");
-  case Intrinsic::x86_sse2_psra_d:
-  case Intrinsic::x86_sse2_psra_w:
   case Intrinsic::x86_sse2_psrai_d:
   case Intrinsic::x86_sse2_psrai_w:
-  case Intrinsic::x86_avx2_psra_d:
-  case Intrinsic::x86_avx2_psra_w:
   case Intrinsic::x86_avx2_psrai_d:
   case Intrinsic::x86_avx2_psrai_w:
-  case Intrinsic::x86_avx512_psra_q_128:
   case Intrinsic::x86_avx512_psrai_q_128:
-  case Intrinsic::x86_avx512_psra_q_256:
   case Intrinsic::x86_avx512_psrai_q_256:
-  case Intrinsic::x86_avx512_psra_d_512:
-  case Intrinsic::x86_avx512_psra_q_512:
-  case Intrinsic::x86_avx512_psra_w_512:
   case Intrinsic::x86_avx512_psrai_d_512:
   case Intrinsic::x86_avx512_psrai_q_512:
   case Intrinsic::x86_avx512_psrai_w_512:
-    LogicalShift = false; ShiftLeft = false;
+    IsImm = true;
+    LLVM_FALLTHROUGH;
+  case Intrinsic::x86_sse2_psra_d:
+  case Intrinsic::x86_sse2_psra_w:
+  case Intrinsic::x86_avx2_psra_d:
+  case Intrinsic::x86_avx2_psra_w:
+  case Intrinsic::x86_avx512_psra_q_128:
+  case Intrinsic::x86_avx512_psra_q_256:
+  case Intrinsic::x86_avx512_psra_d_512:
+  case Intrinsic::x86_avx512_psra_q_512:
+  case Intrinsic::x86_avx512_psra_w_512:
+    LogicalShift = false;
+    ShiftLeft = false;
     break;
-  case Intrinsic::x86_sse2_psrl_d:
-  case Intrinsic::x86_sse2_psrl_q:
-  case Intrinsic::x86_sse2_psrl_w:
   case Intrinsic::x86_sse2_psrli_d:
   case Intrinsic::x86_sse2_psrli_q:
   case Intrinsic::x86_sse2_psrli_w:
-  case Intrinsic::x86_avx2_psrl_d:
-  case Intrinsic::x86_avx2_psrl_q:
-  case Intrinsic::x86_avx2_psrl_w:
   case Intrinsic::x86_avx2_psrli_d:
   case Intrinsic::x86_avx2_psrli_q:
   case Intrinsic::x86_avx2_psrli_w:
-  case Intrinsic::x86_avx512_psrl_d_512:
-  case Intrinsic::x86_avx512_psrl_q_512:
-  case Intrinsic::x86_avx512_psrl_w_512:
   case Intrinsic::x86_avx512_psrli_d_512:
   case Intrinsic::x86_avx512_psrli_q_512:
   case Intrinsic::x86_avx512_psrli_w_512:
-    LogicalShift = true; ShiftLeft = false;
+    IsImm = true;
+    LLVM_FALLTHROUGH;
+  case Intrinsic::x86_sse2_psrl_d:
+  case Intrinsic::x86_sse2_psrl_q:
+  case Intrinsic::x86_sse2_psrl_w:
+  case Intrinsic::x86_avx2_psrl_d:
+  case Intrinsic::x86_avx2_psrl_q:
+  case Intrinsic::x86_avx2_psrl_w:
+  case Intrinsic::x86_avx512_psrl_d_512:
+  case Intrinsic::x86_avx512_psrl_q_512:
+  case Intrinsic::x86_avx512_psrl_w_512:
+    LogicalShift = true;
+    ShiftLeft = false;
     break;
-  case Intrinsic::x86_sse2_psll_d:
-  case Intrinsic::x86_sse2_psll_q:
-  case Intrinsic::x86_sse2_psll_w:
   case Intrinsic::x86_sse2_pslli_d:
   case Intrinsic::x86_sse2_pslli_q:
   case Intrinsic::x86_sse2_pslli_w:
-  case Intrinsic::x86_avx2_psll_d:
-  case Intrinsic::x86_avx2_psll_q:
-  case Intrinsic::x86_avx2_psll_w:
   case Intrinsic::x86_avx2_pslli_d:
   case Intrinsic::x86_avx2_pslli_q:
   case Intrinsic::x86_avx2_pslli_w:
-  case Intrinsic::x86_avx512_psll_d_512:
-  case Intrinsic::x86_avx512_psll_q_512:
-  case Intrinsic::x86_avx512_psll_w_512:
   case Intrinsic::x86_avx512_pslli_d_512:
   case Intrinsic::x86_avx512_pslli_q_512:
   case Intrinsic::x86_avx512_pslli_w_512:
-    LogicalShift = true; ShiftLeft = true;
+    IsImm = true;
+    LLVM_FALLTHROUGH;
+  case Intrinsic::x86_sse2_psll_d:
+  case Intrinsic::x86_sse2_psll_q:
+  case Intrinsic::x86_sse2_psll_w:
+  case Intrinsic::x86_avx2_psll_d:
+  case Intrinsic::x86_avx2_psll_q:
+  case Intrinsic::x86_avx2_psll_w:
+  case Intrinsic::x86_avx512_psll_d_512:
+  case Intrinsic::x86_avx512_psll_q_512:
+  case Intrinsic::x86_avx512_psll_w_512:
+    LogicalShift = true;
+    ShiftLeft = true;
     break;
   }
   assert((LogicalShift || !ShiftLeft) && "Only logical shifts can shift left");
 
-  // Simplify if count is constant.
-  auto Arg1 = II.getArgOperand(1);
-  auto CAZ = dyn_cast<ConstantAggregateZero>(Arg1);
-  auto CDV = dyn_cast<ConstantDataVector>(Arg1);
-  auto CInt = dyn_cast<ConstantInt>(Arg1);
-  if (!CAZ && !CDV && !CInt)
+  auto Vec = II.getArgOperand(0);
+  auto Amt = II.getArgOperand(1);
+  auto VT = cast<VectorType>(Vec->getType());
+  auto SVT = VT->getElementType();
+  auto AmtVT = Amt->getType();
+  unsigned VWidth = VT->getNumElements();
+  unsigned BitWidth = SVT->getPrimitiveSizeInBits();
+
+  // If the shift amount is guaranteed to be in-range we can replace it with a
+  // generic shift. If its guaranteed to be out of range, logical shifts combine to
+  // zero and arithmetic shifts are clamped to (BitWidth - 1).
+  if (IsImm) {
+    assert(AmtVT ->isIntegerTy(32) &&
+           "Unexpected shift-by-immediate type");
+    KnownBits KnownAmtBits =
+        llvm::computeKnownBits(Amt, II.getModule()->getDataLayout());
+    if (KnownAmtBits.getMaxValue().ult(BitWidth)) {
+      Amt = Builder.CreateZExtOrTrunc(Amt, SVT);
+      Amt = Builder.CreateVectorSplat(VWidth, Amt);
+      return (LogicalShift ? (ShiftLeft ? Builder.CreateShl(Vec, Amt)
+                                        : Builder.CreateLShr(Vec, Amt))
+                           : Builder.CreateAShr(Vec, Amt));
+    }
+    if (KnownAmtBits.getMinValue().uge(BitWidth)) {
+      if (LogicalShift)
+        return ConstantAggregateZero::get(VT);
+      Amt = ConstantInt::get(SVT, BitWidth - 1);
+      return Builder.CreateAShr(Vec, Builder.CreateVectorSplat(VWidth, Amt));
+    }
+  } else {
+    // Ensure the first element has an in-range value and the rest of the
+    // elements in the bottom 64 bits are zero.
+    assert(AmtVT->isVectorTy() && AmtVT->getPrimitiveSizeInBits() == 128 &&
+           cast<VectorType>(AmtVT)->getElementType() == SVT &&
+           "Unexpected shift-by-scalar type");
+    unsigned NumAmtElts = cast<VectorType>(AmtVT)->getNumElements();
+    APInt DemandedLower = APInt::getOneBitSet(NumAmtElts, 0);
+    APInt DemandedUpper = APInt::getBitsSet(NumAmtElts, 1, NumAmtElts / 2);
+    KnownBits KnownLowerBits = llvm::computeKnownBits(
+        Amt, DemandedLower, II.getModule()->getDataLayout());
+    KnownBits KnownUpperBits = llvm::computeKnownBits(
+        Amt, DemandedUpper, II.getModule()->getDataLayout());
+    if (KnownLowerBits.getMaxValue().ult(BitWidth) &&
+        (DemandedUpper.isNullValue() || KnownUpperBits.isZero())) {
+      SmallVector<uint32_t, 16> ZeroSplat(VWidth, 0);
+      Amt = Builder.CreateShuffleVector(Amt, Amt, ZeroSplat);
+      return (LogicalShift ? (ShiftLeft ? Builder.CreateShl(Vec, Amt)
+                                        : Builder.CreateLShr(Vec, Amt))
+                           : Builder.CreateAShr(Vec, Amt));
+    }
+  }
+
+  // Simplify if count is constant vector.
+  auto CAZ = dyn_cast<ConstantAggregateZero>(Amt);
+  auto CDV = dyn_cast<ConstantDataVector>(Amt);
+  if (!CAZ && !CDV)
     return nullptr;
 
   APInt Count(64, 0);
@@ -386,14 +447,6 @@ static Value *simplifyX86immShift(const IntrinsicInst &II,
       Count |= SubElt->getValue().zextOrTrunc(64);
     }
   }
-  else if (CInt)
-    Count = CInt->getValue();
-
-  auto Vec = II.getArgOperand(0);
-  auto VT = cast<VectorType>(Vec->getType());
-  auto SVT = VT->getElementType();
-  unsigned VWidth = VT->getNumElements();
-  unsigned BitWidth = SVT->getPrimitiveSizeInBits();
 
   // If shift-by-zero then just return the original value.
   if (Count.isNullValue())
@@ -471,16 +524,28 @@ static Value *simplifyX86varShift(const IntrinsicInst &II,
   }
   assert((LogicalShift || !ShiftLeft) && "Only logical shifts can shift left");
 
-  // Simplify if all shift amounts are constant/undef.
-  auto *CShift = dyn_cast<Constant>(II.getArgOperand(1));
-  if (!CShift)
-    return nullptr;
-
   auto Vec = II.getArgOperand(0);
+  auto Amt = II.getArgOperand(1);
   auto VT = cast<VectorType>(II.getType());
   auto SVT = VT->getVectorElementType();
   int NumElts = VT->getNumElements();
   int BitWidth = SVT->getIntegerBitWidth();
+
+  // If the shift amount is guaranteed to be in-range we can replace it with a
+  // generic shift.
+  APInt UpperBits =
+      APInt::getHighBitsSet(BitWidth, BitWidth - Log2_32(BitWidth));
+  if (llvm::MaskedValueIsZero(Amt, UpperBits,
+                              II.getModule()->getDataLayout())) {
+    return (LogicalShift ? (ShiftLeft ? Builder.CreateShl(Vec, Amt)
+                                      : Builder.CreateLShr(Vec, Amt))
+                         : Builder.CreateAShr(Vec, Amt));
+  }
+
+  // Simplify if all shift amounts are constant/undef.
+  auto *CShift = dyn_cast<Constant>(Amt);
+  if (!CShift)
+    return nullptr;
 
   // Collect each element's shift amount.
   // We also collect special cases: UNDEF = -1, OUT-OF-RANGE = BitWidth.
@@ -1787,8 +1852,11 @@ Instruction *InstCombiner::foldIntrinsicWithOverflowCommon(IntrinsicInst *II) {
 /// instructions. For normal calls, it allows visitCallBase to do the heavy
 /// lifting.
 Instruction *InstCombiner::visitCallInst(CallInst &CI) {
-  if (Value *V = SimplifyCall(&CI, SQ.getWithInstruction(&CI)))
-    return replaceInstUsesWith(CI, V);
+  // Don't try to simplify calls without uses. It will not do anything useful,
+  // but will result in the following folds being skipped.
+  if (!CI.use_empty())
+    if (Value *V = SimplifyCall(&CI, SQ.getWithInstruction(&CI)))
+      return replaceInstUsesWith(CI, V);
 
   if (isFreeCall(&CI, &TLI))
     return visitFree(CI);
@@ -1802,6 +1870,18 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
 
   IntrinsicInst *II = dyn_cast<IntrinsicInst>(&CI);
   if (!II) return visitCallBase(CI);
+
+  // For atomic unordered mem intrinsics if len is not a positive or
+  // not a multiple of element size then behavior is undefined.
+  if (auto *AMI = dyn_cast<AtomicMemIntrinsic>(II))
+    if (ConstantInt *NumBytes = dyn_cast<ConstantInt>(AMI->getLength()))
+      if (NumBytes->getSExtValue() < 0 ||
+          (NumBytes->getZExtValue() % AMI->getElementSizeInBytes() != 0)) {
+        CreateNonTerminatorUnreachable(AMI);
+        assert(AMI->getType()->isVoidTy() &&
+               "non void atomic unordered mem intrinsic");
+        return eraseInstFromFunction(*AMI);
+      }
 
   // Intrinsics cannot occur in an invoke or a callbr, so handle them here
   // instead of in visitCallBase.
@@ -4078,7 +4158,7 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
     // then this one is redundant, and should be removed.
     KnownBits Known(1);
     computeKnownBits(IIOperand, Known, 0, II);
-    if (Known.isAllOnes())
+    if (Known.isAllOnes() && isAssumeWithEmptyBundle(*II))
       return eraseInstFromFunction(*II);
 
     // Update the cache of affected values for this assumption (we might be
@@ -4507,6 +4587,10 @@ Instruction *InstCombiner::visitCallBase(CallBase &Call) {
     // the fallthrough check.
     if (I) return eraseInstFromFunction(*I);
   }
+
+  if (!Call.use_empty() && !Call.isMustTailCall())
+    if (Value *ReturnedArg = Call.getReturnedArgOperand())
+      return replaceInstUsesWith(Call, ReturnedArg);
 
   if (isAllocLikeFn(&Call, &TLI))
     return visitAllocSite(Call);

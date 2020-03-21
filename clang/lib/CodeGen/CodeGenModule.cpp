@@ -38,6 +38,7 @@
 #include "clang/Basic/CharInfo.h"
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/Diagnostic.h"
+#include "clang/Basic/FileManager.h"
 #include "clang/Basic/Module.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/TargetInfo.h"
@@ -659,6 +660,8 @@ void CodeGenModule::Release() {
     EmitCommandLineMetadata();
 
   EmitTargetMetadata();
+
+  EmitBackendOptionsMetadata(getCodeGenOpts());
 }
 
 void CodeGenModule::EmitOpenCLMetadata() {
@@ -676,6 +679,19 @@ void CodeGenModule::EmitOpenCLMetadata() {
       TheModule.getOrInsertNamedMetadata("opencl.ocl.version");
   llvm::LLVMContext &Ctx = TheModule.getContext();
   OCLVerMD->addOperand(llvm::MDNode::get(Ctx, OCLVerElts));
+}
+
+void CodeGenModule::EmitBackendOptionsMetadata(
+    const CodeGenOptions CodeGenOpts) {
+  switch (getTriple().getArch()) {
+  default:
+    break;
+  case llvm::Triple::riscv32:
+  case llvm::Triple::riscv64:
+    getModule().addModuleFlag(llvm::Module::Error, "SmallDataLimit",
+                              CodeGenOpts.SmallDataLimit);
+    break;
+  }
 }
 
 void CodeGenModule::UpdateCompletedType(const TagDecl *TD) {
@@ -1033,6 +1049,9 @@ static std::string getMangledNameImpl(const CodeGenModule &CGM, GlobalDecl GD,
     if (FD &&
         FD->getType()->castAs<FunctionType>()->getCallConv() == CC_X86RegCall) {
       Out << "__regcall3__" << II->getName();
+    } else if (FD && FD->hasAttr<CUDAGlobalAttr>() &&
+               GD.getKernelReferenceKind() == KernelReferenceKind::Stub) {
+      Out << "__device_stub__" << II->getName();
     } else {
       Out << II->getName();
     }
@@ -1120,11 +1139,25 @@ StringRef CodeGenModule::getMangledName(GlobalDecl GD) {
   const auto *ND = cast<NamedDecl>(GD.getDecl());
   std::string MangledName = getMangledNameImpl(*this, GD, ND);
 
-  // Adjust kernel stub mangling as we may need to be able to differentiate
-  // them from the kernel itself (e.g., for HIP).
-  if (auto *FD = dyn_cast<FunctionDecl>(GD.getDecl()))
-    if (!getLangOpts().CUDAIsDevice && FD->hasAttr<CUDAGlobalAttr>())
-      MangledName = getCUDARuntime().getDeviceStubName(MangledName);
+  // Ensure either we have different ABIs between host and device compilations,
+  // says host compilation following MSVC ABI but device compilation follows
+  // Itanium C++ ABI or, if they follow the same ABI, kernel names after
+  // mangling should be the same after name stubbing. The later checking is
+  // very important as the device kernel name being mangled in host-compilation
+  // is used to resolve the device binaries to be executed. Inconsistent naming
+  // result in undefined behavior. Even though we cannot check that naming
+  // directly between host- and device-compilations, the host- and
+  // device-mangling in host compilation could help catching certain ones.
+  assert(!isa<FunctionDecl>(ND) || !ND->hasAttr<CUDAGlobalAttr>() ||
+         getLangOpts().CUDAIsDevice ||
+         (getContext().getAuxTargetInfo() &&
+          (getContext().getAuxTargetInfo()->getCXXABI() !=
+           getContext().getTargetInfo().getCXXABI())) ||
+         getCUDARuntime().getDeviceSideName(ND) ==
+             getMangledNameImpl(
+                 *this,
+                 GD.getWithKernelReferenceKind(KernelReferenceKind::Kernel),
+                 ND));
 
   auto Result = Manglings.insert(std::make_pair(MangledName, GD));
   return MangledDeclNames[CanonicalGD] = Result.first->first();
@@ -3141,8 +3174,7 @@ llvm::Constant *CodeGenModule::GetOrCreateLLVMFunction(
       (void)OpenMPRuntime->emitDeclareVariant(GD, /*IsForDefinition=*/true);
 
     if (FD->isMultiVersion()) {
-      const auto *TA = FD->getAttr<TargetAttr>();
-      if (TA && TA->isDefaultVersion())
+      if (FD->hasAttr<TargetAttr>())
         UpdateMultiVersionNames(GD, FD);
       if (!IsForDefinition)
         return GetOrCreateMultiVersionResolver(GD, Ty, FD);
@@ -3934,6 +3966,8 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
       getLangOpts().CUDAIsDevice && D->hasAttr<HIPPinnedShadowAttr>();
   if (getLangOpts().CUDA &&
       (IsCUDASharedVar || IsCUDAShadowVar || IsHIPPinnedShadowVar))
+    Init = llvm::UndefValue::get(getTypes().ConvertType(ASTTy));
+  else if (D->hasAttr<LoaderUninitializedAttr>())
     Init = llvm::UndefValue::get(getTypes().ConvertType(ASTTy));
   else if (!InitExpr) {
     // This is a tentative definition; tentative definitions are

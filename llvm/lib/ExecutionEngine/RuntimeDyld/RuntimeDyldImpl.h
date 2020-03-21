@@ -191,13 +191,11 @@ public:
 
 class RelocationValueRef {
 public:
-  unsigned SectionID;
-  uint64_t Offset;
-  int64_t Addend;
-  const char *SymbolName;
+  unsigned SectionID = 0;
+  uint64_t Offset = 0;
+  int64_t Addend = 0;
+  const char *SymbolName = nullptr;
   bool IsStubThumb = false;
-  RelocationValueRef() : SectionID(0), Offset(0), Addend(0),
-                         SymbolName(nullptr) {}
 
   inline bool operator==(const RelocationValueRef &Other) const {
     return SectionID == Other.SectionID && Offset == Other.Offset &&
@@ -551,9 +549,11 @@ public:
 
   void resolveLocalRelocations();
 
-  static void finalizeAsync(std::unique_ptr<RuntimeDyldImpl> This,
-                            unique_function<void(Error)> OnEmitted,
-                            std::unique_ptr<MemoryBuffer> UnderlyingBuffer);
+  static void finalizeAsync(
+      std::unique_ptr<RuntimeDyldImpl> This,
+      unique_function<void(object::OwningBinary<object::ObjectFile>, Error)>
+          OnEmitted,
+      object::OwningBinary<object::ObjectFile> O);
 
   void reassignSectionAddress(unsigned SectionID, uint64_t Addr);
 

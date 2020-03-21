@@ -131,7 +131,7 @@ private:
       }
       if (CurrentToken->isOneOf(tok::r_paren, tok::r_square, tok::r_brace) ||
           (CurrentToken->isOneOf(tok::colon, tok::question) && InExprContext &&
-           Style.Language != FormatStyle::LK_Proto &&
+           !Style.isCSharp() && Style.Language != FormatStyle::LK_Proto &&
            Style.Language != FormatStyle::LK_TextProto))
         return false;
       // If a && or || is found and interpreted as a binary operator, this set
@@ -373,7 +373,7 @@ private:
     if (Tok.Previous && Tok.Previous->is(tok::identifier))
       return false;
 
-    // Chains [] in of `identifier[i][j][k]` are not attributes.
+    // Chains of [] in `identifier[i][j][k]` are not attributes.
     if (Tok.Previous && Tok.Previous->is(tok::r_square)) {
       auto *MatchingParen = Tok.Previous->MatchingParen;
       if (!MatchingParen || MatchingParen->is(TT_ArraySubscriptLSquare))
@@ -1013,12 +1013,13 @@ private:
           Style.Language == FormatStyle::LK_JavaScript)
         break;
       if (Style.isCSharp()) {
-        // `Type? name;` and `Type? name =` can only be nullable types.
+        // `Type?)`, `Type?>`, `Type? name;` and `Type? name =` can only be
+        // nullable types.
         // Line.MustBeDeclaration will be true for `Type? name;`.
-        if (!Contexts.back().IsExpression &&
-            (Line.MustBeDeclaration ||
-             (Tok->Next && Tok->Next->is(tok::identifier) && Tok->Next->Next &&
-              Tok->Next->Next->is(tok::equal)))) {
+        if ((!Contexts.back().IsExpression && Line.MustBeDeclaration) ||
+            (Tok->Next && Tok->Next->isOneOf(tok::r_paren, tok::greater)) ||
+            (Tok->Next && Tok->Next->is(tok::identifier) && Tok->Next->Next &&
+             Tok->Next->Next->is(tok::equal))) {
           Tok->Type = TT_CSharpNullable;
           break;
         }
@@ -1046,11 +1047,40 @@ private:
                        Keywords.kw___has_include_next)) {
         parseHasInclude();
       }
+      if (Tok->is(Keywords.kw_where) && Tok->Next &&
+          Tok->Next->isNot(tok::l_paren)) {
+        Tok->Type = TT_CSharpGenericTypeConstraint;
+        parseCSharpGenericTypeConstraint();
+      }
       break;
     default:
       break;
     }
     return true;
+  }
+
+  void parseCSharpGenericTypeConstraint() {
+    while (CurrentToken) {
+      if (CurrentToken->is(tok::less)) {
+        // parseAngle is too greedy and will consume the whole line.
+        CurrentToken->Type = TT_TemplateOpener;
+        next();
+      } else if (CurrentToken->is(tok::greater)) {
+        CurrentToken->Type = TT_TemplateCloser;
+        next();
+      } else if (CurrentToken->is(tok::comma)) {
+        CurrentToken->Type = TT_CSharpGenericTypeConstraintComma;
+        next();
+      } else if (CurrentToken->is(Keywords.kw_where)) {
+        CurrentToken->Type = TT_CSharpGenericTypeConstraint;
+        next();
+      } else if (CurrentToken->is(tok::colon)) {
+        CurrentToken->Type = TT_CSharpGenericTypeConstraintColon;
+        next();
+      } else {
+        next();
+      }
+    }
   }
 
   void parseIncludeDirective() {
@@ -2930,6 +2960,14 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
     // interpolated strings. Interpolated strings are merged into a single token
     // so cannot have spaces inserted by this function.
 
+    // No space between 'this' and '['
+    if (Left.is(tok::kw_this) && Right.is(tok::l_square))
+      return false;
+
+    // No space between 'new' and '('
+    if (Left.is(tok::kw_new) && Right.is(tok::l_paren))
+      return false;
+
     // Space before { (including space within '{ {').
     if (Right.is(tok::l_brace))
       return true;
@@ -2961,9 +2999,9 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
     if (Right.is(TT_CSharpNullable))
       return false;
 
-    // Require space after ? in nullable types.
+    // Require space after ? in nullable types except in generics and casts.
     if (Left.is(TT_CSharpNullable))
-      return true;
+      return !Right.isOneOf(TT_TemplateCloser, tok::r_paren);
 
     // No space before or after '?.'.
     if (Left.is(TT_CSharpNullConditional) || Right.is(TT_CSharpNullConditional))
@@ -3290,6 +3328,8 @@ bool TokenAnnotator::mustBreakBefore(const AnnotatedLine &Line,
     if (Right.is(TT_CSharpNamedArgumentColon) ||
         Left.is(TT_CSharpNamedArgumentColon))
       return false;
+    if (Right.is(TT_CSharpGenericTypeConstraint))
+      return true;
   } else if (Style.Language == FormatStyle::LK_JavaScript) {
     // FIXME: This might apply to other languages and token kinds.
     if (Right.is(tok::string_literal) && Left.is(tok::plus) && Left.Previous &&

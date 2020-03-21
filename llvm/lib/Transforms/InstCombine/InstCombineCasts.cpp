@@ -1634,10 +1634,6 @@ Instruction *InstCombiner::visitFPTrunc(FPTruncInst &FPT) {
     if (match(Op, m_FNeg(m_Value(X)))) {
       Value *InnerTrunc = Builder.CreateFPTrunc(X, Ty);
 
-      // FIXME: Once we're sure that unary FNeg optimizations are on par with
-      // binary FNeg, this should always return a unary operator.
-      if (isa<BinaryOperator>(Op))
-        return UnaryOperator::CreateFNegFMF(InnerTrunc, Op);
       return UnaryOperator::CreateFNegFMF(InnerTrunc, Op);
     }
 
@@ -2425,10 +2421,8 @@ Instruction *InstCombiner::visitBitCast(BitCastInst &CI) {
     // to a getelementptr X, 0, 0, 0...  turn it into the appropriate gep.
     // This can enhance SROA and other transforms that want type-safe pointers.
     unsigned NumZeros = 0;
-    while (SrcElTy != DstElTy &&
-           isa<CompositeType>(SrcElTy) && !SrcElTy->isPointerTy() &&
-           SrcElTy->getNumContainedTypes() /* not "{}" */) {
-      SrcElTy = cast<CompositeType>(SrcElTy)->getTypeAtIndex(0U);
+    while (SrcElTy && SrcElTy != DstElTy) {
+      SrcElTy = GetElementPtrInst::getTypeAtIndex(SrcElTy, (uint64_t)0);
       ++NumZeros;
     }
 

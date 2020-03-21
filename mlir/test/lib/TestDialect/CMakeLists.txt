@@ -6,6 +6,7 @@ set(LLVM_OPTIONAL_SOURCES
 set(LLVM_TARGET_DEFINITIONS TestOps.td)
 mlir_tablegen(TestOps.h.inc -gen-op-decls)
 mlir_tablegen(TestOps.cpp.inc -gen-op-defs)
+mlir_tablegen(TestOpsDialect.h.inc -gen-dialect-decls)
 mlir_tablegen(TestOpEnums.h.inc -gen-enum-decls)
 mlir_tablegen(TestOpEnums.cpp.inc -gen-enum-defs)
 mlir_tablegen(TestPatterns.inc -gen-rewriters)
@@ -16,13 +17,11 @@ add_llvm_library(MLIRTestDialect
   TestPatterns.cpp
 
   DEPENDS
-  MLIRControlFlowInterfacesIncGen
   MLIRTestOpsIncGen
-  MLIRTypeInferOpInterfaceIncGen
 )
 target_link_libraries(MLIRTestDialect
   PUBLIC
-  MLIRAnalysis
+  MLIRControlFlowInterfaces
   MLIRDialect
   MLIRIR
   MLIRLinalgTransforms
@@ -30,5 +29,6 @@ target_link_libraries(MLIRTestDialect
   MLIRStandardOps
   MLIRTransforms
   MLIRTransformUtils
+  MLIRInferTypeOpInterface
   LLVMSupport
 )

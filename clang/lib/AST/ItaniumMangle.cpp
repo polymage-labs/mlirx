@@ -13,6 +13,7 @@
 //   http://itanium-cxx-abi.github.io/cxx-abi/abi.html#mangling
 //
 //===----------------------------------------------------------------------===//
+
 #include "clang/AST/Mangle.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Attr.h"
@@ -27,6 +28,7 @@
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/Basic/ABI.h"
+#include "clang/Basic/Module.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/TargetInfo.h"
 #include "llvm/ADT/StringExtras.h"
@@ -480,6 +482,7 @@ private:
                                   const AbiTagList *AdditionalAbiTags);
   void mangleSourceName(const IdentifierInfo *II);
   void mangleRegCallName(const IdentifierInfo *II);
+  void mangleDeviceStubName(const IdentifierInfo *II);
   void mangleSourceNameWithAbiTags(
       const NamedDecl *ND, const AbiTagList *AdditionalAbiTags = nullptr);
   void mangleLocalName(GlobalDecl GD,
@@ -641,7 +644,7 @@ void CXXNameMangler::mangle(GlobalDecl GD) {
   //            ::= <data name>
   //            ::= <special-name>
   Out << "_Z";
-  if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(GD.getDecl()))
+  if (isa<FunctionDecl>(GD.getDecl()))
     mangleFunctionEncoding(GD);
   else if (const VarDecl *VD = dyn_cast<VarDecl>(GD.getDecl()))
     mangleName(VD);
@@ -1307,7 +1310,12 @@ void CXXNameMangler::mangleUnqualifiedName(GlobalDecl GD,
       bool IsRegCall = FD &&
                        FD->getType()->castAs<FunctionType>()->getCallConv() ==
                            clang::CC_X86RegCall;
-      if (IsRegCall)
+      bool IsDeviceStub =
+          FD && FD->hasAttr<CUDAGlobalAttr>() &&
+          GD.getKernelReferenceKind() == KernelReferenceKind::Stub;
+      if (IsDeviceStub)
+        mangleDeviceStubName(II);
+      else if (IsRegCall)
         mangleRegCallName(II);
       else
         mangleSourceName(II);
@@ -1493,6 +1501,14 @@ void CXXNameMangler::mangleRegCallName(const IdentifierInfo *II) {
   // <number> ::= [n] <non-negative decimal integer>
   // <identifier> ::= <unqualified source code identifier>
   Out << II->getLength() + sizeof("__regcall3__") - 1 << "__regcall3__"
+      << II->getName();
+}
+
+void CXXNameMangler::mangleDeviceStubName(const IdentifierInfo *II) {
+  // <source-name> ::= <positive length number> __device_stub__ <identifier>
+  // <number> ::= [n] <non-negative decimal integer>
+  // <identifier> ::= <unqualified source code identifier>
+  Out << II->getLength() + sizeof("__device_stub__") - 1 << "__device_stub__"
       << II->getName();
 }
 

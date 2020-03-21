@@ -6,14 +6,15 @@
 // affine data copy utility on the input loop nest.
 // '-test-affine-data-copy-memref-filter' passes the first memref found in an
 // affine.load op in the innermost loop as a filter.
-// RUN: mlir-opt %s -split-input-file -test-affine-data-copy='memref-filter=1' | FileCheck %s --check-prefix=FILTER
+// RUN: mlir-opt %s -split-input-file -test-affine-data-copy='memref-filter' | FileCheck %s --check-prefix=FILTER
+// RUN: mlir-opt %s -split-input-file -test-affine-data-copy='for-memref-region' | FileCheck %s --check-prefix=MEMREF_REGION
 
 // -copy-skip-non-stride-loops forces the copies to be placed right inside the
 // tile space loops, avoiding the sensitivity of copy placement depth to memory
 // footprint -- so that one could write a definite test case and not have to
 // update it each time something related to the cost functions change.
 
-#map0 = affine_map<(d0) -> (d0)>
+#id = affine_map<(d0) -> (d0)>
 #map1 = affine_map<(d0) -> (d0 + 128)>
 
 // Map used to index the buffer while computing.
@@ -26,9 +27,9 @@ func @matmul(%A: memref<4096x4096xf32>, %B: memref<4096x4096xf32>, %C: memref<40
   affine.for %i = 0 to 4096 step 128 {
     affine.for %j = 0 to 4096 step 128 {
       affine.for %k = 0 to 4096 step 128 {
-        affine.for %ii = #map0(%i) to #map1(%i) {
-          affine.for %jj = #map0(%j) to #map1(%j) {
-            affine.for %kk = #map0(%k) to #map1(%k) {
+        affine.for %ii = #id(%i) to #map1(%i) {
+          affine.for %jj = #id(%j) to #map1(%j) {
+            affine.for %kk = #id(%k) to #map1(%k) {
               %5 = affine.load %A[%ii, %kk] : memref<4096x4096xf32>
               %6 = affine.load %B[%kk, %jj] : memref<4096x4096xf32>
               %7 = affine.load %C[%ii, %jj] : memref<4096x4096xf32>
@@ -129,6 +130,7 @@ func @matmul(%A: memref<4096x4096xf32>, %B: memref<4096x4096xf32>, %C: memref<40
 //
 // CHECK-SMALL-LABEL: func @foo
 // FILTER-LABEL: func @foo
+// MEMREF_REGION-LABEL: func @foo
 func @foo(%arg0: memref<1024x1024xf32>, %arg1: memref<1024x1024xf32>, %arg2: memref<1024x1024xf32>) -> memref<1024x1024xf32> {
   affine.for %i = 0 to 1024 {
     affine.for %j = 0 to 1024 {
@@ -177,9 +179,21 @@ func @foo(%arg0: memref<1024x1024xf32>, %arg1: memref<1024x1024xf32>, %arg2: mem
 //  FILTER-NOT: dealloc
 //  FILTER:     return
 
+// CHeck that only one memref is copied, because for-memref-region is enabled
+// (and the first ever encountered load is analyzed).
+//      MEMREF_REGION: alloc() : memref<1024x1024xf32>
+//  MEMREF_REGION-NOT: alloc()
+//      MEMREF_REGION: affine.for %{{.*}} = 0 to 1024 {
+//      MEMREF_REGION:   affine.for %{{.*}} = 0 to 1024 {
+//      MEMREF_REGION: affine.for %{{.*}} = 0 to 1024 {
+// MEMREF_REGION-NEXT:   affine.for %{{.*}} = 0 to 1024 {
+// MEMREF_REGION-NEXT:     affine.for %{{.*}} = 0 to 1024 {
+//      MEMREF_REGION: dealloc %{{.*}} : memref<1024x1024xf32>
+// MEMREF_REGION-NEXT: return
+
 // -----
 
-#map0 = affine_map<(d0) -> (d0)>
+#map_lb = affine_map<(d0) -> (d0)>
 #map_ub = affine_map<(d0) -> (4096, d0 + 100)>
 
 // CHECK-DAG: [[MAP_IDENTITY:map[0-9]+]] = affine_map<(d0) -> (d0)>
@@ -189,7 +203,7 @@ func @foo(%arg0: memref<1024x1024xf32>, %arg1: memref<1024x1024xf32>, %arg2: mem
 // CHECK-LABEL: func @min_upper_bound
 func @min_upper_bound(%A: memref<4096xf32>) -> memref<4096xf32> {
   affine.for %i = 0 to 4096 step 100 {
-    affine.for %ii = #map0(%i) to min #map_ub(%i) {
+    affine.for %ii = #map_lb(%i) to min #map_ub(%i) {
       %5 = affine.load %A[%ii] : memref<4096xf32>
       %6 = mulf %5, %5 : f32
       affine.store %6, %A[%ii] : memref<4096xf32>

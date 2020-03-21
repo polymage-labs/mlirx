@@ -288,7 +288,10 @@ def Image2dMsaaDepth      : Type<"image2d_msaa_depth_t", QualType<"OCLImage2dMSA
 def Image2dArrayMsaaDepth : Type<"image2d_array_msaa_depth_t", QualType<"OCLImage2dArrayMSAADepth", 1>>;
 
 def Sampler               : Type<"sampler_t", QualType<"OCLSamplerTy">>;
+def ClkEvent              : Type<"clk_event_t", QualType<"OCLClkEventTy">>;
 def Event                 : Type<"event_t", QualType<"OCLEventTy">>;
+def Queue                 : Type<"queue_t", QualType<"OCLQueueTy">>;
+def ReserveId             : Type<"reserve_id_t", QualType<"OCLReserveIDTy">>;
 
 // OpenCL v2.0 s6.13.11: Atomic integer and floating-point types.
 def AtomicInt             : Type<"atomic_int", QualType<"getAtomicType(Context.IntTy)">>;
@@ -687,7 +690,7 @@ foreach name = ["isfinite", "isinf", "isnan", "isnormal", "signbit"] in {
   def : Builtin<name, [GenTypeShortVecNoScalar, GenTypeHalfVecNoScalar], Attr.Const>;
 }
 foreach name = ["any", "all"] in {
-  def : Builtin<name, [Int, AIGenTypeN], Attr.Const>;
+  def : Builtin<name, [Int, SGenTypeN], Attr.Const>;
 }
 
 // --- 2 arguments ---
@@ -1232,6 +1235,44 @@ let MinVersion = CL20 in {
 }
 
 
+//--------------------------------------------------------------------
+// OpenCL2.0 : 6.13.16 : Pipe Functions
+// --- Table 27 ---
+// Defined in Builtins.def
+
+// --- Table 28 ---
+// Builtins taking pipe arguments are defined in Builtins.def
+def : Builtin<"is_valid_reserve_id", [Bool, ReserveId]>;
+
+// --- Table 29 ---
+// Defined in Builtins.def
+
+
+//--------------------------------------------------------------------
+// OpenCL2.0 : 6.13.17 : Enqueuing Kernels
+// --- Table 30 ---
+// Defined in Builtins.def
+
+// --- Table 32 ---
+// Defined in Builtins.def
+
+// --- Table 33 ---
+def : Builtin<"enqueue_marker",
+    [Int, Queue, UInt, PointerType<ConstType<ClkEvent>, GenericAS>, PointerType<ClkEvent, GenericAS>]>;
+
+// --- Table 34 ---
+def : Builtin<"retain_event", [Void, ClkEvent]>;
+def : Builtin<"release_event", [Void, ClkEvent]>;
+def : Builtin<"create_user_event", [ClkEvent]>;
+def : Builtin<"is_valid_event", [Bool, ClkEvent]>;
+def : Builtin<"set_user_event_status", [Void, ClkEvent, Int]>;
+// TODO: capture_event_profiling_info
+
+// --- Table 35 ---
+def : Builtin<"get_default_queue", [Queue]>;
+// TODO: ndrange functions
+
+
 // OpenCL v2.0 s9.17.3: Additions to section 6.13.1: Work-Item Functions
 let MinVersion = CL20 in {
   let Extension = FuncExtKhrSubgroups in {
@@ -1409,7 +1450,9 @@ let Extension = FuncExtKhrGlMsaaSharing in {
       }
       def : Builtin<"get_image_dim", [VectorType<Int, 2>, ImageType<imgTy, aQual>], Attr.Const>;
     }
-    def : Builtin<"get_image_array_size", [Size, ImageType<Image2dArrayMsaaDepth, aQual>], Attr.Const>;
+    foreach imgTy = [Image2dArrayMsaa, Image2dArrayMsaaDepth] in {
+      def : Builtin<"get_image_array_size", [Size, ImageType<imgTy, aQual>], Attr.Const>;
+    }
   }
 }
 

@@ -10,11 +10,28 @@ add_mlir_library(MLIRTargetLLVMIRModuleTranslation
 target_link_libraries(MLIRTargetLLVMIRModuleTranslation
   PUBLIC
   MLIRLLVMIR
+  MLIRLLVMIRTransforms
   LLVMCore
   LLVMIRReader
   LLVMSupport
   LLVMTransformUtils
   MLIRTranslation
+  )
+
+add_mlir_library(MLIRTargetAVX512
+  LLVMIR/LLVMAVX512Intr.cpp
+
+  ADDITIONAL_HEADER_DIRS
+  ${MLIR_MAIN_INCLUDE_DIR}/mlir/Target/LLVMIR
+  DEPENDS
+  MLIRLLVMAVX512ConversionsIncGen
+  )
+target_link_libraries(MLIRTargetAVX512
+  PUBLIC
+  MLIRIR
+  MLIRLLVMAVX512
+  MLIRLLVMIR
+  MLIRTargetLLVMIRModuleTranslation
   )
 
 add_mlir_library(MLIRTargetLLVMIR

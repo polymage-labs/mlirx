@@ -39,7 +39,7 @@ is declared using add_mlir_dialect().
 
 ```cmake
 
-add_mlir_dialect(FooOps FooOps)
+add_mlir_dialect(FooOps foo FooOps)
 
 ```
 
@@ -105,7 +105,7 @@ new targets with the same sources.
 # Dialect Conversions
 
 Conversions from “X” to “Y” live in mlir/include/mlir/Conversion/XToY,
-mlir/lib/Convresion/XToY and mlir/test/Conversion/XToY, respectively.
+mlir/lib/Conversion/XToY and mlir/test/Conversion/XToY, respectively.
 
 Default file names for conversion should omit “Convert” from their
 name, e.g. lib/VectorToLLVM/VectorToLLVM.cpp.

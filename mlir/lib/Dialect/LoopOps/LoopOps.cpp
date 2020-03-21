@@ -20,28 +20,9 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Support/MathExtras.h"
 #include "mlir/Support/STLExtras.h"
-#include "mlir/Transforms/SideEffectsInterface.h"
 
 using namespace mlir;
 using namespace mlir::loop;
-
-//===----------------------------------------------------------------------===//
-// LoopOpsDialect Interfaces
-//===----------------------------------------------------------------------===//
-namespace {
-
-struct LoopSideEffectsInterface : public SideEffectsDialectInterface {
-  using SideEffectsDialectInterface::SideEffectsDialectInterface;
-
-  SideEffecting isSideEffecting(Operation *op) const override {
-    if (isa<IfOp>(op) || isa<ForOp>(op)) {
-      return Recursive;
-    }
-    return SideEffectsDialectInterface::isSideEffecting(op);
-  };
-};
-
-} // namespace
 
 //===----------------------------------------------------------------------===//
 // LoopOpsDialect
@@ -53,7 +34,6 @@ LoopOpsDialect::LoopOpsDialect(MLIRContext *context)
 #define GET_OP_LIST
 #include "mlir/Dialect/LoopOps/LoopOps.cpp.inc"
       >();
-  addInterfaces<LoopSideEffectsInterface>();
 }
 
 //===----------------------------------------------------------------------===//
@@ -221,7 +201,13 @@ ForOp mlir::loop::getForInductionVarOwner(Value val) {
 
 void IfOp::build(Builder *builder, OperationState &result, Value cond,
                  bool withElseRegion) {
+  build(builder, result, /*resultTypes=*/llvm::None, cond, withElseRegion);
+}
+
+void IfOp::build(Builder *builder, OperationState &result,
+                 TypeRange resultTypes, Value cond, bool withElseRegion) {
   result.addOperands(cond);
+  result.addTypes(resultTypes);
   Region *thenRegion = result.addRegion();
   Region *elseRegion = result.addRegion();
   IfOp::ensureTerminator(*thenRegion, *builder, result.location);
@@ -407,7 +393,7 @@ static ParseResult parseParallelOp(OpAsmParser &parser,
       parser.resolveOperands(upper, builder.getIndexType(), result.operands))
     return failure();
 
-  // Parse step value.
+  // Parse step values.
   SmallVector<OpAsmParser::OperandType, 4> steps;
   if (parser.parseKeyword("step") ||
       parser.parseOperandList(steps, ivs.size(),
@@ -415,13 +401,17 @@ static ParseResult parseParallelOp(OpAsmParser &parser,
       parser.resolveOperands(steps, builder.getIndexType(), result.operands))
     return failure();
 
-  // Parse step value.
+  // Parse init values.
   SmallVector<OpAsmParser::OperandType, 4> initVals;
   if (succeeded(parser.parseOptionalKeyword("init"))) {
     if (parser.parseOperandList(initVals, /*requiredOperandCount=*/-1,
                                 OpAsmParser::Delimiter::Paren))
       return failure();
   }
+
+  // Parse optional results in case there is a reduce.
+  if (parser.parseOptionalArrowTypeList(result.types))
+    return failure();
 
   // Now parse the body.
   Region *body = result.addRegion();
@@ -437,9 +427,8 @@ static ParseResult parseParallelOp(OpAsmParser &parser,
                                 static_cast<int32_t>(steps.size()),
                                 static_cast<int32_t>(initVals.size())}));
 
-  // Parse attributes and optional results (in case there is a reduce).
-  if (parser.parseOptionalAttrDict(result.attributes) ||
-      parser.parseOptionalColonTypeList(result.types))
+  // Parse attributes.
+  if (parser.parseOptionalAttrDict(result.attributes))
     return failure();
 
   if (!initVals.empty())
@@ -457,11 +446,10 @@ static void print(OpAsmPrinter &p, ParallelOp op) {
     << ")";
   if (!op.initVals().empty())
     p << " init (" << op.initVals() << ")";
+  p.printOptionalArrowTypeList(op.getResultTypes());
   p.printRegion(op.region(), /*printEntryBlockArgs=*/false);
   p.printOptionalAttrDict(
       op.getAttrs(), /*elidedAttrs=*/ParallelOp::getOperandSegmentSizeAttr());
-  if (!op.results().empty())
-    p << " : " << op.getResultTypes();
 }
 
 ParallelOp mlir::loop::getParallelForInductionVarOwner(Value val) {
@@ -515,15 +503,15 @@ static ParseResult parseReduceOp(OpAsmParser &parser, OperationState &result) {
       parser.parseRParen())
     return failure();
 
+  Type resultType;
+  // Parse the type of the operand (and also what reduce computes on).
+  if (parser.parseColonType(resultType) ||
+      parser.resolveOperand(operand, resultType, result.operands))
+    return failure();
+
   // Now parse the body.
   Region *body = result.addRegion();
   if (parser.parseRegion(*body, /*arguments=*/{}, /*argTypes=*/{}))
-    return failure();
-
-  // And the type of the operand (and also what reduce computes on).
-  Type resultType;
-  if (parser.parseColonType(resultType) ||
-      parser.resolveOperand(operand, resultType, result.operands))
     return failure();
 
   return success();
@@ -531,8 +519,8 @@ static ParseResult parseReduceOp(OpAsmParser &parser, OperationState &result) {
 
 static void print(OpAsmPrinter &p, ReduceOp op) {
   p << op.getOperationName() << "(" << op.operand() << ") ";
-  p.printRegion(op.reductionOperator());
   p << " : " << op.operand().getType();
+  p.printRegion(op.reductionOperator());
 }
 
 //===----------------------------------------------------------------------===//

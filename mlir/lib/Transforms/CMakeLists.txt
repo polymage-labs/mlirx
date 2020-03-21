@@ -1,10 +1,6 @@
 add_subdirectory(Utils)
 
 add_mlir_library(MLIRTransforms
-  AffineDataCopyGeneration.cpp
-  AffineLoopInvariantCodeMotion.cpp
-  AffineScalarReplacement.cpp
-  AffineVectorize.cpp
   Canonicalizer.cpp
   CSE.cpp
   DialectConversion.cpp
@@ -19,7 +15,6 @@ add_mlir_library(MLIRTransforms
   LoopUnroll.cpp
   OpStats.cpp
   PipelineDataTransfer.cpp
-  SimplifyAffineStructures.cpp
   StripDebugInfo.cpp
   SymbolDCE.cpp
   Vectorize.cpp
@@ -30,16 +25,16 @@ add_mlir_library(MLIRTransforms
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Transforms
 
   DEPENDS
-  MLIRLoopLikeInterfaceIncGen
   MLIRStandardOpsIncGen
   )
 
 target_link_libraries(MLIRTransforms
   PUBLIC
-  MLIRAffineOps
+  MLIRAffine
   MLIRAnalysis
+  MLIRLoopLikeInterface
   MLIRLoopOps
   MLIRPass
   MLIRTransformUtils
-  MLIRVectorOps
+  MLIRVector
   )
