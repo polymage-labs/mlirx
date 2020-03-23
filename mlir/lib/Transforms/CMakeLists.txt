@@ -10,14 +10,10 @@ add_mlir_library(MLIRTransforms
   LoopCoalescing.cpp
   LoopFusion.cpp
   LoopInvariantCodeMotion.cpp
-  LoopTiling.cpp
-  LoopUnrollAndJam.cpp
-  LoopUnroll.cpp
   OpStats.cpp
   PipelineDataTransfer.cpp
   StripDebugInfo.cpp
   SymbolDCE.cpp
-  Vectorize.cpp
   ViewOpGraph.cpp
   ViewRegionGraph.cpp
 

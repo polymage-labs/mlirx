@@ -2,6 +2,7 @@ add_llvm_library(MLIRTestTransforms
   TestAllReduceLowering.cpp
   TestCallGraph.cpp
   TestConstantFold.cpp
+  TestConvertGPUKernelToCubin.cpp
   TestLoopFusion.cpp
   TestGpuMemoryPromotion.cpp
   TestGpuParallelLoopMapping.cpp
@@ -14,10 +15,8 @@ add_llvm_library(MLIRTestTransforms
   TestMemRefBoundCheck.cpp
   TestMemRefDependenceCheck.cpp
   TestMemRefStrideCalculation.cpp
-  TestParallelismDetection.cpp
   TestVectorToLoopsConversion.cpp
   TestVectorTransforms.cpp
-  TestVectorizationUtils.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Transforms
@@ -39,6 +38,7 @@ target_link_libraries(MLIRTestTransforms
   MLIRAnalysis
   MLIREDSC
   MLIRGPU
+  MLIRGPUtoCUDATransforms
   MLIRLinalgOps
   MLIRLinalgTransforms
   MLIRLoopOps
