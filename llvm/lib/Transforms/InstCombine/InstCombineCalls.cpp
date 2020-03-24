@@ -1333,7 +1333,8 @@ static Instruction *foldCtpop(IntrinsicInst &II, InstCombiner &IC) {
     return IC.replaceOperand(II, 0, X);
 
   // ctpop(x | -x) -> bitwidth - cttz(x, false)
-  if (match(Op0, m_c_Or(m_Value(X), m_Neg(m_Deferred(X))))) {
+  if (Op0->hasOneUse() &&
+      match(Op0, m_c_Or(m_Value(X), m_Neg(m_Deferred(X))))) {
     Function *F =
         Intrinsic::getDeclaration(II.getModule(), Intrinsic::cttz, Ty);
     auto *Cttz = IC.Builder.CreateCall(F, {X, IC.Builder.getFalse()});

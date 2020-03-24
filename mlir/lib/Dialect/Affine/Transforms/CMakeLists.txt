@@ -21,7 +21,11 @@ target_link_libraries(MLIRAffineTransforms
   MLIRAffine
   MLIREDSC
   MLIRIR
+  MLIRPass
   MLIRSideEffects
   MLIRStandardOps
+  MLIRTransformUtils
+  MLIRVector
+  MLIRVectorToLLVM
   )
 
