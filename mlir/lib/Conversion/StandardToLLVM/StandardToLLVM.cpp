@@ -2052,32 +2052,29 @@ struct MemRefShapeCastOpLowering
     auto targetType = memRefShapeCastOp.getType();
     auto sourceType =
         memRefShapeCastOp.getOperand().getType().cast<MemRefType>();
-    (void)sourceType;
-    assert(sourceType.hasStaticShape() && "static source type supported");
-    assert(targetType.hasStaticShape() && "static target type supported");
 
     MemRefDescriptor srcMemRefDesc(transformed.source());
 
     auto targetStructType =
         typeConverter.convertType(memRefShapeCastOp.getType());
     Value memRefDescriptor = rewriter.create<LLVM::UndefOp>(
-        op->getLoc(), targetStructType, ArrayRef<Value>{});
+        loc, targetStructType, ArrayRef<Value>{});
     LLVM::LLVMType targetElementPtrType =
         MemRefDescriptor(memRefDescriptor).getElementType();
 
     Value srcBuffer = srcMemRefDesc.allocatedPtr(rewriter, loc);
     Value targetBuffer = rewriter.create<LLVM::BitcastOp>(
-        op->getLoc(), targetElementPtrType, ArrayRef<Value>(srcBuffer));
+        loc, targetElementPtrType, ArrayRef<Value>(srcBuffer));
 
     memRefDescriptor = rewriter.create<LLVM::InsertValueOp>(
-        op->getLoc(), targetStructType, memRefDescriptor, targetBuffer,
+        loc, targetStructType, memRefDescriptor, targetBuffer,
         rewriter.getIndexArrayAttr(kAllocatedPtrPosInMemRefDescriptor));
 
     Value srcBufferAligned = srcMemRefDesc.alignedPtr(rewriter, loc);
     Value targetBufAligned = rewriter.create<LLVM::BitcastOp>(
-        op->getLoc(), targetElementPtrType, ArrayRef<Value>(srcBufferAligned));
+        loc, targetElementPtrType, ArrayRef<Value>(srcBufferAligned));
     memRefDescriptor = rewriter.create<LLVM::InsertValueOp>(
-        op->getLoc(), targetStructType, memRefDescriptor, targetBufAligned,
+        loc, targetStructType, memRefDescriptor, targetBufAligned,
         rewriter.getIndexArrayAttr(kAlignedPtrPosInMemRefDescriptor));
 
     int64_t offset;
@@ -2088,25 +2085,47 @@ struct MemRefShapeCastOpLowering
            "unexpected dynamic offset");
 
     memRefDescriptor = rewriter.create<LLVM::InsertValueOp>(
-        op->getLoc(), targetStructType, memRefDescriptor,
-        createIndexConstant(rewriter, op->getLoc(), offset),
+        loc, targetStructType, memRefDescriptor,
+        createIndexConstant(rewriter, loc, offset),
         rewriter.getIndexArrayAttr(kOffsetPosInMemRefDescriptor));
 
-    // Get actual sizes of the memref as values: all sizes are static here.
+    // Get the sizes of the memref: all but the last one are copied from the
+    // source memref. If the dimension size was static, the target memref would
+    // have the same size.
     SmallVector<Value, 4> sizes;
     sizes.reserve(targetType.getRank());
-    for (int64_t s : targetType.getShape())
-      sizes.push_back(createIndexConstant(rewriter, op->getLoc(), s));
-    if (sizes.empty())
-      sizes.push_back(createIndexConstant(rewriter, op->getLoc(), 1));
+    for (unsigned pos = 0, e = targetType.getRank() - 1; pos < e; ++pos) {
+      int64_t dimSize = targetType.getDimSize(pos);
+      if (dimSize == MemRefType::kDynamicSize)
+        sizes.push_back(srcMemRefDesc.size(rewriter, loc, pos));
+      else
+        sizes.push_back(createIndexConstant(rewriter, loc, dimSize));
+    }
+
+    if (targetType.getShape().back() != MemRefType::kDynamicSize) {
+      // The op is already verified to have the right size for the last
+      // dimension.
+      sizes.push_back(
+          createIndexConstant(rewriter, loc, targetType.getShape().back()));
+    } else {
+      // We need to divide the dynamic size on the source by the vector width.
+      auto vecWidth = createIndexConstant(
+          rewriter, loc,
+          targetType.getElementType().cast<ShapedType>().getNumElements());
+      sizes.push_back(rewriter.create<LLVM::UDivOp>(
+          loc, srcMemRefDesc.size(rewriter, loc, sourceType.getRank() - 1),
+          vecWidth));
+    }
+
+    assert(!sizes.empty() && "target memref rank can't be zero");
 
     // Compute the total number of memref elements.
     Value cumulativeSize = sizes.front();
     for (unsigned i = 1, e = sizes.size(); i < e; ++i)
       cumulativeSize = rewriter.create<LLVM::MulOp>(
-          op->getLoc(), getIndexType(),
-          ArrayRef<Value>{cumulativeSize, sizes[i]});
+          loc, getIndexType(), ArrayRef<Value>{cumulativeSize, sizes[i]});
 
+    // Calculate the strides.
     Value runningStride = nullptr;
     // Iterate strides in reverse order, compute runningStride and strideValues.
     auto nStrides = strides.size();
@@ -2115,24 +2134,24 @@ struct MemRefShapeCastOpLowering
       int64_t index = nStrides - 1 - indexedStride.index();
       if (strides[index] == MemRefType::getDynamicStrideOrOffset())
         // Identity layout map is enforced in the match function, so we compute:
-        //   `runningStride *= sizes[index]`
+        //   `runningStride *= sizes[index + 1]`.
         runningStride = runningStride
-                            ? rewriter.create<LLVM::MulOp>(
-                                  op->getLoc(), runningStride, sizes[index])
-                            : createIndexConstant(rewriter, op->getLoc(), 1);
+                            ? rewriter.create<LLVM::MulOp>(loc, runningStride,
+                                                           sizes[index + 1])
+                            : createIndexConstant(rewriter, loc, 1);
       else
-        runningStride =
-            createIndexConstant(rewriter, op->getLoc(), strides[index]);
+        runningStride = createIndexConstant(rewriter, loc, strides[index]);
       strideValues[index] = runningStride;
     }
+
     // Fill size and stride descriptors in memref.
     for (auto indexedSize : llvm::enumerate(sizes)) {
       int64_t index = indexedSize.index();
       memRefDescriptor = rewriter.create<LLVM::InsertValueOp>(
-          op->getLoc(), targetStructType, memRefDescriptor, indexedSize.value(),
+          loc, targetStructType, memRefDescriptor, indexedSize.value(),
           rewriter.getI64ArrayAttr({kSizePosInMemRefDescriptor, index}));
       memRefDescriptor = rewriter.create<LLVM::InsertValueOp>(
-          op->getLoc(), targetStructType, memRefDescriptor, strideValues[index],
+          loc, targetStructType, memRefDescriptor, strideValues[index],
           rewriter.getI64ArrayAttr({kStridePosInMemRefDescriptor, index}));
     }
 

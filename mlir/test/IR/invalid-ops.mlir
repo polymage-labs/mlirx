@@ -1119,6 +1119,57 @@ func @invalid_memref_cast() {
 
 // -----
 
+func @invalid_memref_shape_cast_1() {
+  %0 = alloc() : memref<2x4xf32>
+  %1 = memref_shape_cast %0 : memref<2x4xf32> to memref<2x2xf64>
+  // expected-error@-1 {{operand type 'memref<2x4xf32>' and result type 'memref<2x2xf64>' are cast incompatible}}
+}
+
+// -----
+
+func @invalid_memref_shape_cast_2() {
+  %0 = alloc() : memref<2x4xf32>
+  memref_shape_cast %0 : memref<2x4xf32> to memref<2xvector<4xf32>>
+  // expected-error@-1 {{operand type 'memref<2x4xf32>' and result type 'memref<2xvector<4xf32>>' are cast incompatible}}
+  return
+}
+
+// -----
+
+func @invalid_memref_shape_cast_3() {
+  %0 = alloc() : memref<2x4xf32>
+  memref_shape_cast %0 : memref<2x4xf32> to memref<2x?xvector<4xf32>>
+  // expected-error@-1 {{operand type 'memref<2x4xf32>' and result type 'memref<2x?xvector<4xf32>>' are cast incompatible}}
+  return
+}
+
+// -----
+
+func @invalid_memref_shape_cast_4() {
+  %0 = alloc() : memref<2x4xf32>
+  memref_shape_cast %0 : memref<2x4xf32> to memref<?x1xvector<4xf32>>
+  // expected-error@-1 {{operand type 'memref<2x4xf32>' and result type 'memref<?x1xvector<4xf32>>' are cast incompatible}}
+  return
+}
+
+// -----
+
+func @invalid_memref_shape_cast_5() {
+  %0 = alloc() : memref<2x4xf32>
+  %1 = memref_shape_cast %0 : memref<2x4xf32> to memref<4x2xf32>
+  // expected-error@-1 {{operand type 'memref<2x4xf32>' and result type 'memref<4x2xf32>' are cast incompatible}}
+}
+
+// -----
+
+func @invalid_memref_shape_cast_6() {
+  %0 = alloc() : memref<2x4xf32>
+  %1 = memref_shape_cast %0 : memref<2x4xf32> to memref<2x4xf32>
+  // expected-error@-1 {{operand type 'memref<2x4xf32>' and result type 'memref<2x4xf32>' are cast incompatible}}
+}
+
+// -----
+
 func @atomic_rmw_idxs_rank_mismatch(%I: memref<16x10xf32>, %i : index, %val : f32) {
   // expected-error@+1 {{expects the number of subscripts to be equal to memref rank}}
   %x = atomic_rmw "addf" %val, %I[%i] : (f32, memref<16x10xf32>) -> f32

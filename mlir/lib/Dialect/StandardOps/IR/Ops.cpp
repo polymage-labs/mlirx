@@ -1599,25 +1599,49 @@ bool MemRefShapeCastOp::areCastCompatible(Type a, Type b) {
 
   if (!aT || !bT)
     return false;
-  // Only static shapes for now.
-  if (aT.getNumDynamicDims() > 0 || bT.getNumDynamicDims() > 0)
-    return false;
+
   if (aT.getAffineMaps() != bT.getAffineMaps())
     return false;
+
   if (aT.getMemorySpace() != bT.getMemorySpace())
     return false;
 
-  int64_t numEltA = aT.getNumElements();
-  if (auto shapedType = aT.getElementType().dyn_cast<ShapedType>())
-    numEltA *= shapedType.getNumElements();
+  if (aT.getRank() != bT.getRank())
+    return false;
 
-  int64_t numEltB = bT.getNumElements();
-  if (auto shapedType = bT.getElementType().dyn_cast<ShapedType>())
-    numEltB *= shapedType.getNumElements();
+  // With rank 0, there is no vec cast.
+  if (aT.getRank() == 0)
+    return false;
 
-  // Should have the same number of elements when counting elements in any
-  // elemental shaped type.
-  if (numEltA != numEltB)
+  // Should have the same shape up until the last n-1 dimensions.
+  // Replace this by std::equal.
+  for (unsigned i = 0, e = aT.getRank() - 1; i < e; ++i)
+    if (aT.getDimSize(i) != bT.getDimSize(i))
+      return false;
+
+  // Source memref can't have vector element type.
+  if (auto shapedEltType = aT.getElementType().dyn_cast<ShapedType>())
+    return false;
+
+  auto shapedEltTypeB = bT.getElementType().dyn_cast<ShapedType>();
+  if (!shapedEltTypeB)
+    return false;
+
+  auto eltA = aT.getElementType();
+  auto eltB = shapedEltTypeB.getElementType();
+  if (eltA != eltB)
+    return false;
+
+  int64_t lastDimA = aT.getShape().back();
+  int64_t lastDimB = bT.getShape().back();
+
+  // If one of them is dynamic but not the other, they are incompatible.
+  if (lastDimA * lastDimB < 0)
+    return false;
+
+  if (lastDimA != MemRefType::kDynamicSize &&
+      lastDimB != MemRefType::kDynamicSize &&
+      lastDimA / shapedEltTypeB.getNumElements() != lastDimB)
     return false;
 
   return true;
@@ -1626,7 +1650,6 @@ bool MemRefShapeCastOp::areCastCompatible(Type a, Type b) {
 OpFoldResult MemRefShapeCastOp::fold(ArrayRef<Attribute> operands) {
   return impl::foldCastOp(*this);
 }
-
 
 //===----------------------------------------------------------------------===//
 // MulFOp

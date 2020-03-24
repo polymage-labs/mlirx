@@ -223,6 +223,34 @@ func @static_dealloc(%static: memref<10x8xf32>) {
 
 // -----
 
+// CHECK-LABEL: func @memref_shape_cast
+func @memref_shape_cast(%M : memref<42x16xf32>) -> memref<42x4xvector<4xf32>> {
+// CHECK:        %[[SRC:.*]] = llvm.insertvalue %{{.*}}, %{{.*}}[4, 1]
+// CHECK-NEXT:   llvm.mlir.undef : !llvm<"{ <4 x float>*, <4 x float>*, i64, [2 x i64], [2 x i64] }">
+// CHECK-NEXT:   llvm.extractvalue %{{.*}}[0] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+// CHECK-NEXT:   llvm.bitcast %{{.*}} : !llvm<"float*"> to !llvm<"<4 x float>*">
+// CHECK-NEXT:   llvm.insertvalue %{{.*}}, %{{.*}}[0 : index] : !llvm<"{ <4 x float>*, <4 x float>*, i64, [2 x i64], [2 x i64] }">
+// CHECK-NEXT:   llvm.extractvalue %{{.*}}[1] : !llvm<"{ float*, float*, i64, [2 x i64], [2 x i64] }">
+// CHECK-NEXT:   llvm.bitcast %{{.*}} : !llvm<"float*"> to !llvm<"<4 x float>*">
+// CHECK-NEXT:   llvm.insertvalue %{{.*}}, %{{.*}}[1 : index] : !llvm<"{ <4 x float>*, <4 x float>*, i64, [2 x i64], [2 x i64] }">
+// CHECK-NEXT:   %{{.*}} = llvm.mlir.constant(0 : index) : !llvm.i64
+// CHECK-NEXT:   %{{.*}} = llvm.insertvalue %{{.*}}, %{{.*}}[2 : index] : !llvm<"{ <4 x float>*, <4 x float>*, i64, [2 x i64], [2 x i64] }">
+// CHECK-NEXT:   %[[size1:.*]] = llvm.mlir.constant(42 : index) : !llvm.i64
+// CHECK-NEXT:   %[[size2:.*]] = llvm.mlir.constant(4 : index) : !llvm.i64
+// CHECK-NEXT:   %[[cumul_size:.*]] = llvm.mul %[[size1]], %[[size2]]
+// CHECK-NEXT:   %[[st2:.*]] = llvm.mlir.constant(1 : index)
+// CHECK-NEXT:   %[[st1:.*]] = llvm.mlir.constant(4 : index)
+// CHECK-NEXT:   llvm.insertvalue %[[size1]], %{{.*}}[3, 0] : !llvm<"{ <4 x float>*, <4 x float>*, i64, [2 x i64], [2 x i64] }">
+// CHECK-NEXT:   llvm.insertvalue %[[st1]], %{{.*}}[4, 0] : !llvm<"{ <4 x float>*, <4 x float>*, i64, [2 x i64], [2 x i64] }">
+// CHECK-NEXT:   llvm.insertvalue %[[size2]], %{{.*}}[3, 1] : !llvm<"{ <4 x float>*, <4 x float>*, i64, [2 x i64], [2 x i64] }">
+// CHECK-NEXT:   llvm.insertvalue %[[st2]], %{{.*}}[4, 1] : !llvm<"{ <4 x float>*, <4 x float>*, i64, [2 x i64], [2 x i64] }">
+// CHECK-NEXT:   llvm.return %{{.*}} : !llvm<"{ <4 x float>*, <4 x float>*, i64, [2 x i64], [2 x i64] }">
+  %MV = memref_shape_cast %M : memref<42x16xf32> to memref<42x4xvector<4xf32>>
+  return %MV : memref<42x4xvector<4xf32>>
+}
+
+// -----
+
 // CHECK-LABEL: func @zero_d_load
 // BAREPTR-LABEL: func @zero_d_load(%{{.*}}: !llvm<"float*">) -> !llvm.float
 func @zero_d_load(%arg0: memref<f32>) -> f32 {
