@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file imlpements basic functions to debug structured MLIR types at
+// This file implements basic functions to debug structured MLIR types at
 // runtime. Entities in this file may not be compatible with targets without a
 // C++ runtime. These may be progressively migrated to CRunnerUtils.cpp over
 // time.
@@ -18,6 +18,10 @@
 #include <math.h>
 #include <sys/time.h>
 #include "mlir/ExecutionEngine/RunnerUtils.h"
+
+#ifndef _WIN32
+#include <sys/time.h>
+#endif // _WIN32
 
 extern "C" void _mlir_ciface_print_memref_vector_4x4xf32(
     StridedMemRefType<Vector2D<4, 4, float>, 2> *M) {
@@ -135,15 +139,21 @@ _mlir_ciface_print_memref_2d_f64(StridedMemRefType<double, 2> *M) {
   impl::printMemRef(*M);
 }
 
+/// Prints GFLOPS rating.
 extern "C" void print_flops(double flops) {
-  std::cerr << flops / 1.0E9 << " GFLOPS" << std::endl;
+  fprintf(stderr, "%lf GFLOPS\n", flops / 1.0E9);
 }
 
+/// Returns the number of seconds since Epoch 1970-01-01 00:00:00 +0000 (UTC).
 extern "C" double rtclock() {
-  struct timeval Tp;
-  int stat = gettimeofday(&Tp, NULL);
+#ifndef _WIN32
+  struct timeval tp;
+  int stat = gettimeofday(&tp, NULL);
   if (stat != 0)
-    printf("Error return from gettimeofday: %d", stat);
-  return (Tp.tv_sec + Tp.tv_usec * 1.0e-6);
+    fprintf(stderr, "Error returning time from gettimeofday: %d\n", stat);
+  return (tp.tv_sec + tp.tv_usec * 1.0e-6);
+#else
+  fprintf(stderr, "Timing utility not implemented on Windows\n");
+  return 0.0;
+#endif // _WIN32
 }
-

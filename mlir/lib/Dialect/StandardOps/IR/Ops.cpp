@@ -242,11 +242,14 @@ OpFoldResult AddIOp::fold(ArrayRef<Attribute> operands) {
 }
 
 //===----------------------------------------------------------------------===//
-// AllocOp
+// AllocOp / AllocaOp
 //===----------------------------------------------------------------------===//
 
-static void print(OpAsmPrinter &p, AllocOp op) {
-  p << "alloc";
+template <typename AllocLikeOp>
+static void printAllocLikeOp(OpAsmPrinter &p, AllocLikeOp op, StringRef name) {
+  static_assert(llvm::is_one_of<AllocLikeOp, AllocOp, AllocaOp>::value,
+                "applies to only alloc or alloca");
+  p << name;
 
   // Print dynamic dimension operands.
   MemRefType type = op.getType();
@@ -256,7 +259,16 @@ static void print(OpAsmPrinter &p, AllocOp op) {
   p << " : " << type;
 }
 
-static ParseResult parseAllocOp(OpAsmParser &parser, OperationState &result) {
+static void print(OpAsmPrinter &p, AllocOp op) {
+  printAllocLikeOp(p, op, "alloc");
+}
+
+static void print(OpAsmPrinter &p, AllocaOp op) {
+  printAllocLikeOp(p, op, "alloca");
+}
+
+static ParseResult parseAllocLikeOp(OpAsmParser &parser,
+                                    OperationState &result) {
   MemRefType type;
 
   // Parse the dimension operands and optional symbol operands, followed by a
@@ -281,8 +293,11 @@ static ParseResult parseAllocOp(OpAsmParser &parser, OperationState &result) {
   return success();
 }
 
-static LogicalResult verify(AllocOp op) {
-  auto memRefType = op.getResult().getType().dyn_cast<MemRefType>();
+template <typename AllocLikeOp>
+static LogicalResult verify(AllocLikeOp op) {
+  static_assert(llvm::is_one_of<AllocLikeOp, AllocOp, AllocaOp>::value,
+                "applies to only alloc or alloca");
+  auto memRefType = op.getResult().getType().template dyn_cast<MemRefType>();
   if (!memRefType)
     return op.emitOpError("result must be a memref");
 
@@ -305,15 +320,28 @@ static LogicalResult verify(AllocOp op) {
   for (auto operandType : op.getOperandTypes())
     if (!operandType.isIndex())
       return op.emitOpError("requires operands to be of type Index");
-  return success();
+
+  if (std::is_same<AllocLikeOp, AllocOp>::value)
+    return success();
+
+  // An alloca op needs to have an ancestor with an allocation scope trait.
+  auto *parentOp = op.getParentOp();
+  while (parentOp) {
+    if (parentOp->template hasTrait<OpTrait::AutomaticAllocationScope>())
+      return success();
+    parentOp = parentOp->getParentOp();
+  }
+  return op.emitOpError(
+      "requires an ancestor op with AutomaticAllocationScope trait");
 }
 
 namespace {
-/// Fold constant dimensions into an alloc operation.
-struct SimplifyAllocConst : public OpRewritePattern<AllocOp> {
-  using OpRewritePattern<AllocOp>::OpRewritePattern;
+/// Fold constant dimensions into an alloc like operation.
+template <typename AllocLikeOp>
+struct SimplifyAllocConst : public OpRewritePattern<AllocLikeOp> {
+  using OpRewritePattern<AllocLikeOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(AllocOp alloc,
+  LogicalResult matchAndRewrite(AllocLikeOp alloc,
                                 PatternRewriter &rewriter) const override {
     // Check to see if any dimensions operands are constants.  If so, we can
     // substitute and drop them.
@@ -357,8 +385,8 @@ struct SimplifyAllocConst : public OpRewritePattern<AllocOp> {
            newMemRefType.getNumDynamicDims());
 
     // Create and insert the alloc op for the new memref.
-    auto newAlloc = rewriter.create<AllocOp>(alloc.getLoc(), newMemRefType,
-                                             newOperands, IntegerAttr());
+    auto newAlloc = rewriter.create<AllocLikeOp>(alloc.getLoc(), newMemRefType,
+                                                 newOperands, IntegerAttr());
     // Insert a cast so we have the same type as the old alloc.
     auto resultCast = rewriter.create<MemRefCastOp>(alloc.getLoc(), newAlloc,
                                                     alloc.getType());
@@ -386,75 +414,12 @@ struct SimplifyDeadAlloc : public OpRewritePattern<AllocOp> {
 
 void AllocOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
                                           MLIRContext *context) {
-  results.insert<SimplifyAllocConst, SimplifyDeadAlloc>(context);
+  results.insert<SimplifyAllocConst<AllocOp>, SimplifyDeadAlloc>(context);
 }
 
-//===----------------------------------------------------------------------===//
-// AllocaOp
-//===----------------------------------------------------------------------===//
-
-static void print(OpAsmPrinter &p, AllocaOp op) {
-  p << "alloca";
-
-  // Print dynamic dimension operands.
-  MemRefType type = op.getType();
-  printDimAndSymbolList(op.operand_begin(), op.operand_end(),
-                        type.getNumDynamicDims(), p);
-  p.printOptionalAttrDict(op.getAttrs(), /*elidedAttrs=*/{"map"});
-  p << " : " << type;
-}
-
-static ParseResult parseAllocaOp(OpAsmParser &parser, OperationState &result) {
-  MemRefType type;
-
-  // Parse the dimension operands and optional symbol operands, followed by a
-  // memref type.
-  unsigned numDimOperands;
-  if (parseDimAndSymbolList(parser, result.operands, numDimOperands) ||
-      parser.parseOptionalAttrDict(result.attributes) ||
-      parser.parseColonType(type))
-    return failure();
-
-  // Check numDynamicDims against number of question marks in memref type.
-  // Note: this check remains here (instead of in verify()), because the
-  // partition between dim operands and symbol operands is lost after parsing.
-  // Verification still checks that the total number of operands matches
-  // the number of symbols in the affine map, plus the number of dynamic
-  // dimensions in the memref.
-  if (numDimOperands != type.getNumDynamicDims())
-    return parser.emitError(parser.getNameLoc())
-           << "dimension operand count does not equal memref dynamic dimension "
-              "count";
-  result.types.push_back(type);
-  return success();
-}
-
-static LogicalResult verify(AllocaOp op) {
-  auto memRefType = op.getResult().getType().dyn_cast<MemRefType>();
-  if (!memRefType)
-    return op.emitOpError("result must be a memref");
-
-  unsigned numSymbols = 0;
-  if (!memRefType.getAffineMaps().empty()) {
-    // Store number of symbols used in affine map (used in subsequent check).
-    AffineMap affineMap = memRefType.getAffineMaps()[0];
-    numSymbols = affineMap.getNumSymbols();
-  }
-
-  // Check that the total number of operands matches the number of symbols in
-  // the affine map, plus the number of dynamic dimensions specified in the
-  // memref type.
-  unsigned numDynamicDims = memRefType.getNumDynamicDims();
-  if (op.getNumOperands() != numDynamicDims + numSymbols)
-    return op.emitOpError(
-        "operand count does not equal dimension plus symbol operand count");
-
-  // Verify that all operands are of type Index.
-  for (auto operandType : op.getOperandTypes())
-    if (!operandType.isIndex())
-      return op.emitOpError("requires operands to be of type Index");
-
-  return success();
+void AllocaOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
+                                           MLIRContext *context) {
+  results.insert<SimplifyAllocConst<AllocaOp>>(context);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1114,14 +1079,14 @@ static LogicalResult verify(DimOp op) {
 OpFoldResult DimOp::fold(ArrayRef<Attribute> operands) {
   // Constant fold dim when the size along the index referred to is a constant.
   auto opType = memrefOrTensor().getType();
-  int64_t indexSize = -1;
+  int64_t dimSize = ShapedType::kDynamicSize;
   if (auto tensorType = opType.dyn_cast<RankedTensorType>())
-    indexSize = tensorType.getShape()[getIndex()];
+    dimSize = tensorType.getShape()[getIndex()];
   else if (auto memrefType = opType.dyn_cast<MemRefType>())
-    indexSize = memrefType.getShape()[getIndex()];
+    dimSize = memrefType.getShape()[getIndex()];
 
-  if (!ShapedType::isDynamic(indexSize))
-    return IntegerAttr::get(IndexType::get(getContext()), indexSize);
+  if (!ShapedType::isDynamic(dimSize))
+    return IntegerAttr::get(IndexType::get(getContext()), dimSize);
 
   // Fold dim to the size argument for an AllocOp/ViewOp/SubViewOp.
   auto memrefType = opType.dyn_cast<MemRefType>();
@@ -2476,13 +2441,12 @@ Value ViewOp::getDynamicOffset() {
 
 static LogicalResult verifyDynamicStrides(MemRefType memrefType,
                                           ArrayRef<int64_t> strides) {
-  ArrayRef<int64_t> shape = memrefType.getShape();
   unsigned rank = memrefType.getRank();
   assert(rank == strides.size());
   bool dynamicStrides = false;
   for (int i = rank - 2; i >= 0; --i) {
     // If size at dim 'i + 1' is dynamic, set the 'dynamicStrides' flag.
-    if (ShapedType::isDynamic(shape[i + 1]))
+    if (memrefType.isDynamicDim(i + 1))
       dynamicStrides = true;
     // If stride at dim 'i' is not dynamic, return error.
     if (dynamicStrides && strides[i] != MemRefType::getDynamicStrideOrOffset())

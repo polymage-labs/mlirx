@@ -14,10 +14,11 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/InitAllDialects.h"
+#include "mlir/InitAllTranslations.h"
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Support/ToolUtilities.h"
-#include "mlir/Support/TranslateClParser.h"
+#include "mlir/Translation.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
@@ -45,8 +46,17 @@ static llvm::cl::opt<bool> verifyDiagnostics(
                    "expected-* lines on the corresponding line"),
     llvm::cl::init(false));
 
+namespace mlir {
+// Defined in the test directory, no public header.
+void registerTestRoundtripSPIRV();
+} // namespace mlir
+
+static void registerTestTranslations() { registerTestRoundtripSPIRV(); }
+
 int main(int argc, char **argv) {
   registerAllDialects();
+  registerAllTranslations();
+  registerTestTranslations();
   llvm::InitLLVM y(argc, argv);
 
   // Add flags for all the registered translations.
@@ -73,6 +83,8 @@ int main(int argc, char **argv) {
   auto processBuffer = [&](std::unique_ptr<llvm::MemoryBuffer> ownedBuffer,
                            raw_ostream &os) {
     MLIRContext context;
+    context.allowUnregisteredDialects();
+    context.printOpOnDiagnostic(!verifyDiagnostics);
     llvm::SourceMgr sourceMgr;
     sourceMgr.AddNewSourceBuffer(std::move(ownedBuffer), llvm::SMLoc());
 

@@ -278,7 +278,7 @@ public:
     bool IsSwiftSelf : 1;
     bool IsSwiftError : 1;
     bool IsCFGuardTarget : 1;
-    uint16_t Alignment = 0;
+    MaybeAlign Alignment = None;
     Type *ByValType = nullptr;
 
     ArgListEntry()
@@ -349,6 +349,12 @@ public:
   /// the alloca address space specified through the data layout.
   MVT getFrameIndexTy(const DataLayout &DL) const {
     return getPointerTy(DL, DL.getAllocaAddrSpace());
+  }
+
+  /// Return the type for code pointers, which is determined by the program
+  /// address space specified through the data layout.
+  MVT getProgramPointerTy(const DataLayout &DL) const {
+    return getPointerTy(DL, DL.getProgramAddressSpace());
   }
 
   /// Return the type for operands of fence.
@@ -1659,18 +1665,16 @@ public:
 
   /// If a physical register, this returns the register that receives the
   /// exception address on entry to an EH pad.
-  virtual unsigned
+  virtual Register
   getExceptionPointerRegister(const Constant *PersonalityFn) const {
-    // 0 is guaranteed to be the NoRegister value on all targets
-    return 0;
+    return Register();
   }
 
   /// If a physical register, this returns the register that receives the
   /// exception typeid on entry to a landing pad.
-  virtual unsigned
+  virtual Register
   getExceptionSelectorRegister(const Constant *PersonalityFn) const {
-    // 0 is guaranteed to be the NoRegister value on all targets
-    return 0;
+    return Register();
   }
 
   virtual bool needsFixedCatchObjects() const {
@@ -1962,6 +1966,18 @@ public:
     return ISD::ZERO_EXTEND;
   }
 
+  /// Returns how the platform's atomic compare and swap expects its comparison
+  /// value to be extended (ZERO_EXTEND, SIGN_EXTEND, or ANY_EXTEND). This is
+  /// separate from getExtendForAtomicOps, which is concerned with the
+  /// sign-extension of the instruction's output, whereas here we are concerned
+  /// with the sign-extension of the input. For targets with compare-and-swap
+  /// instructions (or sub-word comparisons in their LL/SC loop expansions),
+  /// the input can be ANY_EXTEND, but the output will still have a specific
+  /// extension.
+  virtual ISD::NodeType getExtendForAtomicCmpSwapArg() const {
+    return ISD::ANY_EXTEND;
+  }
+
   /// @}
 
   /// Returns true if we should normalize
@@ -2050,7 +2066,7 @@ protected:
 
   /// If set to a physical register, this specifies the register that
   /// llvm.savestack/llvm.restorestack should save and restore.
-  void setStackPointerRegisterToSaveRestore(unsigned R) {
+  void setStackPointerRegisterToSaveRestore(Register R) {
     StackPointerRegisterToSaveRestore = R;
   }
 
@@ -2831,7 +2847,7 @@ private:
 
   /// If set to a physical register, this specifies the register that
   /// llvm.savestack/llvm.restorestack should save and restore.
-  unsigned StackPointerRegisterToSaveRestore;
+  Register StackPointerRegisterToSaveRestore;
 
   /// This indicates the default register class to use for each ValueType the
   /// target supports natively.
@@ -3884,7 +3900,7 @@ public:
   /// Should SelectionDAG lower an atomic load of the given kind as a normal
   /// LoadSDNode (as opposed to an AtomicSDNode)?  NOTE: The intention is to
   /// eventually migrate all targets to the using LoadSDNodes, but porting is
-  /// being done target at a time.  
+  /// being done target at a time.
   virtual bool lowerAtomicLoadAsLoadSDNode(const LoadInst &LI) const {
     assert(LI.isAtomic() && "violated precondition");
     return false;

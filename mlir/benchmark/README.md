@@ -10,14 +10,14 @@ See the benchmark/ directory in mlir/.
 To execute the included benchmark:
 
 ```
-$ mlir-opt -hopt -hopt-vect -hopt-unroll -hopt-copy -hopt-scalrep benchmark/dgemm-tiled-benchmark.mlir -convert-linalg-to-loops -lower-affine -convert-std-to-llvm  -canonicalize  | mlir-cpu-runner  -O3  -e main -time -reps=5   -entry-point-result=void    -shared-libs=lib/libmlir_runner_utils.so > /dev/null
+$ mlir-opt -hopt='vect=true,unroll=true,copy=true,scalrep=true' benchmark/dgemm-tiled-benchmark.mlir -convert-linalg-to-loops -lower-affine -convert-std-to-llvm='use-aligned-alloc=1'  -canonicalize  | mlir-cpu-runner  -O3  -e main -time -reps=5   -entry-point-result=void    -shared-libs=lib/libmlir_runner_utils.so > /dev/null
 ```
 
 The generated MLIR can be inspected by running the following while
 adding/removing individual flags:
 
 ```
-$ mlir-opt -hopt -hopt-vect -hopt-copy -hopt-unroll -hopt-scalrep benchmark/dgemm-tiled-benchmark.mlir
+$ mlir-opt -hopt='vect=true,copy=true,unroll=true,scalrep=true' benchmark/dgemm-tiled-benchmark.mlir
 ```
 
 ### Command-line flags

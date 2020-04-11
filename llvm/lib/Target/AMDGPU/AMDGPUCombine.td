@@ -20,6 +20,13 @@ def fcmp_select_to_fmin_fmax_legacy : GICombineRule<
   (apply [{ applySelectFCmpToFMinToFMaxLegacy(*${select}, ${matchinfo}); }])>;
 
 
+def uchar_to_float : GICombineRule<
+  (defs root:$itofp),
+  (match (wip_match_opcode G_UITOFP, G_SITOFP):$itofp,
+         [{ return matchUCharToFloat(*${itofp}, MRI, *MF, Helper); }]),
+  (apply [{ applyUCharToFloat(*${itofp}); }])>;
+
+
 // Combines which should only apply on SI/VI
 def gfx6gfx7_combines : GICombineGroup<[fcmp_select_to_fmin_fmax_legacy]>;
 
@@ -30,8 +37,18 @@ def AMDGPUPreLegalizerCombinerHelper: GICombinerHelper<
   let DisableRuleOption = "amdgpuprelegalizercombiner-disable-rule";
 }
 
+
+// FIXME: combines_for_extload can introduce illegal extloads which
+// aren't re-legalized.
+// FIXME: Is there a way to remove a single item from all_combines?
+def all_combines_minus_extload : GICombineGroup<[trivial_combines,
+  ptr_add_immed_chain, combine_indexed_load_store, undef_combines,
+  identity_combines]
+>;
+
 def AMDGPUPostLegalizerCombinerHelper: GICombinerHelper<
-  "AMDGPUGenPostLegalizerCombinerHelper", [all_combines,
-                                           gfx6gfx7_combines]> {
+  "AMDGPUGenPostLegalizerCombinerHelper",
+  [all_combines_minus_extload, gfx6gfx7_combines,
+   uchar_to_float]> {
   let DisableRuleOption = "amdgpupostlegalizercombiner-disable-rule";
 }

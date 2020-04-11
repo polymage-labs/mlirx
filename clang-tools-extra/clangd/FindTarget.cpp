@@ -331,6 +331,14 @@ public:
             break;
           }
       }
+      void VisitGotoStmt(const GotoStmt *Goto) {
+        if (auto *LabelDecl = Goto->getLabel())
+          Outer.add(LabelDecl, Flags);
+      }
+      void VisitLabelStmt(const LabelStmt *Label) {
+        if (auto *LabelDecl = Label->getDecl())
+          Outer.add(LabelDecl, Flags);
+      }
       void
       VisitCXXDependentScopeMemberExpr(const CXXDependentScopeMemberExpr *E) {
         const Type *BaseType = E->getBaseType().getTypePtrOrNull();
@@ -547,7 +555,7 @@ llvm::SmallVector<const NamedDecl *, 1>
 explicitReferenceTargets(DynTypedNode N, DeclRelationSet Mask) {
   assert(!(Mask & (DeclRelation::TemplatePattern |
                    DeclRelation::TemplateInstantiation)) &&
-         "explicitRefenceTargets handles templates on its own");
+         "explicitReferenceTargets handles templates on its own");
   auto Decls = allTargetDecls(N);
 
   // We prefer to return template instantiation, but fallback to template

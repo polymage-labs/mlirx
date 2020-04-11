@@ -1478,7 +1478,7 @@ define void @test90(i16* %ptr, i16 %cmp, i16 %val) {
 ; PPC64LE-NEXT:  # %bb.2:
 ; PPC64LE-NEXT:    sthcx. 5, 0, 3
 ; PPC64LE-NEXT:    beqlr 0
-; PPC64LE-NEXT:    b 
+; PPC64LE-NEXT:    b .LBB90_1
 ; PPC64LE-NEXT:  .LBB90_3:
 ; PPC64LE-NEXT:    sthcx. 6, 0, 3
 ; PPC64LE-NEXT:    blr

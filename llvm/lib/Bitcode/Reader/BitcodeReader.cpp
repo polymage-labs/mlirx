@@ -2337,6 +2337,15 @@ Error BitcodeReader::parseConstants() {
   Type *CurFullTy = Type::getInt32Ty(Context);
   unsigned NextCstNo = ValueList.size();
 
+  struct DelayedShufTy {
+    VectorType *OpTy;
+    VectorType *RTy;
+    Type *CurFullTy;
+    uint64_t Op0Idx;
+    uint64_t Op1Idx;
+    uint64_t Op2Idx;
+  };
+  std::vector<DelayedShufTy> DelayedShuffles;
   while (true) {
     Expected<BitstreamEntry> MaybeEntry = Stream.advanceSkippingSubblocks();
     if (!MaybeEntry)
@@ -2353,6 +2362,29 @@ Error BitcodeReader::parseConstants() {
 
       // Once all the constants have been read, go through and resolve forward
       // references.
+      //
+      // We have to treat shuffles specially because they don't have three
+      // operands anymore.  We need to convert the shuffle mask into an array,
+      // and we can't convert a forward reference.
+      for (auto &DelayedShuffle : DelayedShuffles) {
+        VectorType *OpTy = DelayedShuffle.OpTy;
+        VectorType *RTy = DelayedShuffle.RTy;
+        uint64_t Op0Idx = DelayedShuffle.Op0Idx;
+        uint64_t Op1Idx = DelayedShuffle.Op1Idx;
+        uint64_t Op2Idx = DelayedShuffle.Op2Idx;
+        Constant *Op0 = ValueList.getConstantFwdRef(Op0Idx, OpTy);
+        Constant *Op1 = ValueList.getConstantFwdRef(Op1Idx, OpTy);
+        Type *ShufTy =
+            VectorType::get(Type::getInt32Ty(Context), RTy->getElementCount());
+        Constant *Op2 = ValueList.getConstantFwdRef(Op2Idx, ShufTy);
+        if (!ShuffleVectorInst::isValidOperands(Op0, Op1, Op2))
+          return error("Invalid shufflevector operands");
+        SmallVector<int, 16> Mask;
+        ShuffleVectorInst::getShuffleMask(Op2, Mask);
+        Value *V = ConstantExpr::getShuffleVector(Op0, Op1, Mask);
+        ValueList.assignValue(V, NextCstNo, DelayedShuffle.CurFullTy);
+        ++NextCstNo;
+      }
       ValueList.resolveConstantForwardRefs();
       return Error::success();
     case BitstreamEntry::Record:
@@ -2473,7 +2505,11 @@ Error BitcodeReader::parseConstants() {
       if (Record.empty())
         return error("Invalid record");
 
-      Type *EltTy = cast<SequentialType>(CurTy)->getElementType();
+      Type *EltTy;
+      if (auto *Array = dyn_cast<ArrayType>(CurTy))
+        EltTy = Array->getElementType();
+      else
+        EltTy = cast<VectorType>(CurTy)->getElementType();
       if (EltTy->isIntegerTy(8)) {
         SmallVector<uint8_t, 16> Elts(Record.begin(), Record.end());
         if (isa<VectorType>(CurTy))
@@ -2694,13 +2730,9 @@ Error BitcodeReader::parseConstants() {
       VectorType *OpTy = dyn_cast<VectorType>(CurTy);
       if (Record.size() < 3 || !OpTy)
         return error("Invalid record");
-      Constant *Op0 = ValueList.getConstantFwdRef(Record[0], OpTy);
-      Constant *Op1 = ValueList.getConstantFwdRef(Record[1], OpTy);
-      Type *ShufTy = VectorType::get(Type::getInt32Ty(Context),
-                                     OpTy->getElementCount());
-      Constant *Op2 = ValueList.getConstantFwdRef(Record[2], ShufTy);
-      V = ConstantExpr::getShuffleVector(Op0, Op1, Op2);
-      break;
+      DelayedShuffles.push_back(
+          {OpTy, OpTy, CurFullTy, Record[0], Record[1], Record[2]});
+      continue;
     }
     case bitc::CST_CODE_CE_SHUFVEC_EX: { // [opty, opval, opval, opval]
       VectorType *RTy = dyn_cast<VectorType>(CurTy);
@@ -2708,13 +2740,9 @@ Error BitcodeReader::parseConstants() {
         dyn_cast_or_null<VectorType>(getTypeByID(Record[0]));
       if (Record.size() < 4 || !RTy || !OpTy)
         return error("Invalid record");
-      Constant *Op0 = ValueList.getConstantFwdRef(Record[1], OpTy);
-      Constant *Op1 = ValueList.getConstantFwdRef(Record[2], OpTy);
-      Type *ShufTy = VectorType::get(Type::getInt32Ty(Context),
-                                     RTy->getElementCount());
-      Constant *Op2 = ValueList.getConstantFwdRef(Record[3], ShufTy);
-      V = ConstantExpr::getShuffleVector(Op0, Op1, Op2);
-      break;
+      DelayedShuffles.push_back(
+          {OpTy, RTy, CurFullTy, Record[1], Record[2], Record[3]});
+      continue;
     }
     case bitc::CST_CODE_CE_CMP: {     // CE_CMP: [opty, opval, opval, pred]
       if (Record.size() < 4)
@@ -4140,7 +4168,7 @@ Error BitcodeReader::parseFunctionBody(Function *F) {
       if (!Vec->getType()->isVectorTy())
         return error("Invalid type for value");
       I = ExtractElementInst::Create(Vec, Idx);
-      FullTy = FullTy->getVectorElementType();
+      FullTy = cast<VectorType>(FullTy)->getElementType();
       InstructionList.push_back(I);
       break;
     }
@@ -4174,8 +4202,9 @@ Error BitcodeReader::parseFunctionBody(Function *F) {
         return error("Invalid type for value");
 
       I = new ShuffleVectorInst(Vec1, Vec2, Mask);
-      FullTy = VectorType::get(FullTy->getVectorElementType(),
-                               Mask->getType()->getVectorElementCount());
+      FullTy =
+          VectorType::get(cast<VectorType>(FullTy)->getElementType(),
+                          cast<VectorType>(Mask->getType())->getElementCount());
       InstructionList.push_back(I);
       break;
     }
@@ -5167,8 +5196,8 @@ Error BitcodeReader::parseFunctionBody(Function *F) {
             !FullTy->isPointerTy() && !isa<StructType>(FullTy) &&
             !isa<ArrayType>(FullTy) &&
             (!isa<VectorType>(FullTy) ||
-             FullTy->getVectorElementType()->isFloatingPointTy() ||
-             FullTy->getVectorElementType()->isIntegerTy()) &&
+             cast<VectorType>(FullTy)->getElementType()->isFloatingPointTy() ||
+             cast<VectorType>(FullTy)->getElementType()->isIntegerTy()) &&
             "Structured types must be assigned with corresponding non-opaque "
             "pointer type");
       }

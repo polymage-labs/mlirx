@@ -15,14 +15,14 @@
 // SSA scalars live out of 'affine.for'/'affine.if' statements is available.
 //===----------------------------------------------------------------------===//
 
+#include "PassDetail.h"
 #include "mlir/Analysis/AffineAnalysis.h"
 #include "mlir/Analysis/Dominance.h"
 #include "mlir/Analysis/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
-#include "mlir/Pass/Pass.h"
-#include "mlir/Transforms/LoopUtils.h"
 #include "mlir/Transforms/Passes.h"
+#include "mlir/Transforms/LoopUtils.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include <algorithm>
 
@@ -31,7 +31,6 @@
 using namespace mlir;
 
 namespace {
-
 // The store to load forwarding relies on three conditions:
 //
 // 1) they need to have mathematically equivalent affine access functions
@@ -64,7 +63,8 @@ namespace {
 // currently only eliminates the stores only if no other loads/uses (other
 // than dealloc) remain.
 //
-struct AffineScalarReplacement : public FunctionPass<AffineScalarReplacement> {
+struct AffineScalarReplacement
+    : public AffineScalarReplacementBase<AffineScalarReplacement> {
   void runOnFunction() override;
 
   bool forwardStoreToLoad(FuncOp f);
@@ -83,7 +83,7 @@ struct AffineScalarReplacement : public FunctionPass<AffineScalarReplacement> {
 
 /// Creates a pass to perform optimizations relying on memref dataflow such as
 /// store to load forwarding, elimination of dead stores, and dead allocs.
-std::unique_ptr<OpPassBase<FuncOp>> mlir::createAffineScalarReplacementPass() {
+std::unique_ptr<OperationPass<FuncOp>> mlir::createAffineScalarReplacementPass() {
   return std::make_unique<AffineScalarReplacement>();
 }
 
@@ -238,7 +238,3 @@ void AffineScalarReplacement::runOnFunction() {
   // Store to load forwarding
   forwardStoreToLoad(f);
 }
-
-static PassRegistration<AffineScalarReplacement>
-    pass("affine-scalrep",
-         "Perform scalar replacement of affine memrefs accesses");

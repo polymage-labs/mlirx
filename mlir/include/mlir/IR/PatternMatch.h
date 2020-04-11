@@ -131,6 +131,12 @@ public:
     return failure();
   }
 
+  /// Returns true if this pattern is known to result in recursive application,
+  /// i.e. this pattern may generate IR that also matches this pattern, but is
+  /// known to bound the recursion. This signals to a rewriter that it is safe
+  /// to apply this pattern recursively to generated IR.
+  virtual bool hasBoundedRewriteRecursion() const { return false; }
+
   /// Return a list of operations that may be generated when rewriting an
   /// operation instance with this pattern.
   ArrayRef<OperationName> getGeneratedOps() const { return generatedOps; }
@@ -279,6 +285,9 @@ public:
 
   /// This method erases an operation that is known to have no uses.
   virtual void eraseOp(Operation *op);
+
+  /// This method erases all operations in a block.
+  virtual void eraseBlock(Block *block);
 
   /// Merge the operations of block 'source' into the end of block 'dest'.
   /// 'source's predecessors must either be empty or only contain 'dest`.
@@ -441,11 +450,11 @@ private:
 /// Note: These methods also perform folding and simple dead-code elimination
 ///       before attempting to match any of the provided patterns.
 ///
-bool applyPatternsGreedily(Operation *op,
-                           const OwningRewritePatternList &patterns);
+bool applyPatternsAndFoldGreedily(Operation *op,
+                                  const OwningRewritePatternList &patterns);
 /// Rewrite the given regions, which must be isolated from above.
-bool applyPatternsGreedily(MutableArrayRef<Region> regions,
-                           const OwningRewritePatternList &patterns);
+bool applyPatternsAndFoldGreedily(MutableArrayRef<Region> regions,
+                                  const OwningRewritePatternList &patterns);
 } // end namespace mlir
 
 #endif // MLIR_PATTERN_MATCH_H

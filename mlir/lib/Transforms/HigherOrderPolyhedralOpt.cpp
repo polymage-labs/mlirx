@@ -1,6 +1,6 @@
-//===- HigherOrderPolyhedralOpt.cpp - High Order Poly Optimization pass -*-===//
+//===- HigherOrderPolyhedralOpt.cpp - Higher Order Poly Opt pass -*-==========//
 //
-// Copyright 2019 Uday Bondhugula
+// Copyright (C) 2019 Uday Bondhugula, PolyMage Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 // tiled code to reproduce the remaining steps.
 //===----------------------------------------------------------------------===//
 
+#include "PassDetail.h"
 #include "mlir/Analysis/AffineAnalysis.h"
 #include "mlir/Analysis/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -39,79 +40,55 @@
 
 using namespace mlir;
 
-static llvm::cl::OptionCategory clOptionsCategory(DEBUG_TYPE " options");
-
-static llvm::cl::opt<bool> clCopy("hopt-copy",
-                                  llvm::cl::desc("Explicit copying / packing"),
-                                  llvm::cl::init(false),
-                                  llvm::cl::cat(clOptionsCategory));
-
-static llvm::cl::opt<bool> clUnroll("hopt-unroll",
-                                    llvm::cl::desc("Unroll and unroll-and-jam"),
-                                    llvm::cl::init(false),
-                                    llvm::cl::cat(clOptionsCategory));
-
-static llvm::cl::opt<bool> clVect("hopt-vect", llvm::cl::desc("Vectorization "),
-                                  llvm::cl::init(false),
-                                  llvm::cl::cat(clOptionsCategory));
-
-static llvm::cl::opt<bool> clScalRep("hopt-scalrep",
-                                     llvm::cl::desc("Scalar Replacement"),
-                                     llvm::cl::init(false),
-                                     llvm::cl::cat(clOptionsCategory));
-
 namespace {
 
 /// Higher order polyhedral optimization pass.
 struct HigherOrderPolyhedralOpt
-    : public FunctionPass<HigherOrderPolyhedralOpt> {
+    : public HigherOrderPolyhedralOptBase<HigherOrderPolyhedralOpt> {
   void runOnFunction() override;
   void runOnBlock(Block *block);
 
   void lowerPolyForOps(Block *block, Block::iterator begin, Block::iterator end,
                        OpBuilder &builder);
 
-  static void optimizeMatmul(AffineForOp rootMatmulNest, unsigned M_C,
-                             unsigned N_C, unsigned K_C, unsigned M_R,
-                             unsigned N_R, unsigned K_U, OpBuilder &builder);
-
-  static const llvm::DenseMap<StringRef, unsigned> optConf;
-
-  static const char *kPolyCodeGenAttrName;
+  void optimizeMatmul(AffineForOp rootMatmulNest, unsigned M_C, unsigned N_C,
+                      unsigned K_C, unsigned M_R, unsigned N_R, unsigned K_U,
+                      OpBuilder &builder);
 };
 
 } // end anonymous namespace
 
-const llvm::DenseMap<StringRef, unsigned> HigherOrderPolyhedralOpt::optConf = {
-    {"M_C", 64}, {"N_C", 128}, {"K_C", 512},
-    {"M_R", 4},  {"N_R", 4},   {"K_U", 4}};
-
-const char *HigherOrderPolyhedralOpt::kPolyCodeGenAttrName =
-    "poly_codegen_name";
 
 /// Creates a pass to perform optimizations relying on memref dataflow such as
 /// store to load forwarding, elimination of dead stores, and dead allocs.
-std::unique_ptr<OpPassBase<FuncOp>> mlir::createHigherOrderPolyhedralOptPass() {
+std::unique_ptr<OperationPass<FuncOp>>
+mlir::createHigherOrderPolyhedralOptPass() {
   return std::make_unique<HigherOrderPolyhedralOpt>();
 }
 
+// Returns the parameter on the op if present, otherwise the one stored in
+// kDefaultMatmulOptParams.
 static unsigned getMatmulOptParameter(Operation *op, StringRef name) {
+  // Values of the BLIS matmul parameters that will be used if none are provided
+  // on the op.
+  const llvm::DenseMap<StringRef, unsigned> kDefaultMatmulOptParams = {
+      {"M_C", 330}, {"N_C", 2048}, {"K_C", 480},
+      {"M_R", 6},   {"N_R", 8},    {"K_U", 4}};
   IntegerAttr attr = op->getAttrOfType<IntegerAttr>(name);
   if (!attr) {
     // Use the default value.
-    assert(HigherOrderPolyhedralOpt::optConf.count(name) > 0 &&
+    assert(kDefaultMatmulOptParams.count(name) > 0 &&
            "default opt conf parameter not found");
-    return HigherOrderPolyhedralOpt::optConf.lookup(name);
+    return kDefaultMatmulOptParams.lookup(name);
   }
   return attr.getValue().getSExtValue();
 }
 
 static AffineForOp getByPolyName(AffineForOp root, StringRef polyName) {
+  const char *kPolyCodeGenAttrName = "poly_codegen_name";
   AffineForOp res;
-
   root.walk([&](AffineForOp forOp) {
-    auto stringAttr = forOp.getAttrOfType<StringAttr>(
-        HigherOrderPolyhedralOpt::kPolyCodeGenAttrName);
+    auto stringAttr = forOp.getAttrOfType<StringAttr>(kPolyCodeGenAttrName);
     if (!stringAttr)
       return WalkResult::advance();
     auto forOpCodegenName = stringAttr.getValue();
@@ -303,7 +280,7 @@ void HigherOrderPolyhedralOpt::runOnFunction() {
     AffineLoadOp::getCanonicalizationPatterns(patterns, context);
     AffineStoreOp::getCanonicalizationPatterns(patterns, context);
     AffineApplyOp::getCanonicalizationPatterns(patterns, context);
-    applyPatternsGreedily(func, patterns);
+    applyPatternsAndFoldGreedily(func, patterns);
   }
 
   // Replace accesses to invariant load/store's and multiple redundant loads
@@ -312,6 +289,3 @@ void HigherOrderPolyhedralOpt::runOnFunction() {
     func.walk([&](AffineForOp forOp) { scalarReplace(forOp); });
   }
 }
-
-static PassRegistration<HigherOrderPolyhedralOpt>
-    pass("hopt", "Run higher order polyhedral optimization");

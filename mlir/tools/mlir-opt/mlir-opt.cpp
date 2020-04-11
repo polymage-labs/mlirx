@@ -39,9 +39,12 @@ void registerSimpleParametricTilingPass();
 void registerSymbolTestPasses();
 void registerTestAffineDataCopyPass();
 void registerTestAllReduceLoweringPass();
+void registerTestLinalgMatmulToVectorPass();
+void registerTestLoopPermutationPass();
 void registerTestCallGraphPass();
 void registerTestConstantFold();
 void registerTestConvertGPUKernelToCubinPass();
+void registerTestDominancePass();
 void registerTestFunc();
 void registerTestGpuMemoryPromotionPass();
 void registerTestLinalgTransforms();
@@ -83,6 +86,10 @@ static cl::opt<bool>
                  cl::desc("Run the verifier after each transformation pass"),
                  cl::init(true));
 
+static cl::opt<bool> allowUnregisteredDialects(
+    "allow-unregistered-dialect",
+    cl::desc("Allow operation with no registered dialects"), cl::init(false));
+
 void registerTestPasses() {
   registerConvertToTargetEnvPass();
   registerInliner();
@@ -95,11 +102,14 @@ void registerTestPasses() {
   registerSymbolTestPasses();
   registerTestAffineDataCopyPass();
   registerTestAllReduceLoweringPass();
+  registerTestLinalgMatmulToVectorPass();
+  registerTestLoopPermutationPass();
   registerTestCallGraphPass();
   registerTestConstantFold();
 #if MLIR_CUDA_CONVERSIONS_ENABLED
   registerTestConvertGPUKernelToCubinPass();
 #endif
+  registerTestDominancePass();
   registerTestFunc();
   registerTestGpuMemoryPromotionPass();
   registerTestLinalgTransforms();
@@ -158,6 +168,12 @@ int main(int argc, char **argv) {
     exit(1);
   }
 
-  return failed(MlirOptMain(output->os(), std::move(file), passPipeline,
-                            splitInputFile, verifyDiagnostics, verifyPasses));
+  if (failed(MlirOptMain(output->os(), std::move(file), passPipeline,
+                         splitInputFile, verifyDiagnostics, verifyPasses,
+                         allowUnregisteredDialects))) {
+    return 1;
+  }
+  // Keep the output file if the invocation of MlirOptMain was successful.
+  output->keep();
+  return 0;
 }

@@ -991,11 +991,21 @@ CGDebugInfo::getOrCreateRecordFwdDecl(const RecordType *Ty,
   uint64_t Size = 0;
   uint32_t Align = 0;
 
+  llvm::DINode::DIFlags Flags = llvm::DINode::FlagFwdDecl;
+
+  // Add flag to nontrivial forward declarations. To be consistent with MSVC,
+  // add the flag if a record has no definition because we don't know whether
+  // it will be trivial or not.
+  if (const CXXRecordDecl *CXXRD = dyn_cast<CXXRecordDecl>(RD))
+    if (!CXXRD->hasDefinition() ||
+        (CXXRD->hasDefinition() && !CXXRD->isTrivial()))
+      Flags |= llvm::DINode::FlagNonTrivial;
+
   // Create the type.
   SmallString<256> Identifier = getTypeIdentifier(Ty, CGM, TheCU);
   llvm::DICompositeType *RetTy = DBuilder.createReplaceableCompositeType(
-      getTagForRecord(RD), RDName, Ctx, DefUnit, Line, 0, Size, Align,
-      llvm::DINode::FlagFwdDecl, Identifier);
+      getTagForRecord(RD), RDName, Ctx, DefUnit, Line, 0, Size, Align, Flags,
+      Identifier);
   if (CGM.getCodeGenOpts().DebugFwdTemplateParams)
     if (auto *TSpecial = dyn_cast<ClassTemplateSpecializationDecl>(RD))
       DBuilder.replaceArrays(RetTy, llvm::DINodeArray(),
@@ -1816,10 +1826,12 @@ CGDebugInfo::CollectTemplateParams(const TemplateParameterList *TPList,
       if (TPList && CGM.getCodeGenOpts().DwarfVersion >= 5)
         if (auto *templateType =
                 dyn_cast_or_null<NonTypeTemplateParmDecl>(TPList->getParam(i)))
-          if (templateType->hasDefaultArgument())
-            defaultParameter =
+          if (templateType->hasDefaultArgument() &&
+              !templateType->getDefaultArgument()->isValueDependent())
+            defaultParameter = llvm::APSInt::isSameValue(
                 templateType->getDefaultArgument()->EvaluateKnownConstInt(
-                    CGM.getContext()) == TA.getAsIntegral();
+                    CGM.getContext()),
+                TA.getAsIntegral());
 
       TemplateParams.push_back(DBuilder.createTemplateValueParameter(
           TheCU, Name, TTy, defaultParameter,
@@ -2259,12 +2271,11 @@ static bool shouldOmitDefinition(codegenoptions::DebugInfoKind DebugKind,
   // constructor is emitted. Skip this optimization if the class or any of
   // its methods are marked dllimport.
   if (DebugKind == codegenoptions::DebugInfoConstructor &&
-      !CXXDecl->isLambda() && !isClassOrMethodDLLImport(CXXDecl)) {
-    for (const auto *Ctor : CXXDecl->ctors()) {
+      !CXXDecl->isLambda() && !CXXDecl->hasConstexprNonCopyMoveConstructor() &&
+      !isClassOrMethodDLLImport(CXXDecl))
+    for (const auto *Ctor : CXXDecl->ctors())
       if (Ctor->isUserProvided())
         return true;
-    }
-  }
 
   TemplateSpecializationKind Spec = TSK_Undeclared;
   if (const auto *SD = dyn_cast<ClassTemplateSpecializationDecl>(RD))
@@ -2483,6 +2494,17 @@ llvm::DIModule *CGDebugInfo::getOrCreateModuleRef(ASTSourceDescriptor Mod,
     assert(StringRef(M->Name).startswith(CGM.getLangOpts().ModuleName) &&
            "clang module without ASTFile must be specified by -fmodule-name");
 
+  // Return a StringRef to the remapped Path.
+  auto RemapPath = [this](StringRef Path) -> std::string {
+    std::string Remapped = remapDIPath(Path);
+    StringRef Relative(Remapped);
+    StringRef CompDir = TheCU->getDirectory();
+    if (Relative.consume_front(CompDir))
+      Relative.consume_front(llvm::sys::path::get_separator());
+
+    return Relative.str();
+  };
+
   if (CreateSkeletonCU && IsRootModule && !Mod.getASTFile().empty()) {
     // PCH files don't have a signature field in the control block,
     // but LLVM detects skeleton CUs by looking for a non-zero DWO id.
@@ -2496,16 +2518,12 @@ llvm::DIModule *CGDebugInfo::getOrCreateModuleRef(ASTSourceDescriptor Mod,
     if (!llvm::sys::path::is_absolute(Mod.getASTFile()))
       PCM = Mod.getPath();
     llvm::sys::path::append(PCM, Mod.getASTFile());
-    std::string RemappedPCM = remapDIPath(PCM);
-    StringRef RelativePCM(RemappedPCM);
-    StringRef CompDir = TheCU->getDirectory();
-    if (RelativePCM.consume_front(CompDir))
-      RelativePCM.consume_front(llvm::sys::path::get_separator());
-    DIB.createCompileUnit(TheCU->getSourceLanguage(),
-                          // TODO: Support "Source" from external AST providers?
-                          DIB.createFile(Mod.getModuleName(), CompDir),
-                          TheCU->getProducer(), false, StringRef(), 0, RelativePCM,
-                          llvm::DICompileUnit::FullDebug, Signature);
+    DIB.createCompileUnit(
+        TheCU->getSourceLanguage(),
+        // TODO: Support "Source" from external AST providers?
+        DIB.createFile(Mod.getModuleName(), TheCU->getDirectory()),
+        TheCU->getProducer(), false, StringRef(), 0, RemapPath(PCM),
+        llvm::DICompileUnit::FullDebug, Signature);
     DIB.finalize();
   }
 
@@ -2513,9 +2531,10 @@ llvm::DIModule *CGDebugInfo::getOrCreateModuleRef(ASTSourceDescriptor Mod,
       IsRootModule ? nullptr
                    : getOrCreateModuleRef(ASTSourceDescriptor(*M->Parent),
                                           CreateSkeletonCU);
+  std::string IncludePath = Mod.getPath().str();
   llvm::DIModule *DIMod =
       DBuilder.createModule(Parent, Mod.getModuleName(), ConfigMacros,
-                            Mod.getPath());
+                            RemapPath(IncludePath));
   ModuleCache[M].reset(DIMod);
   return DIMod;
 }

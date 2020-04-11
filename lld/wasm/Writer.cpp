@@ -201,7 +201,7 @@ void Writer::writeSections() {
 // rather than overwriting global data, but also increases code size since all
 // static data loads and stores requires larger offsets.
 void Writer::layoutMemory() {
-  uint32_t memoryPtr = 0;
+  uint64_t memoryPtr = 0;
 
   auto placeStack = [&]() {
     if (config->relocatable || config->isPic)
@@ -227,7 +227,7 @@ void Writer::layoutMemory() {
   if (WasmSym::globalBase)
     WasmSym::globalBase->setVirtualAddress(memoryPtr);
 
-  uint32_t dataStart = memoryPtr;
+  uint64_t dataStart = memoryPtr;
 
   // Arbitrarily set __dso_handle handle to point to the start of the data
   // segments.
@@ -286,8 +286,9 @@ void Writer::layoutMemory() {
       error("initial memory must be " + Twine(WasmPageSize) + "-byte aligned");
     if (memoryPtr > config->initialMemory)
       error("initial memory too small, " + Twine(memoryPtr) + " bytes needed");
-    else
-      memoryPtr = config->initialMemory;
+    if (config->initialMemory > (1ULL << 32))
+      error("initial memory too large, cannot be greater than 4294967296");
+    memoryPtr = config->initialMemory;
   }
   out.dylinkSec->memSize = memoryPtr;
   out.memorySec->numMemoryPages =
@@ -300,6 +301,8 @@ void Writer::layoutMemory() {
       error("maximum memory must be " + Twine(WasmPageSize) + "-byte aligned");
     if (memoryPtr > config->maxMemory)
       error("maximum memory too small, " + Twine(memoryPtr) + " bytes needed");
+    if (config->maxMemory > (1ULL << 32))
+      error("maximum memory too large, cannot be greater than 4294967296");
     out.memorySec->maxMemoryPages = config->maxMemory / WasmPageSize;
     log("mem: max pages   = " + Twine(out.memorySec->maxMemoryPages));
   }
@@ -336,8 +339,8 @@ void Writer::addSections() {
   addSection(out.functionSec);
   addSection(out.tableSec);
   addSection(out.memorySec);
-  addSection(out.globalSec);
   addSection(out.eventSec);
+  addSection(out.globalSec);
   addSection(out.exportSec);
   addSection(out.startSec);
   addSection(out.elemSec);
@@ -520,9 +523,8 @@ void Writer::calculateExports() {
     StringRef name = sym->getName();
     WasmExport export_;
     if (auto *f = dyn_cast<DefinedFunction>(sym)) {
-      StringRef exportName = f->function->getExportName();
-      if (!exportName.empty()) {
-        name = exportName;
+      if (Optional<StringRef> exportName = f->function->getExportName()) {
+        name = *exportName;
       }
       export_ = {name, WASM_EXTERNAL_FUNCTION, f->getFunctionIndex()};
     } else if (auto *g = dyn_cast<DefinedGlobal>(sym)) {
@@ -966,8 +968,8 @@ void Writer::createSyntheticSections() {
   out.functionSec = make<FunctionSection>();
   out.tableSec = make<TableSection>();
   out.memorySec = make<MemorySection>();
-  out.globalSec = make<GlobalSection>();
   out.eventSec = make<EventSection>();
+  out.globalSec = make<GlobalSection>();
   out.exportSec = make<ExportSection>();
   out.startSec = make<StartSection>(segments.size());
   out.elemSec = make<ElemSection>();

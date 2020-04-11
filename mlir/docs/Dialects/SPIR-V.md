@@ -1,4 +1,4 @@
-# SPIR-V Dialect
+# 'spv' Dialect
 
 This document describes the design of the SPIR-V dialect in MLIR. It lists
 various design choices we made for modeling different SPIR-V mechanisms, and
@@ -14,6 +14,8 @@ compute kernels. It is adopted by multiple Khronos Group’s APIs, including
 Vulkan and OpenCL. It is fully defined in a
 [human-readable specification][SpirvSpec]; the syntax of various SPIR-V
 instructions are encoded in a [machine-readable grammar][SpirvGrammar].
+
+[TOC]
 
 ## Design Guidelines
 
@@ -194,7 +196,7 @@ explicit capturing.
     friendly to compiler analyses and transformations. More discussions can be
     found in the [Function](#function) section later.
 
-### Model entry points and execution models as normal ops
+#### Model entry points and execution models as normal ops
 
 *   A SPIR-V module can have multiple entry points. And these entry points refer
     to the function and interface variables. It’s not suitable to model them as
@@ -459,8 +461,9 @@ can be represented in the dialect as
 ```
 
 Operation documentation is written in each op's Op Definition Spec using
-TableGen. A markdown version of the doc can be found at
-[mlir.llvm.org][LlvmMlirSpirvDoc] or generated using `mlir-tblgen -gen-doc`.
+TableGen. A markdown version of the doc can be generated using
+`mlir-tblgen -gen-doc` and is attached in the
+[Operation definitions](#operation-definitions) section.
 
 ### Ops from extended instruction sets
 
@@ -731,6 +734,42 @@ func @foo() -> () {
 }
 ```
 
+## Version, extensions, capabilities
+
+SPIR-V supports versions, extensions, and capabilities as ways to indicate the
+availability of various features (types, ops, enum cases) on target hardware.
+For example, non-uniform group operations were missing before v1.3, and they
+require special capabilites like `GroupNonUniformArithmetic` to be used. These
+availability information relates to [target environment](#target-environment)
+and affects the legality of patterns during dialect conversion.
+
+SPIR-V ops' availability requirements are modeled with
+[op interfaces][MlirOpInterface]:
+
+*   `QueryMinVersionInterface` and `QueryMaxVersionInterface` for vesion
+    requirements
+*   `QueryExtensionInterface` for extension requirements
+*   `QueryCapabilityInterface` for capability requirements
+
+These interface declarations are auto-generated from TableGen defintions
+included in [`SPIRVBase.td`][MlirSpirvBase]. At the moment all SPIR-V ops
+implements the above interfaces.
+
+SPIR-V ops' availability implemention methods are automatically synthesized
+from the availability specification on each op and enum attribute in TableGen.
+An op needs to look into not only the opcode but also operands to derive its
+availability requirements. For example, `spv.ControlBarrier` requires no
+special capability if the execution scope is `Subgroup`, but it will require
+the `VulkanMemoryModel` capability if the scope is `QueueFamily`.
+
+SPIR-V types' availability implementation methods are manually written as
+overrides in the SPIR-V [type hierarchy][MlirSpirvTypes].
+
+These availability requirements serve as the "ingredients" for the
+[`SPIRVConversionTarget`](#spirvconversiontarget) and
+[`SPIRVTypeConverter`](#spirvtypeconverter) to perform op and type conversions,
+by following the requirements in [target environment](#target-environment).
+
 ## Target environment
 
 SPIR-V aims to support multiple execution environments as specified by client
@@ -940,22 +979,35 @@ register other legality constraints into the returned `SPIRVConversionTarget`.
 ### `SPIRVTypeConverter`
 
 The `mlir::SPIRVTypeConverter` derives from `mlir::TypeConverter` and provides
-type conversion for standard types to SPIR-V types:
+type conversion for standard types to SPIR-V types conforming to the [target
+environment](#target-environment) it is constructed with. If the required
+extension/capability for the resultant type is not available in the given
+target environment, `convertType()` will return a null type.
 
-*   [Standard Integer][MlirIntegerType] -> Standard Integer
-*   [Standard Float][MlirFloatType] -> Standard Float
-*   [Vector Type][MlirVectorType] -> Vector Type
-*   [Memref Type][MlirMemrefType] with static shape and stride -> `spv.array`
-    with number of elements obtained from the layout specification of the
-    `memref`, and same element type.
+Standard scalar types are converted to their corresponding SPIR-V scalar types.
 
-(TODO: Generate the conversion matrix from comments automatically)
+(TODO: Note that if the bitwidth is not available in the target environment,
+it will be unconditionally converted to 32-bit. This should be switched to
+properly emulating non-32-bit scalar types.)
 
-[Index Type][MlirIndexType] need special handling since they are not directly
-supported in SPIR-V. Currently the `index` type is converted to `i32`.
+[Standard index Type][MlirIndexType] need special handling since they are not
+directly supported in SPIR-V. Currently the `index` type is converted to `i32`.
 
 (TODO: Allow for configuring the integer width to use for `index` types in the
 SPIR-V dialect)
+
+SPIR-V only supports vectors of 2/3/4 elements; so
+[standard vector types][MlirVectorType] of these length can be converted
+directly.
+
+(TODO: Convert other vectors of lengths to scalars or arrays)
+
+[Standard memref types][MlirMemrefType] with static shape and stride are
+converted to `spv.ptr<spv.struct<spv.array<...>>>`s. The resultant SPIR-V array
+types has the same element type as the source memref and its number of elements
+is obtained from the layout specification of the memref. The storage class of
+the pointer type are derived from the memref's memory space with
+`SPIRVTypeConverter::getStorageClassForMemorySpace()`.
 
 ### `SPIRVOpLowering`
 
@@ -1224,6 +1276,10 @@ conversion][MlirDialectConversionSignatureConversion] might be needed as well.
 operations contained within its region are valid operations in the SPIR-V
 dialect.
 
+## Operation definitions
+
+[include "Dialects/SPIRVOps.md"]
+
 [Spirv]: https://www.khronos.org/registry/spir-v/
 [SpirvSpec]: https://www.khronos.org/registry/spir-v/specs/unified1/SPIRV.html
 [SpirvLogicalLayout]: https://www.khronos.org/registry/spir-v/specs/unified1/SPIRV.html#_a_id_logicallayout_a_logical_layout_of_a_module
@@ -1243,6 +1299,7 @@ dialect.
 [MlirDialectConversionTypeConversion]: ../DialectConversion.md#type-converter
 [MlirDialectConversionRewritePattern]: ../DialectConversion.md#conversion-patterns
 [MlirDialectConversionSignatureConversion]: ../DialectConversion.md#region-signature-conversion
+[MlirOpInterface]: ../Interfaces/#operation-interfaces
 [MlirIntegerType]: ../LangRef.md#integer-type
 [MlirFloatType]: ../LangRef.md#floating-point-types
 [MlirVectorType]: ../LangRef.md#vector-type
@@ -1270,7 +1327,6 @@ dialect.
 [GitHubDialectTracking]: https://github.com/tensorflow/mlir/issues/302
 [GitHubLoweringTracking]: https://github.com/tensorflow/mlir/issues/303
 [GenSpirvUtilsPy]: https://github.com/llvm/llvm-project/blob/master/mlir/utils/spirv/gen_spirv_dialect.py
-[LlvmMlirSpirvDoc]: ../Dialects/SPIRVOps/
 [CustomTypeAttrTutorial]: ../DefiningAttributesAndTypes/
 [VulkanSpirv]: https://renderdoc.org/vkspec_chunked/chap40.html#spirvenv
 [VulkanShaderInterface]: https://renderdoc.org/vkspec_chunked/chap14.html#interfaces-resources

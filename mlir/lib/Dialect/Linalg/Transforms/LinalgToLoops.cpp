@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "PassDetail.h"
 #include "mlir/Dialect/Affine/EDSC/Intrinsics.h"
 #include "mlir/Dialect/Linalg/EDSC/Intrinsics.h"
 #include "mlir/Dialect/Linalg/IR/LinalgOps.h"
@@ -18,8 +19,6 @@
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/BlockAndValueMapping.h"
-#include "mlir/IR/OpImplementation.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Support/Functional.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/STLExtras.h"
@@ -101,9 +100,26 @@ static void inlineRegionAndEmitStdStore(OpType op,
   assert(isa<YieldOp>(terminator) &&
          "expected an yield op in the end of the region");
   for (unsigned i = 0, e = terminator.getNumOperands(); i < e; ++i) {
-    std_store(map.lookup(terminator.getOperand(i)), outputBuffers[i],
+    std_store(map.lookupOrDefault(terminator.getOperand(i)), outputBuffers[i],
               indexing[i]);
   }
+}
+
+// Returns a pair that contains input indices and output indices of a
+// SingleInputPoolingOp `op`.
+template <typename SingleInputPoolingOp>
+static std::pair<SmallVector<ValueHandle, 8>, SmallVector<ValueHandle, 8>>
+getInputAndOutputIndices(ArrayRef<Value> allIvs, SingleInputPoolingOp op) {
+  auto &b = ScopedContext::getBuilder();
+  auto loc = ScopedContext::getLocation();
+  auto mapsRange = op.indexing_maps().template getAsRange<AffineMapAttr>();
+  auto maps =
+      functional::map([](AffineMapAttr a) { return a.getValue(); }, mapsRange);
+  SmallVector<ValueHandle, 8> iIdx(
+      makeCanonicalAffineApplies(b, loc, maps[0], allIvs));
+  SmallVector<ValueHandle, 8> oIdx(
+      makeCanonicalAffineApplies(b, loc, maps[2], allIvs));
+  return {iIdx, oIdx};
 }
 
 namespace {
@@ -203,7 +219,7 @@ template <typename IndexedValueType>
 class LinalgScopedEmitter<IndexedValueType, ConvOp> {
 public:
   /// Returns the input value of convOp. If the indices in `imIdx` is out of
-  /// boundrary, returns 0 instead.
+  /// boundary, returns 0 instead.
   static ValueHandle getConvOpInput(ConvOp convOp, IndexedValueType im,
                                     ArrayRef<ValueHandle> imIdx) {
     // TODO(ntv): add a level of indirection to linalg.generic.
@@ -234,7 +250,7 @@ public:
       ValueHandle rightBound = std_dim(convOp.input(), idx);
       conds.push_back(conds.back() || (dim >= rightBound));
 
-      // When padding is involed, the indices will only be shifted to negative,
+      // When padding is involved, the indices will only be shifted to negative,
       // so having a max op is enough.
       auto maxMap = AffineMap::get(/*dimCount=*/1, 0,
                                    {getAffineDimExpr(/*position=*/0, context),
@@ -270,6 +286,57 @@ public:
     // Emit scalar form.
     ValueHandle paddedInput = getConvOpInput(convOp, I, imIdx);
     O(oIdx) += F(fIdx) * paddedInput;
+  }
+};
+
+template <typename IndexedValueType>
+class LinalgScopedEmitter<IndexedValueType, PoolingMaxOp> {
+public:
+  static void emitScalarImplementation(ArrayRef<Value> allIvs,
+                                       PoolingMaxOp op) {
+    auto indices = getInputAndOutputIndices(allIvs, op);
+    ValueHandleArray iIdx(indices.first);
+    ValueHandleArray oIdx(indices.second);
+
+    // Emit scalar form.
+    ValueHandle lhs = std_load(op.output(), oIdx);
+    ValueHandle rhs = std_load(op.input(), iIdx);
+    using edsc::op::operator>;
+    ValueHandle maxValue = std_select(lhs > rhs, lhs, rhs);
+    std_store(maxValue, op.output(), oIdx);
+  }
+};
+
+template <typename IndexedValueType>
+class LinalgScopedEmitter<IndexedValueType, PoolingMinOp> {
+public:
+  static void emitScalarImplementation(ArrayRef<Value> allIvs,
+                                       PoolingMinOp op) {
+    auto indices = getInputAndOutputIndices(allIvs, op);
+    ValueHandleArray iIdx(indices.first);
+    ValueHandleArray oIdx(indices.second);
+
+    // Emit scalar form.
+    ValueHandle lhs = std_load(op.output(), oIdx);
+    ValueHandle rhs = std_load(op.input(), iIdx);
+    using edsc::op::operator<;
+    ValueHandle minValue = std_select(lhs < rhs, lhs, rhs);
+    std_store(minValue, op.output(), oIdx);
+  }
+};
+
+template <typename IndexedValueType>
+class LinalgScopedEmitter<IndexedValueType, PoolingSumOp> {
+public:
+  static void emitScalarImplementation(ArrayRef<Value> allIvs,
+                                       PoolingSumOp op) {
+    auto indices = getInputAndOutputIndices(allIvs, op);
+    SmallVector<ValueHandle, 8> iIdx = indices.first;
+    SmallVector<ValueHandle, 8> oIdx = indices.second;
+    IndexedValueType input(op.input()), output(op.output());
+
+    // Emit scalar form.
+    output(oIdx) += input(iIdx);
   }
 };
 
@@ -572,14 +639,6 @@ void FillRewritePatterns(OwningRewritePatternList &patterns, MLIRContext *ctx) {
                      >::build(patterns, ctx);
 }
 
-namespace {
-template <typename LoopType, typename IndexedValueType>
-struct LowerLinalgToLoopsPass
-    : public FunctionPass<LowerLinalgToLoopsPass<LoopType, IndexedValueType>> {
-  void runOnFunction() override;
-};
-} // namespace
-
 // Local folding pattern for AffineApplyOp that we can apply greedily.
 // This replaces AffineApplyOp by the proper value in cases where the associated
 // map is trivial. A trivial map here is defined as a map with a single result
@@ -619,8 +678,7 @@ struct FoldAffineOp : public RewritePattern {
 } // namespace
 
 template <typename LoopType, typename IndexedValueType>
-void LowerLinalgToLoopsPass<LoopType, IndexedValueType>::runOnFunction() {
-  auto *context = &this->getContext();
+static void lowerLinalgToLoopsImpl(Operation *op, MLIRContext *context) {
   OwningRewritePatternList patterns;
   // Canonicalization and folding patterns applied greedily allow cleaning up
   // the emitted IR on the fly.
@@ -630,24 +688,44 @@ void LowerLinalgToLoopsPass<LoopType, IndexedValueType>::runOnFunction() {
   AffineApplyOp::getCanonicalizationPatterns(patterns, context);
   patterns.insert<FoldAffineOp>(context);
   // Just apply the patterns greedily.
-  applyPatternsGreedily(this->getFunction(), patterns);
+  applyPatternsAndFoldGreedily(op, patterns);
 }
 
-std::unique_ptr<OpPassBase<FuncOp>> mlir::createConvertLinalgToLoopsPass() {
-  return std::make_unique<
-      LowerLinalgToLoopsPass<loop::ForOp, StdIndexedValue>>();
+namespace {
+struct LowerToAffineLoops
+    : public LinalgLowerToAffineLoopsBase<LowerToAffineLoops> {
+  void runOnFunction() override {
+    lowerLinalgToLoopsImpl<AffineForOp, AffineIndexedValue>(getFunction(),
+                                                            &getContext());
+  }
+};
+struct LowerToLoops : public LinalgLowerToLoopsBase<LowerToLoops> {
+  void runOnFunction() override {
+    lowerLinalgToLoopsImpl<loop::ForOp, StdIndexedValue>(getFunction(),
+                                                         &getContext());
+  }
+};
+struct LowerToParallelLoops
+    : public LinalgLowerToParallelLoopsBase<LowerToParallelLoops> {
+  void runOnFunction() override {
+    lowerLinalgToLoopsImpl<loop::ParallelOp, StdIndexedValue>(getFunction(),
+                                                              &getContext());
+  }
+};
+} // namespace
+
+std::unique_ptr<OperationPass<FuncOp>> mlir::createConvertLinalgToLoopsPass() {
+  return std::make_unique<LowerToLoops>();
 }
 
-std::unique_ptr<OpPassBase<FuncOp>>
+std::unique_ptr<OperationPass<FuncOp>>
 mlir::createConvertLinalgToParallelLoopsPass() {
-  return std::make_unique<
-      LowerLinalgToLoopsPass<loop::ParallelOp, StdIndexedValue>>();
+  return std::make_unique<LowerToParallelLoops>();
 }
 
-std::unique_ptr<OpPassBase<FuncOp>>
+std::unique_ptr<OperationPass<FuncOp>>
 mlir::createConvertLinalgToAffineLoopsPass() {
-  return std::make_unique<
-      LowerLinalgToLoopsPass<AffineForOp, AffineIndexedValue>>();
+  return std::make_unique<LowerToAffineLoops>();
 }
 
 /// Emits a loop nest of `loop.for` with the proper body for `op`.
@@ -688,6 +766,9 @@ INSTANTIATE_LINALG_OP_TO_LOOPS(DotOp)
 INSTANTIATE_LINALG_OP_TO_LOOPS(MatvecOp)
 INSTANTIATE_LINALG_OP_TO_LOOPS(MatmulOp)
 INSTANTIATE_LINALG_OP_TO_LOOPS(ConvOp)
+INSTANTIATE_LINALG_OP_TO_LOOPS(PoolingMaxOp)
+INSTANTIATE_LINALG_OP_TO_LOOPS(PoolingMinOp)
+INSTANTIATE_LINALG_OP_TO_LOOPS(PoolingSumOp)
 INSTANTIATE_LINALG_OP_TO_LOOPS(GenericOp)
 INSTANTIATE_LINALG_OP_TO_LOOPS(IndexedGenericOp)
 
@@ -696,19 +777,3 @@ INSTANTIATE_LINALG_OP_TO_LOOPS(IndexedGenericOp)
 template LogicalResult
 mlir::linalg::linalgOpToParallelLoops<GenericOp>(PatternRewriter &rewriter,
                                                  Operation *op);
-
-static PassRegistration<LowerLinalgToLoopsPass<loop::ForOp, StdIndexedValue>>
-    structuredLoopsPass(
-        "convert-linalg-to-loops",
-        "Lower the operations from the linalg dialect into loops");
-
-static PassRegistration<
-    LowerLinalgToLoopsPass<loop::ParallelOp, StdIndexedValue>>
-    parallelLoopsPass(
-        "convert-linalg-to-parallel-loops",
-        "Lower the operations from the linalg dialect into parallel loops");
-
-static PassRegistration<LowerLinalgToLoopsPass<AffineForOp, AffineIndexedValue>>
-    affineLoopsPass(
-        "convert-linalg-to-affine-loops",
-        "Lower the operations from the linalg dialect into affine loops");

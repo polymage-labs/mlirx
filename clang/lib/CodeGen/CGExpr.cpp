@@ -1675,7 +1675,7 @@ llvm::Value *CodeGenFunction::EmitLoadOfScalar(Address Addr, bool Volatile,
 
         // Shuffle vector to get vec3.
         V = Builder.CreateShuffleVector(V, llvm::UndefValue::get(vec4Ty),
-                                        {0, 1, 2}, "extractVec");
+                                        ArrayRef<int>{0, 1, 2}, "extractVec");
         return EmitFromMemory(V, Ty);
       }
     }
@@ -4331,6 +4331,16 @@ EmitConditionalOperatorLValue(const AbstractConditionalOperator *expr) {
       // If the true case is live, we need to track its region.
       if (CondExprBool)
         incrementProfileCounter(expr);
+      // If a throw expression we emit it and return an undefined lvalue
+      // because it can't be used.
+      if (auto *ThrowExpr = dyn_cast<CXXThrowExpr>(live->IgnoreParens())) {
+        EmitCXXThrowExpr(ThrowExpr);
+        llvm::Type *Ty =
+            llvm::PointerType::getUnqual(ConvertType(dead->getType()));
+        return MakeAddrLValue(
+            Address(llvm::UndefValue::get(Ty), CharUnits::One()),
+            dead->getType());
+      }
       return EmitLValue(live);
     }
   }

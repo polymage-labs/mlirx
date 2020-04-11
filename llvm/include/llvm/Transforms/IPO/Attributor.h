@@ -101,20 +101,25 @@
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/AssumeBundleQueries.h"
+#include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/CGSCCPassManager.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/InlineCost.h"
 #include "llvm/Analysis/LazyCallGraph.h"
 #include "llvm/Analysis/MustExecute.h"
+#include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/CallSite.h"
 #include "llvm/IR/ConstantRange.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/Support/Allocator.h"
 #include "llvm/Transforms/Utils/CallGraphUpdater.h"
 
 namespace llvm {
 
+struct Attributor;
 struct AbstractAttribute;
 struct InformationCache;
 struct AAIsDead;
@@ -391,7 +396,8 @@ struct IRPosition {
   ///                                 e.g., the function position if this is an
   ///                                 argument position, should be ignored.
   bool hasAttr(ArrayRef<Attribute::AttrKind> AKs,
-               bool IgnoreSubsumingPositions = false) const;
+               bool IgnoreSubsumingPositions = false,
+               Attributor *A = nullptr) const;
 
   /// Return the attributes of any kind in \p AKs existing in the IR at a
   /// position that will affect this one. While each position can only have a
@@ -403,7 +409,8 @@ struct IRPosition {
   ///                                 argument position, should be ignored.
   void getAttrs(ArrayRef<Attribute::AttrKind> AKs,
                 SmallVectorImpl<Attribute> &Attrs,
-                bool IgnoreSubsumingPositions = false) const;
+                bool IgnoreSubsumingPositions = false,
+                Attributor *A = nullptr) const;
 
   /// Remove the attribute of kind \p AKs existing in the IR at this position.
   void removeAttrs(ArrayRef<Attribute::AttrKind> AKs) const {
@@ -462,6 +469,12 @@ private:
   /// Return the attributes of kind \p AK existing in the IR as attribute.
   bool getAttrsFromIRAttr(Attribute::AttrKind AK,
                           SmallVectorImpl<Attribute> &Attrs) const;
+
+  /// Return the attributes of kind \p AK existing in the IR as operand bundles
+  /// of an llvm.assume.
+  bool getAttrsFromAssumes(Attribute::AttrKind AK,
+                           SmallVectorImpl<Attribute> &Attrs,
+                           Attributor &A) const;
 
 protected:
   /// The value this position is anchored at.
@@ -555,8 +568,19 @@ struct InformationCache {
   InformationCache(const Module &M, AnalysisGetter &AG,
                    SetVector<Function *> *CGSCC)
       : DL(M.getDataLayout()),
-        Explorer(/* ExploreInterBlock */ true, /* ExploreCFGForward */ true,
-                 /* ExploreCFGBackward */ true),
+        Explorer(
+            /* ExploreInterBlock */ true, /* ExploreCFGForward */ true,
+            /* ExploreCFGBackward */ true,
+            /* LIGetter */
+            [&](const Function &F) { return AG.getAnalysis<LoopAnalysis>(F); },
+            /* DTGetter */
+            [&](const Function &F) {
+              return AG.getAnalysis<DominatorTreeAnalysis>(F);
+            },
+            /* PDTGetter */
+            [&](const Function &F) {
+              return AG.getAnalysis<PostDominatorTreeAnalysis>(F);
+            }),
         AG(AG), CGSCC(CGSCC) {}
 
   /// A map type from opcodes to instructions with this opcode.
@@ -591,6 +615,13 @@ struct InformationCache {
     return AG.getAnalysis<AAManager>(F);
   }
 
+  /// Return true if \p Arg is involved in a must-tail call, thus the argument
+  /// of the caller or callee.
+  bool isInvolvedInMustTailCall(const Argument &Arg) const {
+    return FunctionsCalledViaMustTail.count(Arg.getParent()) ||
+           FunctionsWithMustTailCall.count(Arg.getParent());
+  }
+
   /// Return the analysis result from a pass \p AP for function \p F.
   template <typename AP>
   typename AP::Result *getAnalysisResultForFunction(const Function &F) {
@@ -607,6 +638,9 @@ struct InformationCache {
   /// Return datalayout used in the module.
   const DataLayout &getDL() { return DL; }
 
+  /// Return the map conaining all the knowledge we have from `llvm.assume`s.
+  const RetainedKnowledgeMap &getKnowledgeMap() const { return KnowledgeMap; }
+
 private:
   /// A map type from functions to opcode to instruction maps.
   using FuncInstOpcodeMapTy = DenseMap<const Function *, OpcodeInstMapTy>;
@@ -621,11 +655,20 @@ private:
   /// A map from functions to their instructions that may read or write memory.
   FuncRWInstsMapTy FuncRWInstsMap;
 
+  /// Functions called by a `musttail` call.
+  SmallPtrSet<Function *, 8> FunctionsCalledViaMustTail;
+
+  /// Functions containing a `musttail` call.
+  SmallPtrSet<Function *, 8> FunctionsWithMustTailCall;
+
   /// The datalayout used in the module.
   const DataLayout &DL;
 
   /// MustBeExecutedContextExplorer
   MustBeExecutedContextExplorer Explorer;
+
+  /// A map with knowledge retained in `llvm.assume` instructions.
+  RetainedKnowledgeMap KnowledgeMap;
 
   /// Getters for analysis.
   AnalysisGetter &AG;
@@ -684,11 +727,7 @@ struct Attributor {
       : Functions(Functions), InfoCache(InfoCache), CGUpdater(CGUpdater),
         DepRecomputeInterval(DepRecomputeInterval), Whitelist(Whitelist) {}
 
-  ~Attributor() {
-    DeleteContainerPointers(AllAbstractAttributes);
-    for (auto &It : ArgumentReplacementMap)
-      DeleteContainerPointers(It.second);
-  }
+  ~Attributor();
 
   /// Run the analyses until a fixpoint is reached or enforced (timeout).
   ///
@@ -854,6 +893,12 @@ struct Attributor {
 
   /// Record that \p F is deleted after information was manifested.
   void deleteAfterManifest(Function &F) { ToBeDeletedFunctions.insert(&F); }
+
+  /// If \p V is assumed to be a constant, return it, if it is unclear yet,
+  /// return None, otherwise return `nullptr`.
+  Optional<Constant *> getAssumedConstant(const Value &V,
+                                          const AbstractAttribute &AA,
+                                          bool &UsedAssumedInformation);
 
   /// Return true if \p AA (or its context instruction) is assumed dead.
   ///
@@ -1053,6 +1098,9 @@ struct Attributor {
 
   /// Return the data layout associated with the anchor scope.
   const DataLayout &getDataLayout() const { return InfoCache.DL; }
+
+  /// The allocator used to allocate memory, e.g. for `AbstractAttribute`s.
+  BumpPtrAllocator Allocator;
 
 private:
   /// Check \p Pred on all call sites of \p Fn.
@@ -1710,7 +1758,8 @@ struct IRAttribute : public IRPosition, public Base {
   /// See AbstractAttribute::initialize(...).
   virtual void initialize(Attributor &A) override {
     const IRPosition &IRP = this->getIRPosition();
-    if (isa<UndefValue>(IRP.getAssociatedValue()) || hasAttr(getAttrKind())) {
+    if (isa<UndefValue>(IRP.getAssociatedValue()) ||
+        hasAttr(getAttrKind(), /* IgnoreSubsumingPositions */ false, &A)) {
       this->getState().indicateOptimisticFixpoint();
       return;
     }
@@ -1873,7 +1922,10 @@ raw_ostream &operator<<(raw_ostream &OS, const AbstractState &State);
 template <typename base_ty, base_ty BestState, base_ty WorstState>
 raw_ostream &
 operator<<(raw_ostream &OS,
-           const IntegerStateBase<base_ty, BestState, WorstState> &State);
+           const IntegerStateBase<base_ty, BestState, WorstState> &S) {
+  return OS << "(" << S.getKnown() << "-" << S.getAssumed() << ")"
+            << static_cast<const AbstractState &>(S);
+}
 raw_ostream &operator<<(raw_ostream &OS, const IntegerRangeState &State);
 ///}
 
@@ -2064,14 +2116,14 @@ struct AAReachability : public StateWrapper<BooleanState, AbstractAttribute>,
   /// determines (and caches) reachability.
   bool isAssumedReachable(const Instruction *From,
                           const Instruction *To) const {
-    return true;
+    return isPotentiallyReachable(From, To);
   }
 
   /// Returns true if 'From' instruction is known to reach, 'To' instruction.
   /// Users should provide two positions they are interested in, and the class
   /// determines (and caches) reachability.
   bool isKnownReachable(const Instruction *From, const Instruction *To) const {
-    return true;
+    return isPotentiallyReachable(From, To);
   }
 
   /// Return an IR position, see struct IRPosition.
@@ -2189,6 +2241,11 @@ public:
 
   /// Create an abstract attribute view for the position \p IRP.
   static AAIsDead &createForPosition(const IRPosition &IRP, Attributor &A);
+
+  /// Determine if \p F might catch asynchronous exceptions.
+  static bool mayCatchAsynchronousExceptions(const Function &F) {
+    return F.hasPersonalityFn() && !canSimplifyInvokeNoUnwind(&F);
+  }
 
   /// Unique ID (due to the unique address)
   static const char ID;

@@ -4913,7 +4913,7 @@ AST_POLYMORPHIC_MATCHER_P(hasSourceExpression,
 /// \endcode
 ///
 /// If the matcher is use from clang-query, CastKind parameter
-/// should be passed as a quoted string. e.g., ofKind("CK_NullToPointer").
+/// should be passed as a quoted string. e.g., hasCastKind("CK_NullToPointer").
 AST_MATCHER_P(CastExpr, hasCastKind, CastKind, Kind) {
   return Node.getCastKind() == Kind;
 }
@@ -7119,7 +7119,7 @@ AST_MATCHER(OMPDefaultClause, isSharedKind) {
 /// ``isAllowedToContainClauseKind("OMPC_default").``
 AST_MATCHER_P(OMPExecutableDirective, isAllowedToContainClauseKind,
               OpenMPClauseKind, CKind) {
-  return isAllowedClauseForDirective(
+  return llvm::omp::isAllowedClauseForDirective(
       Node.getDirectiveKind(), CKind,
       Finder->getASTContext().getLangOpts().OpenMP);
 }

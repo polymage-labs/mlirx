@@ -15,18 +15,17 @@
 #define LLVM_CODEGEN_TARGETLOWERINGOBJECTFILEIMPL_H
 
 #include "llvm/BinaryFormat/XCOFF.h"
-#include "llvm/IR/Module.h"
-#include "llvm/MC/MCExpr.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 
 namespace llvm {
 
 class GlobalValue;
 class MachineModuleInfo;
-class Mangler;
 class MCContext;
+class MCExpr;
 class MCSection;
 class MCSymbol;
+class Module;
 class TargetMachine;
 
 class TargetLoweringObjectFileELF : public TargetLoweringObjectFile {
@@ -253,7 +252,9 @@ public:
 
   static XCOFF::StorageClass getStorageClassForGlobal(const GlobalObject *GO);
 
-  MCSection *getSectionForFunctionDescriptor(const MCSymbol *) const override;
+  MCSection *
+  getSectionForFunctionDescriptor(const Function *F,
+                                  const TargetMachine &TM) const override;
   MCSection *getSectionForTOCEntry(const MCSymbol *Sym) const override;
 
   /// For external functions, this will always return a function descriptor

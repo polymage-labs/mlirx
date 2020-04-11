@@ -1,4 +1,4 @@
-// RUN: mlir-opt %s -affine-scalrep | FileCheck %s
+// RUN: mlir-opt %s -allow-unregistered-dialect -affine-scalrep | FileCheck %s
 
 // Replacement within the innermost loop body.
 // CHECK-LABEL: func @load_replace

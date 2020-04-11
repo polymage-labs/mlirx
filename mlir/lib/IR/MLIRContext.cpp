@@ -31,6 +31,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Allocator.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/RWMutex.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
@@ -40,6 +41,17 @@ using namespace mlir::detail;
 
 using llvm::hash_combine;
 using llvm::hash_combine_range;
+
+static llvm::cl::opt<bool> clPrintOpOnDiagnostic(
+    "mlir-print-op-on-diagnostic",
+    llvm::cl::desc("When a diagnostic is emitted on an operation, also print "
+                   "the operation as an attached note"),
+    llvm::cl::init(true));
+
+static llvm::cl::opt<bool> clPrintStackTraceOnDiagnostic(
+    "mlir-print-stacktrace-on-diagnostic",
+    llvm::cl::desc("When a diagnostic is emitted, also print the stack trace "
+                   "as an attached note"));
 
 /// A utility function to safely get or create a uniqued instance within the
 /// given set container.
@@ -162,6 +174,22 @@ public:
   DiagnosticEngine diagEngine;
 
   //===--------------------------------------------------------------------===//
+  // Options
+  //===--------------------------------------------------------------------===//
+
+  /// In most cases, creating operation in unregistered dialect is not desired
+  /// and indicate a misconfiguration of the compiler. This option enables to
+  /// detect such use cases
+  bool allowUnregisteredDialects = false;
+
+  /// If the operation should be attached to diagnostics printed via the
+  /// Operation::emit methods.
+  bool printOpOnDiagnostic;
+
+  /// If the current stack trace should be attached when emitting diagnostics.
+  bool printStackTraceOnDiagnostic;
+
+  //===--------------------------------------------------------------------===//
   // Other
   //===--------------------------------------------------------------------===//
 
@@ -177,9 +205,9 @@ public:
   /// operations.
   llvm::StringMap<AbstractOperation> registeredOperations;
 
-  /// This is a mapping from class identifier to Dialect for registered
-  /// attributes and types.
-  DenseMap<const ClassID *, Dialect *> registeredDialectSymbols;
+  /// This is a mapping from type id to Dialect for registered attributes and
+  /// types.
+  DenseMap<TypeID, Dialect *> registeredDialectSymbols;
 
   /// These are identifiers uniqued into this MLIRContext.
   llvm::StringMap<char, llvm::BumpPtrAllocator &> identifiers;
@@ -225,7 +253,10 @@ public:
   UnknownLoc unknownLocAttr;
 
 public:
-  MLIRContextImpl() : identifiers(identifierAllocator) {}
+  MLIRContextImpl()
+      : printOpOnDiagnostic(clPrintOpOnDiagnostic),
+        printStackTraceOnDiagnostic(clPrintStackTraceOnDiagnostic),
+        identifiers(identifierAllocator) {}
 };
 } // end namespace mlir
 
@@ -349,6 +380,42 @@ void Dialect::registerDialect(MLIRContext *context) {
   impl.dialects.insert(insertPt, std::move(dialect));
 }
 
+bool MLIRContext::allowsUnregisteredDialects() {
+  return impl->allowUnregisteredDialects;
+}
+
+void MLIRContext::allowUnregisteredDialects(bool allowing) {
+  impl->allowUnregisteredDialects = allowing;
+}
+
+/// Return true if we should attach the operation to diagnostics emitted via
+/// Operation::emit.
+bool MLIRContext::shouldPrintOpOnDiagnostic() {
+  return impl->printOpOnDiagnostic;
+}
+
+/// Set the flag specifying if we should attach the operation to diagnostics
+/// emitted via Operation::emit.
+void MLIRContext::printOpOnDiagnostic(bool enable) {
+  // Let the command line option take priority.
+  if (!clPrintOpOnDiagnostic.getNumOccurrences())
+    impl->printOpOnDiagnostic = enable;
+}
+
+/// Return true if we should attach the current stacktrace to diagnostics when
+/// emitted.
+bool MLIRContext::shouldPrintStackTraceOnDiagnostic() {
+  return impl->printStackTraceOnDiagnostic;
+}
+
+/// Set the flag specifying if we should attach the current stacktrace when
+/// emitting diagnostics.
+void MLIRContext::printStackTraceOnDiagnostic(bool enable) {
+  // Let the command line option take priority.
+  if (!clPrintStackTraceOnDiagnostic.getNumOccurrences())
+    impl->printStackTraceOnDiagnostic = enable;
+}
+
 /// Return information about all registered operations.  This isn't very
 /// efficient, typically you should ask the operations about their properties
 /// directly.
@@ -395,12 +462,12 @@ void Dialect::addOperation(AbstractOperation opInfo) {
 }
 
 /// Register a dialect-specific symbol(e.g. type) with the current context.
-void Dialect::addSymbol(const ClassID *const classID) {
+void Dialect::addSymbol(TypeID typeID) {
   auto &impl = context->getImpl();
 
   // Lock access to the context registry.
   llvm::sys::SmartScopedWriter<true> registryLock(impl.contextMutex);
-  if (!impl.registeredDialectSymbols.insert({classID, this}).second) {
+  if (!impl.registeredDialectSymbols.insert({typeID, this}).second) {
     llvm::errs() << "error: dialect symbol already registered.\n";
     abort();
   }
@@ -449,22 +516,20 @@ Identifier Identifier::get(StringRef str, MLIRContext *context) {
 // Type uniquing
 //===----------------------------------------------------------------------===//
 
-static Dialect &lookupDialectForSymbol(MLIRContext *ctx,
-                                       const ClassID *const classID) {
+static Dialect &lookupDialectForSymbol(MLIRContext *ctx, TypeID typeID) {
   auto &impl = ctx->getImpl();
-  auto it = impl.registeredDialectSymbols.find(classID);
+  auto it = impl.registeredDialectSymbols.find(typeID);
   assert(it != impl.registeredDialectSymbols.end() &&
          "symbol is not registered.");
   return *it->second;
 }
 
-/// Returns the storage unqiuer used for constructing type storage instances.
+/// Returns the storage uniquer used for constructing type storage instances.
 /// This should not be used directly.
 StorageUniquer &MLIRContext::getTypeUniquer() { return getImpl().typeUniquer; }
 
 /// Get the dialect that registered the type with the provided typeid.
-Dialect &TypeUniquer::lookupDialectForType(MLIRContext *ctx,
-                                           const ClassID *const typeID) {
+Dialect &TypeUniquer::lookupDialectForType(MLIRContext *ctx, TypeID typeID) {
   return lookupDialectForSymbol(ctx, typeID);
 }
 
@@ -558,7 +623,7 @@ StorageUniquer &MLIRContext::getAttributeUniquer() {
 
 /// Returns a functor used to initialize new attribute storage instances.
 std::function<void(AttributeStorage *)>
-AttributeUniquer::getInitFn(MLIRContext *ctx, const ClassID *const attrID) {
+AttributeUniquer::getInitFn(MLIRContext *ctx, TypeID attrID) {
   return [ctx, attrID](AttributeStorage *storage) {
     storage->initializeDialect(lookupDialectForSymbol(ctx, attrID));
 
@@ -613,7 +678,7 @@ AffineMap AffineMap::get(MLIRContext *context) {
 
 AffineMap AffineMap::get(unsigned dimCount, unsigned symbolCount,
                          MLIRContext *context) {
-  return getImpl(dimCount, /*symbolCount=*/0, /*results=*/{}, context);
+  return getImpl(dimCount, symbolCount, /*results=*/{}, context);
 }
 
 AffineMap AffineMap::get(unsigned dimCount, unsigned symbolCount,
@@ -621,6 +686,11 @@ AffineMap AffineMap::get(unsigned dimCount, unsigned symbolCount,
   // The number of results can't be zero.
   assert(!results.empty());
   return getImpl(dimCount, symbolCount, results, results[0].getContext());
+}
+
+AffineMap AffineMap::get(unsigned dimCount, unsigned symbolCount,
+                         ArrayRef<AffineExpr> results, MLIRContext *context) {
+  return getImpl(dimCount, symbolCount, results, context);
 }
 
 //===----------------------------------------------------------------------===//

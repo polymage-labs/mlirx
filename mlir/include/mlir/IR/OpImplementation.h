@@ -452,6 +452,9 @@ public:
   /// Parse a single operand.
   virtual ParseResult parseOperand(OperandType &result) = 0;
 
+  /// Parse a single operand if present.
+  virtual OptionalParseResult parseOptionalOperand(OperandType &result) = 0;
+
   /// These are the supported delimiters around operand lists and region
   /// argument lists, used by parseOperandList and parseRegionArgumentList.
   enum class Delimiter {
@@ -617,6 +620,9 @@ public:
 
   /// Parse a type.
   virtual ParseResult parseType(Type &result) = 0;
+
+  /// Parse an optional type.
+  virtual OptionalParseResult parseOptionalType(Type &result) = 0;
 
   /// Parse a type of a specific type.
   template <typename TypeT>

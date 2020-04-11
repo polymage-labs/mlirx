@@ -2565,4 +2565,243 @@ TEST_F(AArch64GISelMITest, WidenUnmerge) {
   EXPECT_TRUE(CheckMachineFunction(*MF, CheckStr)) << *MF;
 }
 
+TEST_F(AArch64GISelMITest, BitcastLoad) {
+  setUp();
+  if (!TM)
+    return;
+
+  LLT P0 = LLT::pointer(0, 64);
+  LLT S32 = LLT::scalar(32);
+  LLT V4S8 = LLT::vector(4, 8);
+  auto Ptr = B.buildUndef(P0);
+
+  DefineLegalizerInfo(A, {});
+
+  MachineMemOperand *MMO = B.getMF().getMachineMemOperand(
+      MachinePointerInfo(), MachineMemOperand::MOLoad, 4, Align(4));
+  auto Load = B.buildLoad(V4S8, Ptr, *MMO);
+
+  AInfo Info(MF->getSubtarget());
+  DummyGISelObserver Observer;
+  LegalizerHelper Helper(*MF, Info, Observer, B);
+  EXPECT_EQ(LegalizerHelper::LegalizeResult::Legalized,
+            Helper.bitcast(*Load, 0, S32));
+
+  auto CheckStr = R"(
+  CHECK: [[PTR:%[0-9]+]]:_(p0) = G_IMPLICIT_DEF
+  CHECK: [[LOAD:%[0-9]+]]:_(s32) = G_LOAD
+  CHECK: [[CAST:%[0-9]+]]:_(<4 x s8>) = G_BITCAST [[LOAD]]
+
+  )";
+
+  // Check
+  EXPECT_TRUE(CheckMachineFunction(*MF, CheckStr)) << *MF;
+}
+
+TEST_F(AArch64GISelMITest, BitcastStore) {
+  setUp();
+  if (!TM)
+    return;
+
+  LLT P0 = LLT::pointer(0, 64);
+  LLT S32 = LLT::scalar(32);
+  LLT V4S8 = LLT::vector(4, 8);
+  auto Ptr = B.buildUndef(P0);
+
+  DefineLegalizerInfo(A, {});
+
+  MachineMemOperand *MMO = B.getMF().getMachineMemOperand(
+      MachinePointerInfo(), MachineMemOperand::MOStore, 4, Align(4));
+  auto Val = B.buildUndef(V4S8);
+  auto Store = B.buildStore(Val, Ptr, *MMO);
+
+  AInfo Info(MF->getSubtarget());
+  DummyGISelObserver Observer;
+  LegalizerHelper Helper(*MF, Info, Observer, B);
+  EXPECT_EQ(LegalizerHelper::LegalizeResult::Legalized,
+            Helper.bitcast(*Store, 0, S32));
+
+  auto CheckStr = R"(
+  CHECK: [[VAL:%[0-9]+]]:_(<4 x s8>) = G_IMPLICIT_DEF
+  CHECK: [[CAST:%[0-9]+]]:_(s32) = G_BITCAST [[VAL]]
+  CHECK: G_STORE [[CAST]]
+  )";
+
+  // Check
+  EXPECT_TRUE(CheckMachineFunction(*MF, CheckStr)) << *MF;
+}
+
+TEST_F(AArch64GISelMITest, BitcastSelect) {
+  setUp();
+  if (!TM)
+    return;
+
+  LLT S1 = LLT::scalar(1);
+  LLT S32 = LLT::scalar(32);
+  LLT V4S8 = LLT::vector(4, 8);
+
+  DefineLegalizerInfo(A, {});
+
+  auto Cond = B.buildUndef(S1);
+  auto Val0 = B.buildConstant(V4S8, 123);
+  auto Val1 = B.buildConstant(V4S8, 99);
+
+  auto Select = B.buildSelect(V4S8, Cond, Val0, Val1);
+
+  AInfo Info(MF->getSubtarget());
+  DummyGISelObserver Observer;
+  LegalizerHelper Helper(*MF, Info, Observer, B);
+  EXPECT_EQ(LegalizerHelper::LegalizeResult::Legalized,
+            Helper.bitcast(*Select, 0, S32));
+
+  auto CheckStr = R"(
+  CHECK: [[VAL0:%[0-9]+]]:_(<4 x s8>) = G_BUILD_VECTOR
+  CHECK: [[VAL1:%[0-9]+]]:_(<4 x s8>) = G_BUILD_VECTOR
+  CHECK: [[CAST0:%[0-9]+]]:_(s32) = G_BITCAST [[VAL0]]
+  CHECK: [[CAST1:%[0-9]+]]:_(s32) = G_BITCAST [[VAL1]]
+  CHECK: [[SELECT:%[0-9]+]]:_(s32) = G_SELECT %{{[0-9]+}}:_(s1), [[CAST0]]:_, [[CAST1]]:_
+  CHECK: [[CAST2:%[0-9]+]]:_(<4 x s8>) = G_BITCAST [[SELECT]]
+  )";
+
+  // Check
+  EXPECT_TRUE(CheckMachineFunction(*MF, CheckStr)) << *MF;
+
+  // Doesn't make sense
+  auto VCond = B.buildUndef(LLT::vector(4, 1));
+  auto VSelect = B.buildSelect(V4S8, VCond, Val0, Val1);
+  EXPECT_EQ(LegalizerHelper::LegalizeResult::UnableToLegalize,
+            Helper.bitcast(*VSelect, 0, S32));
+  EXPECT_EQ(LegalizerHelper::LegalizeResult::UnableToLegalize,
+            Helper.bitcast(*VSelect, 1, LLT::scalar(4)));
+}
+
+TEST_F(AArch64GISelMITest, BitcastBitOps) {
+  setUp();
+  if (!TM)
+    return;
+
+  LLT S32 = LLT::scalar(32);
+  LLT V4S8 = LLT::vector(4, 8);
+
+  DefineLegalizerInfo(A, {});
+
+  auto Val0 = B.buildConstant(V4S8, 123);
+  auto Val1 = B.buildConstant(V4S8, 99);
+  auto And = B.buildAnd(V4S8, Val0, Val1);
+  auto Or = B.buildOr(V4S8, Val0, Val1);
+  auto Xor = B.buildXor(V4S8, Val0, Val1);
+
+  AInfo Info(MF->getSubtarget());
+  DummyGISelObserver Observer;
+  LegalizerHelper Helper(*MF, Info, Observer, B);
+  EXPECT_EQ(LegalizerHelper::LegalizeResult::Legalized,
+            Helper.bitcast(*And, 0, S32));
+  EXPECT_EQ(LegalizerHelper::LegalizeResult::Legalized,
+            Helper.bitcast(*Or, 0, S32));
+  EXPECT_EQ(LegalizerHelper::LegalizeResult::Legalized,
+            Helper.bitcast(*Xor, 0, S32));
+
+  auto CheckStr = R"(
+  CHECK: [[VAL0:%[0-9]+]]:_(<4 x s8>) = G_BUILD_VECTOR
+  CHECK: [[VAL1:%[0-9]+]]:_(<4 x s8>) = G_BUILD_VECTOR
+  CHECK: [[CAST0:%[0-9]+]]:_(s32) = G_BITCAST [[VAL0]]
+  CHECK: [[CAST1:%[0-9]+]]:_(s32) = G_BITCAST [[VAL1]]
+  CHECK: [[AND:%[0-9]+]]:_(s32) = G_AND [[CAST0]]:_, [[CAST1]]:_
+  CHECK: [[CAST_AND:%[0-9]+]]:_(<4 x s8>) = G_BITCAST [[AND]]
+  CHECK: [[CAST2:%[0-9]+]]:_(s32) = G_BITCAST [[VAL0]]
+  CHECK: [[CAST3:%[0-9]+]]:_(s32) = G_BITCAST [[VAL1]]
+  CHECK: [[OR:%[0-9]+]]:_(s32) = G_OR [[CAST2]]:_, [[CAST3]]:_
+  CHECK: [[CAST_OR:%[0-9]+]]:_(<4 x s8>) = G_BITCAST [[OR]]
+  CHECK: [[CAST4:%[0-9]+]]:_(s32) = G_BITCAST [[VAL0]]
+  CHECK: [[CAST5:%[0-9]+]]:_(s32) = G_BITCAST [[VAL1]]
+  CHECK: [[XOR:%[0-9]+]]:_(s32) = G_XOR [[CAST4]]:_, [[CAST5]]:_
+  CHECK: [[CAST_XOR:%[0-9]+]]:_(<4 x s8>) = G_BITCAST [[XOR]]
+  )";
+
+  // Check
+  EXPECT_TRUE(CheckMachineFunction(*MF, CheckStr)) << *MF;
+}
+
+TEST_F(AArch64GISelMITest, CreateLibcall) {
+  setUp();
+  if (!TM)
+    return;
+
+  DefineLegalizerInfo(A, {});
+
+  AInfo Info(MF->getSubtarget());
+  DummyGISelObserver Observer;
+
+  LLVMContext &Ctx = MF->getFunction().getContext();
+  auto *RetTy = Type::getVoidTy(Ctx);
+
+  EXPECT_EQ(LegalizerHelper::LegalizeResult::Legalized,
+            createLibcall(B, "abort", {{}, RetTy}, {}, CallingConv::C));
+
+  auto CheckStr = R"(
+  CHECK: ADJCALLSTACKDOWN 0, 0, implicit-def $sp, implicit $sp
+  CHECK: BL &abort
+  CHECK: ADJCALLSTACKUP 0, 0, implicit-def $sp, implicit $sp
+  )";
+
+  // Check
+  EXPECT_TRUE(CheckMachineFunction(*MF, CheckStr)) << *MF;
+}
+
+// Test narrowing of G_IMPLICIT_DEF
+TEST_F(AArch64GISelMITest, NarrowImplicitDef) {
+  setUp();
+  if (!TM)
+    return;
+
+  DefineLegalizerInfo(A, {});
+
+  // Make sure that G_IMPLICIT_DEF can be narrowed if the original size is not a
+  // multiple of narrow size
+  LLT S32{LLT::scalar(32)};
+  LLT S48{LLT::scalar(48)};
+  LLT S64{LLT::scalar(64)};
+  LLT V2S64{{LLT::vector(2, 64)}};
+
+  auto Implicit1 = B.buildUndef(S64);
+  auto Implicit2 = B.buildUndef(S64);
+  auto Implicit3 = B.buildUndef(V2S64);
+  auto Implicit4 = B.buildUndef(V2S64);
+
+  AInfo Info(MF->getSubtarget());
+  DummyGISelObserver Observer;
+  LegalizerHelper Helper(*MF, Info, Observer, B);
+
+  // Perform Legalization
+  EXPECT_EQ(LegalizerHelper::LegalizeResult::Legalized,
+            Helper.narrowScalar(*Implicit1, 0, S48));
+  EXPECT_EQ(LegalizerHelper::LegalizeResult::Legalized,
+            Helper.narrowScalar(*Implicit2, 0, S32));
+  EXPECT_EQ(LegalizerHelper::LegalizeResult::Legalized,
+            Helper.narrowScalar(*Implicit3, 0, S48));
+  EXPECT_EQ(LegalizerHelper::LegalizeResult::Legalized,
+            Helper.narrowScalar(*Implicit4, 0, S32));
+
+  const auto *CheckStr = R"(
+  CHECK: [[DEF:%[0-9]+]]:_(s48) = G_IMPLICIT_DEF
+  CHECK: [[ANYEXT:%[0-9]+]]:_(s64) = G_ANYEXT [[DEF]]
+
+  CHECK: [[DEF:%[0-9]+]]:_(s32) = G_IMPLICIT_DEF
+  CHECK: [[DEF1:%[0-9]+]]:_(s32) = G_IMPLICIT_DEF
+  CHECK: [[MV:%[0-9]+]]:_(s64) = G_MERGE_VALUES [[DEF]]:_(s32), [[DEF1]]
+
+  CHECK: [[DEF:%[0-9]+]]:_(<2 x s48>) = G_IMPLICIT_DEF
+  CHECK: [[ANYEXT:%[0-9]+]]:_(<2 x s64>) = G_ANYEXT [[DEF]]
+
+  CHECK: [[DEF:%[0-9]+]]:_(s32) = G_IMPLICIT_DEF
+  CHECK: [[DEF1:%[0-9]+]]:_(s32) = G_IMPLICIT_DEF
+  CHECK: [[DEF2:%[0-9]+]]:_(s32) = G_IMPLICIT_DEF
+  CHECK: [[DEF3:%[0-9]+]]:_(s32) = G_IMPLICIT_DEF
+  CHECK: [[BV:%[0-9]+]]:_(<2 x s64>) = G_BUILD_VECTOR [[DEF]]:_(s32), [[DEF1]]:_(s32), [[DEF2]]:_(s32), [[DEF3]]:_(s32)
+  )";
+
+  // Check
+  EXPECT_TRUE(CheckMachineFunction(*MF, CheckStr)) << *MF;
+}
+
 } // namespace

@@ -1681,8 +1681,8 @@ static std::string scalarConstantToHexString(const Constant *C) {
     return APIntToHexString(CI->getValue());
   } else {
     unsigned NumElements;
-    if (isa<VectorType>(Ty))
-      NumElements = Ty->getVectorNumElements();
+    if (auto *VTy = dyn_cast<VectorType>(Ty))
+      NumElements = VTy->getNumElements();
     else
       NumElements = Ty->getArrayNumElements();
     std::string HexString;
@@ -2022,9 +2022,11 @@ XCOFF::StorageClass TargetLoweringObjectFileXCOFF::getStorageClassForGlobal(
 }
 
 MCSection *TargetLoweringObjectFileXCOFF::getSectionForFunctionDescriptor(
-    const MCSymbol *FuncSym) const {
-  return getContext().getXCOFFSection(FuncSym->getName(), XCOFF::XMC_DS,
-                                      XCOFF::XTY_SD, XCOFF::C_HIDEXT,
+    const Function *F, const TargetMachine &TM) const {
+  SmallString<128> NameStr;
+  getNameWithPrefix(NameStr, F, TM);
+  return getContext().getXCOFFSection(NameStr, XCOFF::XMC_DS, XCOFF::XTY_SD,
+                                      getStorageClassForGlobal(F),
                                       SectionKind::getData());
 }
 

@@ -252,7 +252,7 @@ template <typename LoadOrStoreOp>
 bool mlir::isContiguousAccess(Value iv, LoadOrStoreOp memoryOp,
                               int *memRefDim) {
   static_assert(std::is_same<LoadOrStoreOp, AffineLoadOp>::value ||
-                    std::is_same<LoadOrStoreOp, AffineStoreOp>::value,
+                std::is_same<LoadOrStoreOp, AffineStoreOp>::value,
                 "Must be called on either const LoadOp & or const StoreOp &");
   assert(memRefDim && "memRefDim == nullptr");
   auto memRefType = memoryOp.getMemRefType();
@@ -329,8 +329,8 @@ bool mlir::isContiguousAccess(Value iv, LoadOrStoreOp memoryOp,
   return true;
 }
 
-template <typename LoadOrStoreOpPointer>
-static bool isVectorElement(LoadOrStoreOpPointer memoryOp) {
+template <typename LoadOrStoreOp>
+static bool isVectorElement(LoadOrStoreOp memoryOp) {
   auto memRefType = memoryOp.getMemRefType();
   return memRefType.getElementType().template isa<VectorType>();
 }
@@ -410,7 +410,7 @@ bool mlir::isVectorizableLoopBody(AffineForOp loop,
 /// 'def' and all its uses have the same shift factor.
 // TODO(mlir-team): extend this to check for memory-based dependence violation
 // when we have the support.
-bool mlir::isInstwiseShiftValid(AffineForOp forOp, ArrayRef<uint64_t> shifts) {
+bool mlir::isOpwiseShiftValid(AffineForOp forOp, ArrayRef<uint64_t> shifts) {
   auto *forBody = forOp.getBody();
   assert(shifts.size() == forBody->getOperations().size());
 

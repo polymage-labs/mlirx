@@ -1460,14 +1460,21 @@ void PPCLinuxAsmPrinter::emitFunctionBodyStart() {
   //
   // This ensures we have r2 set up correctly while executing the function
   // body, no matter which entry point is called.
-  if (Subtarget->isELFv2ABI()
-      // Only do all that if the function uses r2 in the first place.
-      && !MF->getRegInfo().use_empty(PPC::X2)) {
+  const PPCFunctionInfo *PPCFI = MF->getInfo<PPCFunctionInfo>();
+  const bool UsesX2OrR2 = !MF->getRegInfo().use_empty(PPC::X2) ||
+                          !MF->getRegInfo().use_empty(PPC::R2);
+  const bool PCrelGEPRequired = Subtarget->isUsingPCRelativeCalls() &&
+                                UsesX2OrR2 && PPCFI->usesTOCBasePtr();
+  const bool NonPCrelGEPRequired = !Subtarget->isUsingPCRelativeCalls() &&
+                                   Subtarget->isELFv2ABI() && UsesX2OrR2;
+
+  // Only do all that if the function uses R2 as the TOC pointer
+  // in the first place. We don't need the global entry point if the
+  // function uses R2 as an allocatable register.
+  if (NonPCrelGEPRequired || PCrelGEPRequired) {
     // Note: The logic here must be synchronized with the code in the
     // branch-selection pass which sets the offset of the first block in the
     // function. This matters because it affects the alignment.
-    const PPCFunctionInfo *PPCFI = MF->getInfo<PPCFunctionInfo>();
-
     MCSymbol *GlobalEntryLabel = PPCFI->getGlobalEPSymbol();
     OutStreamer->emitLabel(GlobalEntryLabel);
     const MCSymbolRefExpr *GlobalEntryLabelExp =
@@ -1519,6 +1526,35 @@ void PPCLinuxAsmPrinter::emitFunctionBodyStart() {
 
     if (TS)
       TS->emitLocalEntry(cast<MCSymbolELF>(CurrentFnSym), LocalOffsetExp);
+  } else if (Subtarget->isUsingPCRelativeCalls()) {
+    // When generating the entry point for a function we have a few scenarios
+    // based on whether or not that function uses R2 and whether or not that
+    // function makes calls (or is a leaf function).
+    // 1) A leaf function that does not use R2 (or treats it as callee-saved
+    //    and preserves it). In this case st_other=0 and both
+    //    the local and global entry points for the function are the same.
+    //    No special entry point code is required.
+    // 2) A function uses the TOC pointer R2. This function may or may not have
+    //    calls. In this case st_other=[2,6] and the global and local entry
+    //    points are different. Code to correctly setup the TOC pointer in R2
+    //    is put between the global and local entry points. This case is
+    //    covered by the if statatement above.
+    // 3) A function does not use the TOC pointer R2 but does have calls.
+    //    In this case st_other=1 since we do not know whether or not any
+    //    of the callees clobber R2. This case is dealt with in this else if
+    //    block.
+    // 4) The function does not use the TOC pointer but R2 is used inside
+    //    the function. In this case st_other=1 once again.
+    // 5) This function uses inline asm. We mark R2 as reserved if the function
+    //    has inline asm so we have to assume that it may be used.
+    if (MF->getFrameInfo().hasCalls() || MF->hasInlineAsm() ||
+        (!PPCFI->usesTOCBasePtr() && UsesX2OrR2)) {
+      PPCTargetStreamer *TS =
+          static_cast<PPCTargetStreamer *>(OutStreamer->getTargetStreamer());
+      if (TS)
+        TS->emitLocalEntry(cast<MCSymbolELF>(CurrentFnSym),
+                           MCConstantExpr::create(1, OutContext));
+    }
   }
 }
 
@@ -1540,13 +1576,13 @@ void PPCLinuxAsmPrinter::emitFunctionBodyEnd() {
 }
 
 void PPCAIXAsmPrinter::SetupMachineFunction(MachineFunction &MF) {
-  // Get the function descriptor symbol.
-  CurrentFnDescSym = getSymbol(&MF.getFunction());
-  // Set the alignment and the containing csect.
-  MCSectionXCOFF *FnDescSec = cast<MCSectionXCOFF>(
-      getObjFileLowering().getSectionForFunctionDescriptor(CurrentFnDescSym));
+  // Setup CurrentFnDescSym and its containing csect.
+  MCSectionXCOFF *FnDescSec =
+      cast<MCSectionXCOFF>(getObjFileLowering().getSectionForFunctionDescriptor(
+          &MF.getFunction(), TM));
   FnDescSec->setAlignment(Align(Subtarget->isPPC64() ? 8 : 4));
-  cast<MCSymbolXCOFF>(CurrentFnDescSym)->setContainingCsect(FnDescSec);
+
+  CurrentFnDescSym = FnDescSec->getQualNameSymbol();
 
   return AsmPrinter::SetupMachineFunction(MF);
 }
@@ -1565,16 +1601,12 @@ void PPCAIXAsmPrinter::ValidateGV(const GlobalVariable *GV) {
 
 const MCExpr *PPCAIXAsmPrinter::lowerConstant(const Constant *CV) {
   if (const Function *F = dyn_cast<Function>(CV)) {
-    MCSymbolXCOFF *FSym = cast<MCSymbolXCOFF>(getSymbol(F));
-    if (!FSym->hasContainingCsect()) {
-      MCSectionXCOFF *Csect = cast<MCSectionXCOFF>(
-          F->isDeclaration()
-              ? getObjFileLowering().getSectionForExternalReference(F, TM)
-              : getObjFileLowering().getSectionForFunctionDescriptor(FSym));
-      FSym->setContainingCsect(Csect);
-    }
-    return MCSymbolRefExpr::create(
-        FSym->getContainingCsect()->getQualNameSymbol(), OutContext);
+    MCSectionXCOFF *Csect = cast<MCSectionXCOFF>(
+        F->isDeclaration()
+            ? getObjFileLowering().getSectionForExternalReference(F, TM)
+            : getObjFileLowering().getSectionForFunctionDescriptor(F, TM));
+
+    return MCSymbolRefExpr::create(Csect->getQualNameSymbol(), OutContext);
   }
   return PPCAsmPrinter::lowerConstant(CV);
 }
@@ -1610,7 +1642,6 @@ void PPCAIXAsmPrinter::emitGlobalVariable(const GlobalVariable *GV) {
           : getObjFileLowering().SectionForGlobal(
                 GV, GVKind = getObjFileLowering().getKindForGlobal(GV, TM),
                 TM));
-  GVSym->setContainingCsect(Csect);
 
   // External global variables are already handled.
   if (GV->isDeclaration())
@@ -1653,8 +1684,7 @@ void PPCAIXAsmPrinter::emitFunctionDescriptor() {
   MCSectionSubPair Current = OutStreamer->getCurrentSection();
   // Emit function descriptor.
   OutStreamer->SwitchSection(
-      cast<MCSymbolXCOFF>(CurrentFnDescSym)->getContainingCsect());
-  OutStreamer->emitLabel(CurrentFnDescSym);
+      cast<MCSymbolXCOFF>(CurrentFnDescSym)->getRepresentedCsect());
   // Emit function entry point address.
   OutStreamer->emitValue(MCSymbolRefExpr::create(CurrentFnSym, OutContext),
                          PointerSize);
@@ -1696,7 +1726,6 @@ void PPCAIXAsmPrinter::emitEndOfAsmFile(Module &M) {
     // Setup the csect for the current TC entry.
     MCSectionXCOFF *TCEntry = cast<MCSectionXCOFF>(
         getObjFileLowering().getSectionForTOCEntry(I.first));
-    cast<MCSymbolXCOFF>(I.second)->setContainingCsect(TCEntry);
     OutStreamer->SwitchSection(TCEntry);
 
     OutStreamer->emitLabel(I.second);
@@ -1721,8 +1750,6 @@ PPCAIXAsmPrinter::getMCSymbolForTOCPseudoMO(const MachineOperand &MO) {
     ValidateGV(GV);
   }
 
-  MCSymbolXCOFF *XSym = cast<MCSymbolXCOFF>(getSymbol(GO));
-
   // If the global object is a global variable without initializer or is a
   // declaration of a function, then XSym is an external referenced symbol.
   // Hence we may need to explictly create a MCSectionXCOFF for it so that we
@@ -1740,7 +1767,8 @@ PPCAIXAsmPrinter::getMCSymbolForTOCPseudoMO(const MachineOperand &MO) {
     // If the MO is a function, we want to make sure to refer to the function
     // descriptor csect.
     return cast<MCSectionXCOFF>(
-               getObjFileLowering().getSectionForFunctionDescriptor(XSym))
+               getObjFileLowering().getSectionForFunctionDescriptor(
+                   cast<const Function>(GO), TM))
         ->getQualNameSymbol();
   } else if (GOKind.isCommon() || GOKind.isBSSLocal()) {
     // If the operand is a common then we should refer to the csect symbol.

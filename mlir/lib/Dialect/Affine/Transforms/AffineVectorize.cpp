@@ -1,4 +1,4 @@
-//===- AffineVectorize.cpp - Vectorize Pass Impl --------------------------===//
+//===- AffineVectorize.cpp - AffineVectorize Pass -------------------------===//
 //
 // Copyright 2019 The MLIR Authors.
 //
@@ -20,12 +20,12 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "PassDetail.h"
 #include "mlir/Analysis/LoopAnalysis.h"
 #include "mlir/Analysis/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/LoopUtils.h"
 #include "mlir/Dialect/Affine/Passes.h"
 
@@ -38,20 +38,18 @@ using namespace mlir;
 
 using llvm::SetVector;
 
-static llvm::cl::OptionCategory clOptionsCategory("affine vectorize options");
-
-static llvm::cl::opt<unsigned>
-    clSimdWidth("affine-vectorize-simd-width",
-                llvm::cl::desc("Hardware vector width for vectorization"),
-                llvm::cl::init(256), llvm::cl::cat(clOptionsCategory));
-
 namespace {
 
 /// Base state for the vectorize pass.
 /// Command line arguments are preempted by non-empty pass arguments.
-struct Vectorize : public FunctionPass<Vectorize> {
-  Vectorize();
-  Vectorize(ArrayRef<int64_t> vectorSizes);
+struct AffineVectorize : public AffineVectorizeBase<AffineVectorize> {
+
+/// Include the generated pass utilities.
+#define GEN_PASS_AffineVectorize
+#include "mlir/Dialect/Affine/Passes.h.inc"
+
+  AffineVectorize();
+  AffineVectorize(ArrayRef<int64_t> vectorSizes);
   void runOnFunction() override;
 
   // The vector widths.
@@ -60,7 +58,7 @@ struct Vectorize : public FunctionPass<Vectorize> {
 
 } // end anonymous namespace
 
-Vectorize::Vectorize() {}
+AffineVectorize::AffineVectorize() {}
 
 // This uses a sufficient condition for vectorization. Checks for parallelism
 // and access contiguity.
@@ -115,7 +113,7 @@ static bool isVectorizable(AffineForOp forOp) {
   return isVectorizable;
 }
 
-void Vectorize::runOnFunction() {
+void AffineVectorize::runOnFunction() {
   FuncOp f = getFunction();
 
   llvm::DenseSet<Operation *> vectorizableLoops;
@@ -135,9 +133,6 @@ void Vectorize::runOnFunction() {
   LLVM_DEBUG(llvm::dbgs() << "\n");
 }
 
-std::unique_ptr<OpPassBase<FuncOp>> mlir::createAffineVectorizePass() {
-  return std::make_unique<Vectorize>();
+std::unique_ptr<OperationPass<FuncOp>> mlir::createAffineVectorizePass() {
+  return std::make_unique<AffineVectorize>();
 }
-
-static PassRegistration<Vectorize> pass("affine-vectorize",
-                                        "Vectorize affine for ops");

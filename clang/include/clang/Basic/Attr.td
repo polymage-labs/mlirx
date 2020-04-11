@@ -322,7 +322,6 @@ class LangOpt<string name, code customCode = [{}]> {
 def MicrosoftExt : LangOpt<"MicrosoftExt">;
 def Borland : LangOpt<"Borland">;
 def CUDA : LangOpt<"CUDA">;
-def HIP : LangOpt<"HIP">;
 def SYCL : LangOpt<"SYCLIsDevice">;
 def COnly : LangOpt<"", "!LangOpts.CPlusPlus">;
 def CPlusPlus : LangOpt<"CPlusPlus">;
@@ -962,6 +961,19 @@ def Cleanup : InheritableAttr {
   let Documentation = [Undocumented];
 }
 
+def CmseNSEntry : InheritableAttr, TargetSpecificAttr<TargetARM> {
+  let Spellings = [GNU<"cmse_nonsecure_entry">];
+  let Subjects = SubjectList<[Function]>;
+  let LangOpts = [Cmse];
+  let Documentation = [ArmCmseNSEntryDocs];
+}
+
+def CmseNSCall : TypeAttr, TargetSpecificAttr<TargetARM> {
+  let Spellings = [GNU<"cmse_nonsecure_call">];
+  let LangOpts = [Cmse];
+  let Documentation = [ArmCmseNSCallDocs];
+}
+
 def Cold : InheritableAttr {
   let Spellings = [GCC<"cold">];
   let Subjects = SubjectList<[Function]>;
@@ -1039,28 +1051,25 @@ def CUDADevice : InheritableAttr {
   let Documentation = [Undocumented];
 }
 
-def HIPPinnedShadow : InheritableAttr {
-  let Spellings = [GNU<"hip_pinned_shadow">, Declspec<"__hip_pinned_shadow__">];
-  let Subjects = SubjectList<[Var]>;
-  let LangOpts = [HIP];
-  let Documentation = [HIPPinnedShadowDocs];
-}
-
 def CUDADeviceBuiltin : IgnoredAttr {
   let Spellings = [GNU<"device_builtin">, Declspec<"__device_builtin__">];
   let LangOpts = [CUDA];
 }
 
-def CUDADeviceBuiltinSurfaceType : IgnoredAttr {
+def CUDADeviceBuiltinSurfaceType : InheritableAttr {
   let Spellings = [GNU<"device_builtin_surface_type">,
                    Declspec<"__device_builtin_surface_type__">];
   let LangOpts = [CUDA];
+  let Subjects = SubjectList<[CXXRecord]>;
+  let Documentation = [CUDADeviceBuiltinSurfaceTypeDocs];
 }
 
-def CUDADeviceBuiltinTextureType : IgnoredAttr {
+def CUDADeviceBuiltinTextureType : InheritableAttr {
   let Spellings = [GNU<"device_builtin_texture_type">,
                    Declspec<"__device_builtin_texture_type__">];
   let LangOpts = [CUDA];
+  let Subjects = SubjectList<[CXXRecord]>;
+  let Documentation = [CUDADeviceBuiltinTextureTypeDocs];
 }
 
 def CUDAGlobal : InheritableAttr {
@@ -3225,8 +3234,13 @@ def OMPCaptureKind : Attr {
   // This attribute has no spellings as it is only ever created implicitly.
   let Spellings = [];
   let SemaHandler = 0;
-  let Args = [UnsignedArgument<"CaptureKind">];
+  let Args = [UnsignedArgument<"CaptureKindVal">];
   let Documentation = [Undocumented];
+  let AdditionalMembers = [{
+    llvm::omp::Clause getCaptureKind() const {
+      return static_cast<llvm::omp::Clause>(getCaptureKindVal());
+    }
+  }];
 }
 
 def OMPReferencedVar : Attr {

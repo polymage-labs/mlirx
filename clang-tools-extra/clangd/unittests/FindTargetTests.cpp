@@ -65,7 +65,7 @@ class TargetDeclTest : public ::testing::Test {
 protected:
   using Rel = DeclRelation;
   std::string Code;
-  std::vector<const char *> Flags;
+  std::vector<std::string> Flags;
 
   // Asserts that `Code` has a marked selection of a node `NodeType`,
   // and returns allTargetDecls() as PrintedDecl structs.
@@ -130,6 +130,32 @@ TEST_F(TargetDeclTest, Exprs) {
     }
   )cpp";
   EXPECT_DECLS("CXXOperatorCallExpr", "void operator()(int n)");
+
+  Code = R"cpp(
+    void test() {
+      goto [[label]];
+    label:
+      return;
+    }
+  )cpp";
+  EXPECT_DECLS("GotoStmt", "label:");
+  Code = R"cpp(
+    void test() {
+    [[label]]:
+      return;
+    }
+  )cpp";
+  EXPECT_DECLS("LabelStmt", "label:");
+}
+
+TEST_F(TargetDeclTest, Recovery) {
+  Code = R"cpp(
+    // error-ok: testing behavior on broken code
+    int f();
+    int f(int, int);
+    int x = [[f]](42);
+  )cpp";
+  EXPECT_DECLS("UnresolvedLookupExpr", "int f()", "int f(int, int)");
 }
 
 TEST_F(TargetDeclTest, UsingDecl) {
@@ -594,7 +620,7 @@ protected:
   };
 
   /// Parses \p Code, finds function or namespace '::foo' and annotates its body
-  /// with results of findExplicitReferecnces.
+  /// with results of findExplicitReferences.
   /// See actual tests for examples of annotation format.
   AllRefs annotateReferencesInFoo(llvm::StringRef Code) {
     TestTU TU;
@@ -685,6 +711,15 @@ TEST_F(FindExplicitReferencesTest, All) {
         )cpp",
         "0: targets = {x}\n"
         "1: targets = {X::a}\n"},
+       {R"cpp(
+        // error-ok: testing with broken code
+        int bar();
+        int foo() {
+          return $0^bar() + $1^bar(42);
+        }
+        )cpp",
+        "0: targets = {bar}\n"
+        "1: targets = {bar}\n"},
        // Namespaces and aliases.
        {R"cpp(
           namespace ns {}

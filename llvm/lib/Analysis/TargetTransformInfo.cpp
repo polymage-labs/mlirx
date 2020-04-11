@@ -153,21 +153,6 @@ int TargetTransformInfo::getOperationCost(unsigned Opcode, Type *Ty,
   return Cost;
 }
 
-int TargetTransformInfo::getCallCost(FunctionType *FTy, int NumArgs,
-                                     const User *U) const {
-  int Cost = TTIImpl->getCallCost(FTy, NumArgs, U);
-  assert(Cost >= 0 && "TTI should not produce negative costs!");
-  return Cost;
-}
-
-int TargetTransformInfo::getCallCost(const Function *F,
-                                     ArrayRef<const Value *> Arguments,
-                                     const User *U) const {
-  int Cost = TTIImpl->getCallCost(F, Arguments, U);
-  assert(Cost >= 0 && "TTI should not produce negative costs!");
-  return Cost;
-}
-
 unsigned TargetTransformInfo::getInliningThresholdMultiplier() const {
   return TTIImpl->getInliningThresholdMultiplier();
 }
@@ -534,12 +519,20 @@ unsigned TargetTransformInfo::getPrefetchDistance() const {
   return TTIImpl->getPrefetchDistance();
 }
 
-unsigned TargetTransformInfo::getMinPrefetchStride() const {
-  return TTIImpl->getMinPrefetchStride();
+unsigned TargetTransformInfo::getMinPrefetchStride(unsigned NumMemAccesses,
+                                                  unsigned NumStridedMemAccesses,
+                                                   unsigned NumPrefetches,
+                                                   bool HasCall) const {
+  return TTIImpl->getMinPrefetchStride(NumMemAccesses, NumStridedMemAccesses,
+                                       NumPrefetches, HasCall);
 }
 
 unsigned TargetTransformInfo::getMaxPrefetchIterationsAhead() const {
   return TTIImpl->getMaxPrefetchIterationsAhead();
+}
+
+bool TargetTransformInfo::enableWritePrefetching() const {
+  return TTIImpl->enableWritePrefetching();
 }
 
 unsigned TargetTransformInfo::getMaxInterleaveFactor(unsigned VF) const {
@@ -881,14 +874,14 @@ static bool matchPairwiseShuffleMask(ShuffleVectorInst *SI, bool IsLeft,
   else if (!SI)
     return false;
 
-  SmallVector<int, 32> Mask(SI->getType()->getVectorNumElements(), -1);
+  SmallVector<int, 32> Mask(SI->getType()->getNumElements(), -1);
 
   // Build a mask of 0, 2, ... (left) or 1, 3, ... (right) depending on whether
   // we look at the left or right side.
   for (unsigned i = 0, e = (1 << Level), val = !IsLeft; i != e; ++i, val += 2)
     Mask[i] = val;
 
-  SmallVector<int, 16> ActualMask = SI->getShuffleMask();
+  ArrayRef<int> ActualMask = SI->getShuffleMask();
   return Mask == ActualMask;
 }
 
@@ -1043,8 +1036,8 @@ static ReductionKind matchPairwiseReduction(const ExtractElementInst *ReduxRoot,
   if (!RD)
     return RK_None;
 
-  Type *VecTy = RdxStart->getType();
-  unsigned NumVecElems = VecTy->getVectorNumElements();
+  auto *VecTy = cast<VectorType>(RdxStart->getType());
+  unsigned NumVecElems = VecTy->getNumElements();
   if (!isPowerOf2_32(NumVecElems))
     return RK_None;
 
@@ -1108,8 +1101,8 @@ matchVectorSplittingReduction(const ExtractElementInst *ReduxRoot,
   if (!RD)
     return RK_None;
 
-  Type *VecTy = ReduxRoot->getOperand(0)->getType();
-  unsigned NumVecElems = VecTy->getVectorNumElements();
+  auto *VecTy = cast<VectorType>(ReduxRoot->getOperand(0)->getType());
+  unsigned NumVecElems = VecTy->getNumElements();
   if (!isPowerOf2_32(NumVecElems))
     return RK_None;
 
@@ -1153,7 +1146,7 @@ matchVectorSplittingReduction(const ExtractElementInst *ReduxRoot,
     // Fill the rest of the mask with -1 for undef.
     std::fill(&ShuffleMask[MaskStart], ShuffleMask.end(), -1);
 
-    SmallVector<int, 16> Mask = Shuffle->getShuffleMask();
+    ArrayRef<int> Mask = Shuffle->getShuffleMask();
     if (ShuffleMask != Mask)
       return RK_None;
 

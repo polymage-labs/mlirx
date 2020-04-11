@@ -10,13 +10,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Analysis/AffineStructures.h"
-#include "mlir/IR/IntegerSet.h"
-#include "mlir/Pass/Pass.h"
-#include "mlir/Dialect/Affine/IR/AffineValueMap.h"
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "PassDetail.h"
+#include "mlir/Analysis/Utils.h"
 #include "mlir/Dialect/Affine/Passes.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/IR/IntegerSet.h"
 #include "mlir/Transforms/Utils.h"
 
 #define DEBUG_TYPE "simplify-affine-structure"
@@ -30,7 +27,7 @@ namespace {
 /// all memrefs with non-trivial layout maps are converted to ones with trivial
 /// identity layout ones.
 struct SimplifyAffineStructures
-    : public FunctionPass<SimplifyAffineStructures> {
+    : public SimplifyAffineStructuresBase<SimplifyAffineStructures> {
   void runOnFunction() override;
 
   /// Utility to simplify an affine attribute and update its entry in the parent
@@ -58,15 +55,7 @@ struct SimplifyAffineStructures
     op->setAttr(name, simplified);
   }
 
-  /// Performs basic integer set simplifications. Checks if it's empty, and
-  /// replaces it with the canonical empty set if it is.
-  IntegerSet simplify(IntegerSet set) {
-    FlatAffineConstraints fac(set);
-    if (fac.isEmpty())
-      return IntegerSet::getEmptySet(set.getNumDims(), set.getNumSymbols(),
-                                     &getContext());
-    return set;
-  }
+  IntegerSet simplify(IntegerSet set) { return simplifyIntegerSet(set); }
 
   /// Performs basic affine map simplifications.
   AffineMap simplify(AffineMap map) {
@@ -80,7 +69,8 @@ struct SimplifyAffineStructures
 
 } // end anonymous namespace
 
-std::unique_ptr<OpPassBase<FuncOp>> mlir::createSimplifyAffineStructuresPass() {
+std::unique_ptr<OperationPass<FuncOp>>
+mlir::createSimplifyAffineStructuresPass() {
   return std::make_unique<SimplifyAffineStructures>();
 }
 
@@ -105,7 +95,3 @@ void SimplifyAffineStructures::runOnFunction() {
     normalizeMemRef(allocOp);
   }
 }
-
-static PassRegistration<SimplifyAffineStructures>
-    pass("simplify-affine-structures",
-         "Simplify affine expressions in maps/sets and normalize memrefs");
