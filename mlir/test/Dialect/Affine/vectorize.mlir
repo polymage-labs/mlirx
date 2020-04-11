@@ -1,7 +1,7 @@
 // RUN: mlir-opt %s -affine-vectorize | FileCheck %s
 
-// CHECK-LABEL: func @loop1d
-func @loop1d(%A: memref<2048x2048xf32>) {
+// CHECK-LABEL: func @inner_loop_simple
+func @inner_loop_simple(%A: memref<2048x2048xf32>) {
   affine.for %i = 0 to 1024 {
     affine.for %j = 0 to 1024 {
       %v = affine.load %A[%i, %j] : memref<2048x2048xf32>
@@ -10,14 +10,34 @@ func @loop1d(%A: memref<2048x2048xf32>) {
   }
   return
 }
-// CHECK-NEXT: %0 = memref_shape_cast %arg0 : memref<2048x2048xf32> to memref<2048x256xvector<8xf32>>
+// CHECK-NEXT: %[[VEC:.*]] = memref_shape_cast %arg0 : memref<2048x2048xf32> to memref<2048x256xvector<8xf32>>
 // CHECK-NEXT: affine.for %arg1 = 0 to 1024 {
 // CHECK-NEXT:   affine.for %arg2 = 0 to 128 {
-// CHECK-NEXT:     %1 = affine.load %0[%arg1, %arg2] : memref<2048x256xvector<8xf32>>
-// CHECK-NEXT:     affine.store %1, %0[%arg1, %arg2] : memref<2048x256xvector<8xf32>>
+// CHECK-NEXT:     %[[V:.*]] = affine.load %[[VEC]][%arg1, %arg2] : memref<2048x256xvector<8xf32>>
+// CHECK-NEXT:     affine.store %[[V]], %[[VEC]][%arg1, %arg2] : memref<2048x256xvector<8xf32>>
 // CHECK-NEXT:   }
 // CHECK-NEXT: }
 
+// Outer loop vectorization on a matvec where the matrix is transposed.
+// CHECK-LABEL: func @matvec
+func @matvec(%A: memref<2048x2048xf64>, %X: memref<2048xf64>,
+    %Y: memref<2048xf64>) {
+  %M = dim %Y, 0 : memref<2048xf64>
+  %K = dim %X, 0 : memref<2048xf64>
+
+  affine.for %i = 0 to %M {
+    affine.for %k = 0 to %K {
+      %l = affine.load %A[%k, %i] : memref<2048x2048xf64>
+      %r = affine.load %X[%k] : memref<2048xf64>
+      %p = mulf %l, %r : f64
+      %oi = affine.load %Y[%i] : memref<2048xf64>
+      %oo = addf %oi, %p : f64
+    }
+  }
+  return
+}
+// CHECK:      affine.for %{{.*}} = 0 to %{{.*}} {
+// CHECK-NEXT:   affine.for %{{.*}} = 0 to %{{.*}} {
 
 // CHECK-LABEL: func @matmul_ijk
 func @matmul_ijk(%A: memref<2048x2048xf64>, %B: memref<2048x2048xf64>, %C: memref<2048x2048xf64>) {
@@ -50,6 +70,18 @@ func @matmul_ijk(%A: memref<2048x2048xf64>, %B: memref<2048x2048xf64>, %C: memre
 // CHECK-NEXT:    }
 // CHECK-NEXT:  }
 // CHECK-NEXT:  return
+}
+
+// CHECK-LABEL: func @dynamic_memref
+func @dynamic_memref(%A : memref<?xf32>) {
+  // CHECK: memref_shape_cast %arg0 : memref<?xf32> to memref<?xvector<8xf32>>
+  affine.for %i = 0 to 16 {
+    // CHECK: affine.load %{{.*}} : memref<?xvector<8xf32>>
+    // CHECK: affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<?xvector<8xf32>>
+    %v = affine.load %A[%i] : memref<?xf32>
+    affine.store %v, %A[%i] : memref<?xf32>
+  }
+  return
 }
 
 // Outer loop imperfect nest vectorization here.

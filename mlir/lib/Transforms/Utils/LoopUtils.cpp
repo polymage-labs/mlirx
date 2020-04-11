@@ -2396,7 +2396,6 @@ static VectorType getVectorizedType(Type inputType, unsigned width) {
 static Value createVectorMemRef(Value scalMemRef, unsigned vectorWidth) {
   auto scalMemRefType = scalMemRef.getType().cast<MemRefType>();
   auto shape = scalMemRefType.getShape();
-  assert(shape.back() % vectorWidth == 0 && "unexpected memref shape");
 
   OpBuilder b(scalMemRef.getContext());
   if (auto *defOp = scalMemRef.getDefiningOp())
@@ -2408,9 +2407,21 @@ static Value createVectorMemRef(Value scalMemRef, unsigned vectorWidth) {
       getVectorizedType(scalMemRefType.getElementType(), vectorWidth);
 
   SmallVector<int64_t, 4> vecMemRefShape(shape.begin(), shape.end());
-  vecMemRefShape.back() /= vectorWidth;
+  if (vecMemRefShape.back() != -1)
+    vecMemRefShape.back() /= vectorWidth;
 
   auto vecMemRefType = MemRefType::get(vecMemRefShape, vecMemRefEltType);
+
+  // FIXME: we are using a shape cast here, but we do not know whether the base
+  // memref is aligned to the right boundary. The load/stores on cast memref (of
+  // vector elt type) would be mapped to aligned load/stores by default and
+  // lead to a protection fault.
+  // We are going to fix this at least where we have access to the defining
+  // alloc op.
+  if (auto allocOp = dyn_cast_or_null<AllocOp>(scalMemRef.getDefiningOp()))
+    allocOp.alignmentAttr(
+        b.getI64IntegerAttr(vecMemRefEltType.getSizeInBits() / 8));
+
   return b.create<MemRefShapeCastOp>(b.getUnknownLoc(), vecMemRefType,
                                      scalMemRef);
 }
@@ -2477,6 +2488,7 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
   //
   DenseSet<Operation *> toVecLoadOps, toVecStoreOps;
   SmallVector<Operation *, 4> toSplatLoadOps, writeLastEltStoreOps;
+
   // Mapping from a memref to its vector counterpart.
   DenseMap<Value, Value> toVecMemRefMap;
   SetVector<Value> toVecMemRefs;
@@ -2507,9 +2519,9 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
     else
       toVecStoreOps.insert(storeOp);
 
-    if (toVecMemRefs.count(memref) == 0) {
+    if (toVecMemRefs.count(memref) == 0)
       toVecMemRefs.insert(memref);
-    }
+
     return WalkResult::advance();
   });
 
@@ -2576,17 +2588,7 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
     return failure();
   }
 
-  // Check if memref dim size is a multiple of the width.
-  for (auto memref : toVecMemRefs) {
-    auto memrefType = memref.getType().cast<MemRefType>();
-    int64_t lastDimSize = memrefType.getDimSize(memrefType.getRank() - 1);
-    if (lastDimSize == -1 || lastDimSize % vectorWidth != 0) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "memref dimension not multiple of vector width\n");
-      LLVM_DEBUG(memrefType.dump());
-      return failure();
-    }
-  }
+  // FIXME: what is the assumption on layouts maps?
 
   // Create vector memrefs for the ones that will have their load/stores
   // vectorized.
@@ -2603,10 +2605,10 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
   for (auto op : toVecLoadOps) {
     auto loadOp = cast<AffineLoadOp>(op);
     OpBuilder rewriter(loadOp);
-    SmallVector<Value, 4> mapOperands(loadOp.getMapOperands());
     auto vecLoadOp = rewriter.create<AffineLoadOp>(
         loadOp.getLoc(), toVecMemRefMap[loadOp.getMemRef()],
-        scaleDownLastResult(loadOp.getAffineMap(), vectorWidth), mapOperands);
+        scaleDownLastResult(loadOp.getAffineMap(), vectorWidth),
+        loadOp.getMapOperands());
     loadOp.getOperation()->replaceAllUsesWith(vecLoadOp);
     loadOp.erase();
   }
@@ -2683,7 +2685,8 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
   AffineForOp::getCanonicalizationPatterns(patterns, context);
   AffineLoadOp::getCanonicalizationPatterns(patterns, context);
   AffineStoreOp::getCanonicalizationPatterns(patterns, context);
-  applyPatternsAndFoldGreedily(forOp.getParentOfType<FuncOp>(), std::move(patterns));
+  applyPatternsAndFoldGreedily(forOp.getParentOfType<FuncOp>(),
+                               std::move(patterns));
 
   if (vecMemRefMap)
     *vecMemRefMap = std::move(toVecMemRefMap);
