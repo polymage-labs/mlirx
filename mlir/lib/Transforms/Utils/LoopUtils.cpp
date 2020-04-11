@@ -2477,6 +2477,7 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
   //
   DenseSet<Operation *> toVecLoadOps, toVecStoreOps;
   SmallVector<Operation *, 4> toSplatLoadOps, writeLastEltStoreOps;
+
   // Mapping from a memref to its vector counterpart.
   DenseMap<Value, Value> toVecMemRefMap;
   SetVector<Value> toVecMemRefs;
@@ -2507,9 +2508,9 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
     else
       toVecStoreOps.insert(storeOp);
 
-    if (toVecMemRefs.count(memref) == 0) {
+    if (toVecMemRefs.count(memref) == 0)
       toVecMemRefs.insert(memref);
-    }
+
     return WalkResult::advance();
   });
 
@@ -2576,17 +2577,7 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
     return failure();
   }
 
-  // Check if memref dim size is a multiple of the width.
-  for (auto memref : toVecMemRefs) {
-    auto memrefType = memref.getType().cast<MemRefType>();
-    int64_t lastDimSize = memrefType.getDimSize(memrefType.getRank() - 1);
-    if (lastDimSize == -1 || lastDimSize % vectorWidth != 0) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "memref dimension not multiple of vector width\n");
-      LLVM_DEBUG(memrefType.dump());
-      return failure();
-    }
-  }
+  // FIXME: what is the assumption on layouts maps?
 
   // Create vector memrefs for the ones that will have their load/stores
   // vectorized.
@@ -2603,10 +2594,10 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
   for (auto op : toVecLoadOps) {
     auto loadOp = cast<AffineLoadOp>(op);
     OpBuilder rewriter(loadOp);
-    SmallVector<Value, 4> mapOperands(loadOp.getMapOperands());
     auto vecLoadOp = rewriter.create<AffineLoadOp>(
         loadOp.getLoc(), toVecMemRefMap[loadOp.getMemRef()],
-        scaleDownLastResult(loadOp.getAffineMap(), vectorWidth), mapOperands);
+        scaleDownLastResult(loadOp.getAffineMap(), vectorWidth),
+        loadOp.getMapOperands());
     loadOp.getOperation()->replaceAllUsesWith(vecLoadOp);
     loadOp.erase();
   }
@@ -2683,7 +2674,8 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
   AffineForOp::getCanonicalizationPatterns(patterns, context);
   AffineLoadOp::getCanonicalizationPatterns(patterns, context);
   AffineStoreOp::getCanonicalizationPatterns(patterns, context);
-  applyPatternsAndFoldGreedily(forOp.getParentOfType<FuncOp>(), std::move(patterns));
+  applyPatternsAndFoldGreedily(forOp.getParentOfType<FuncOp>(),
+                               std::move(patterns));
 
   if (vecMemRefMap)
     *vecMemRefMap = std::move(toVecMemRefMap);
