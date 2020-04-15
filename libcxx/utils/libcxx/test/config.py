@@ -1008,13 +1008,7 @@ class Configuration(object):
         sub.append(('%{link_libcxxabi}', pipes.quote(self.cxx.link_libcxxabi_flag)))
         if self.cxx.isVerifySupported():
             sub.append(('%{verify}', ' '.join(self.cxx.verify_flags)))
-        # Add compile and build shortcuts
-        sub.append(('%{compile}', '%{cxx} -o %t.o %s -c %{flags} %{compile_flags}'))
         sub.append(('%{build}',   '%{cxx} -o %t.exe %s %{flags} %{compile_flags} %{link_flags}'))
-        if self.cxx.use_modules:
-            sub.append(('%{build_module}', '%{build}'))
-        elif self.cxx.modules_flags is not None:
-            sub.append(('%{build_module}', '%{{build}} {}'.format(' '.join(self.cxx.modules_flags))))
 
         # Configure exec prefix substitutions.
         # Configure run env substitution.

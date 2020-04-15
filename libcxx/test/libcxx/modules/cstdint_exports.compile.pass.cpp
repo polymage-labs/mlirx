@@ -12,22 +12,21 @@
 
 // FIXME: The <atomic> header is not supported for single-threaded systems,
 // but still gets built as part of the 'std' module, which breaks the build.
-// XFAIL: libcpp-has-no-threads
+// The failure only shows up when modules are enabled AND we're building
+// without threads, which is when the __config_site macro for _LIBCPP_HAS_NO_THREADS
+// is honored.
+// XFAIL: libcpp-has-no-threads && -fmodules
+
+// Test that <cstdint> re-exports <stdint.h>
 
 // REQUIRES: modules-support
-// UNSUPPORTED: c++98, c++03
+// ADDITIONAL_COMPILE_FLAGS: -fmodules
 
-// RUN: %{build_module}
-
-#include <clocale>
-
-#define TEST(...) do { using T = decltype( __VA_ARGS__ ); } while(false)
+#include <cstdint>
 
 int main(int, char**) {
-  std::lconv l; ((void)l);
-
-  TEST(std::setlocale(0, ""));
-  TEST(std::localeconv());
+  int8_t x; (void)x;
+  std::int8_t y; (void)y;
 
   return 0;
 }

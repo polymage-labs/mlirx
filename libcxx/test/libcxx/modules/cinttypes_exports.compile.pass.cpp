@@ -12,19 +12,21 @@
 
 // FIXME: The <atomic> header is not supported for single-threaded systems,
 // but still gets built as part of the 'std' module, which breaks the build.
-// XFAIL: libcpp-has-no-threads
+// The failure only shows up when modules are enabled AND we're building
+// without threads, which is when the __config_site macro for _LIBCPP_HAS_NO_THREADS
+// is honored.
+// XFAIL: libcpp-has-no-threads && -fmodules
 
 // REQUIRES: modules-support
+// ADDITIONAL_COMPILE_FLAGS: -fmodules
 
-// Test that <cstdint> re-exports <stdint.h>
+// Test that <cinttypes> re-exports <cstdint>
 
-// RUN: %{build_module}
-
-#include <cstdint>
+#include <cinttypes>
 
 int main(int, char**) {
-  int8_t x; ((void)x);
-  std::int8_t y; ((void)y);
+  int8_t x; (void)x;
+  std::int8_t y; (void)y;
 
   return 0;
 }

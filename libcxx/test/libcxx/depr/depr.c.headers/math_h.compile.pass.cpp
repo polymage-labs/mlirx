@@ -6,14 +6,23 @@
 //
 //===----------------------------------------------------------------------===//
 
-// REQUIRES: verify-support
+// Code on Windows expects to be able to do:
+//
+//  #define _USE_MATH_DEFINES
+//  #include <math.h>
+//
+// and receive the definitions of mathematical constants, even if <math.h>
+// has previously been included. Make sure that works.
+//
 
-// XFAIL: *
+#ifdef _MSC_VER
+#   include <math.h>
+#   define _USE_MATH_DEFINES
+#   include <math.h>
 
-// Make sure the test DOES NOT pass if it fails at compile-time, but the
-// expected-error is wrong.
-
-struct Foo { };
-typedef Foo::x x; // expected-error{{this is not found in the errors}}
+#   ifndef M_PI
+#       error M_PI not defined
+#   endif
+#endif
 
 int main() { }

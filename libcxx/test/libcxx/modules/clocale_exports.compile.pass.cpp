@@ -12,18 +12,22 @@
 
 // FIXME: The <atomic> header is not supported for single-threaded systems,
 // but still gets built as part of the 'std' module, which breaks the build.
-// XFAIL: libcpp-has-no-threads
+// The failure only shows up when modules are enabled AND we're building
+// without threads, which is when the __config_site macro for _LIBCPP_HAS_NO_THREADS
+// is honored.
+// XFAIL: libcpp-has-no-threads && -fmodules
+
+// UNSUPPORTED: c++98, c++03
 
 // REQUIRES: modules-support
+// ADDITIONAL_COMPILE_FLAGS: -fmodules
 
-// Test that intypes.h re-exports stdint.h
-
-// RUN: %{build_module}
-
-#include <inttypes.h>
+#include <clocale>
 
 int main(int, char**) {
-  int8_t x; ((void)x);
+  std::lconv l; (void)l;
+  using T = decltype(std::setlocale(0, ""));
+  using U = decltype(std::localeconv());
 
   return 0;
 }

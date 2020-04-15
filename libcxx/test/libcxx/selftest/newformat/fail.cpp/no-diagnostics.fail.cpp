@@ -6,17 +6,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-// RUN: %{compile} -fsyntax-only
+// REQUIRES: verify-support
 
-#ifdef _MSC_VER
+// Make sure the test passes if we expected no diagnostics and included
+// the markup.
 
-#include <math.h>
-
-#define _USE_MATH_DEFINES
-#include <math.h>
-
-#ifndef M_PI
-#error M_PI not defined
-#endif
-
-#endif
+// expected-no-diagnostics
