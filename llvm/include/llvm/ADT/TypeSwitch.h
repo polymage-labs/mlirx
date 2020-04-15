@@ -11,14 +11,14 @@
 //
 //===-----------------------------------------------------------------------===/
 
-#ifndef MLIR_SUPPORT_TYPESWITCH_H
-#define MLIR_SUPPORT_TYPESWITCH_H
+#ifndef LLVM_ADT_TYPESWITCH_H
+#define LLVM_ADT_TYPESWITCH_H
 
-#include "mlir/Support/LLVM.h"
-#include "mlir/Support/STLExtras.h"
 #include "llvm/ADT/Optional.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/Casting.h"
 
-namespace mlir {
+namespace llvm {
 namespace detail {
 
 template <typename DerivedT, typename T> class TypeSwitchBase {
@@ -46,7 +46,7 @@ public:
   /// Note: This inference rules for this overload are very simple: strip
   ///       pointers and references.
   template <typename CallableT> DerivedT &Case(CallableT &&caseFn) {
-    using Traits = FunctionTraits<std::decay_t<CallableT>>;
+    using Traits = function_traits<std::decay_t<CallableT>>;
     using CaseT = std::remove_cv_t<std::remove_pointer_t<
         std::remove_reference_t<typename Traits::template arg_t<0>>>>;
 
@@ -171,6 +171,6 @@ private:
   /// A flag detailing if we have already found a match.
   bool foundMatch = false;
 };
-} // end namespace mlir
+} // end namespace llvm
 
-#endif // MLIR_SUPPORT_TYPESWITCH_H
+#endif // LLVM_ADT_TYPESWITCH_H
