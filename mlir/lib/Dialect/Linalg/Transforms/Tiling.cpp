@@ -12,7 +12,7 @@
 
 #include "PassDetail.h"
 #include "mlir/Dialect/Affine/EDSC/Intrinsics.h"
-#include "mlir/Dialect/Linalg/EDSC/Intrinsics.h"
+#include "mlir/Dialect/Linalg/EDSC/FoldedIntrinsics.h"
 #include "mlir/Dialect/Linalg/IR/LinalgTypes.h"
 #include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
@@ -294,7 +294,8 @@ makeTiledViews(OpBuilder &b, Location loc, LinalgOp linalgOp,
             /*dimCount=*/3, /*symbolCount=*/0,
             {getAffineDimExpr(/*position=*/0, b.getContext()),
              getAffineDimExpr(/*position=*/1, b.getContext()) -
-                 getAffineDimExpr(/*position=*/2, b.getContext())});
+                 getAffineDimExpr(/*position=*/2, b.getContext())},
+            b.getContext());
         auto d = folded_std_dim(folder, view, r);
         size = folded_affine_min(folder, b.getIndexType(), minMap,
                                  ValueRange{size, d, offset});

@@ -33,6 +33,7 @@
 #include <sstream>
 #include <set>
 #include <cctype>
+#include <tuple>
 
 using namespace llvm;
 
@@ -801,9 +802,10 @@ void SVEEmitter::createIntrinsic(
     // Collate a list of range/option checks for the immediates.
     SmallVector<ImmCheck, 2> ImmChecks;
     for (auto *R : ImmCheckList) {
-      unsigned Arg = R->getValueAsInt("Arg");
-      unsigned EltSizeArg = R->getValueAsInt("EltSizeArg");
-      unsigned Kind = R->getValueAsDef("Kind")->getValueAsInt("Value");
+      int64_t Arg = R->getValueAsInt("Arg");
+      int64_t EltSizeArg = R->getValueAsInt("EltSizeArg");
+      int64_t Kind = R->getValueAsDef("Kind")->getValueAsInt("Value");
+      assert(Arg >= 0 && Kind >= 0 && "Arg and Kind must be nonnegative");
 
       unsigned ElementSizeInBits = 0;
       if (EltSizeArg >= 0)
@@ -908,9 +910,10 @@ void SVEEmitter::createHeader(raw_ostream &OS) {
   std::stable_sort(
       Defs.begin(), Defs.end(), [](const std::unique_ptr<Intrinsic> &A,
                                    const std::unique_ptr<Intrinsic> &B) {
-        return A->getGuard() < B->getGuard() ||
-               (unsigned)A->getClassKind() < (unsigned)B->getClassKind() ||
-               A->getName() < B->getName();
+        auto ToTuple = [](const std::unique_ptr<Intrinsic> &I) {
+          return std::make_tuple(I->getGuard(), (unsigned)I->getClassKind(), I->getName());
+        };
+        return ToTuple(A) < ToTuple(B);
       });
 
   StringRef InGuard = "";

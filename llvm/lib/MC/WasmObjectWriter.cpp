@@ -152,7 +152,7 @@ struct WasmRelocationEntry {
   void print(raw_ostream &Out) const {
     Out << wasm::relocTypetoString(Type) << " Off=" << Offset
         << ", Sym=" << *Symbol << ", Addend=" << Addend
-        << ", FixupSection=" << FixupSection->getSectionName();
+        << ", FixupSection=" << FixupSection->getName();
   }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -417,7 +417,7 @@ void WasmObjectWriter::executePostLayoutBinding(MCAssembler &Asm,
       auto Pair = SectionFunctions.insert(std::make_pair(&Sec, &S));
       if (!Pair.second)
         report_fatal_error("section already has a defining function: " +
-                           Sec.getSectionName());
+                           Sec.getName());
     }
   }
 }
@@ -453,7 +453,7 @@ void WasmObjectWriter::recordRelocation(MCAssembler &Asm,
   const auto *SymA = cast<MCSymbolWasm>(&RefA->getSymbol());
 
   // The .init_array isn't translated as data, so don't do relocations in it.
-  if (FixupSection.getSectionName().startswith(".init_array")) {
+  if (FixupSection.getName().startswith(".init_array")) {
     SymA->setUsedInInitArray();
     return;
   }
@@ -537,7 +537,9 @@ static const MCSymbolWasm *resolveSymbol(const MCSymbolWasm &Symbol) {
 // useable.
 uint32_t
 WasmObjectWriter::getProvisionalValue(const WasmRelocationEntry &RelEntry) {
-  if (RelEntry.Type == wasm::R_WASM_GLOBAL_INDEX_LEB && !RelEntry.Symbol->isGlobal()) {
+  if ((RelEntry.Type == wasm::R_WASM_GLOBAL_INDEX_LEB ||
+       RelEntry.Type == wasm::R_WASM_GLOBAL_INDEX_I32) &&
+      !RelEntry.Symbol->isGlobal()) {
     assert(GOTIndices.count(RelEntry.Symbol) > 0 && "symbol not found in GOT index space");
     return GOTIndices[RelEntry.Symbol];
   }
@@ -556,6 +558,7 @@ WasmObjectWriter::getProvisionalValue(const WasmRelocationEntry &RelEntry) {
     return getRelocationIndexValue(RelEntry);
   case wasm::R_WASM_FUNCTION_INDEX_LEB:
   case wasm::R_WASM_GLOBAL_INDEX_LEB:
+  case wasm::R_WASM_GLOBAL_INDEX_I32:
   case wasm::R_WASM_EVENT_INDEX_LEB:
     // Provisional value is function/global/event Wasm index
     assert(WasmIndices.count(RelEntry.Symbol) > 0 && "symbol not found in wasm index space");
@@ -587,7 +590,7 @@ WasmObjectWriter::getProvisionalValue(const WasmRelocationEntry &RelEntry) {
 
 static void addData(SmallVectorImpl<char> &DataBytes,
                     MCSectionWasm &DataSection) {
-  LLVM_DEBUG(errs() << "addData: " << DataSection.getSectionName() << "\n");
+  LLVM_DEBUG(errs() << "addData: " << DataSection.getName() << "\n");
 
   DataBytes.resize(alignTo(DataBytes.size(), DataSection.getAlignment()));
 
@@ -660,6 +663,7 @@ void WasmObjectWriter::applyRelocations(
     case wasm::R_WASM_MEMORY_ADDR_I32:
     case wasm::R_WASM_FUNCTION_OFFSET_I32:
     case wasm::R_WASM_SECTION_OFFSET_I32:
+    case wasm::R_WASM_GLOBAL_INDEX_I32:
       writeI32(Stream, Value, Offset);
       break;
     case wasm::R_WASM_TABLE_INDEX_SLEB:
@@ -1216,7 +1220,7 @@ uint64_t WasmObjectWriter::writeObject(MCAssembler &Asm,
   // populating DataLocations.
   for (MCSection &Sec : Asm) {
     auto &Section = static_cast<MCSectionWasm &>(Sec);
-    StringRef SectionName = Section.getSectionName();
+    StringRef SectionName = Section.getName();
 
     // .init_array sections are handled specially elsewhere.
     if (SectionName.startswith(".init_array"))
@@ -1508,9 +1512,9 @@ uint64_t WasmObjectWriter::writeObject(MCAssembler &Asm,
   // Translate .init_array section contents into start functions.
   for (const MCSection &S : Asm) {
     const auto &WS = static_cast<const MCSectionWasm &>(S);
-    if (WS.getSectionName().startswith(".fini_array"))
+    if (WS.getName().startswith(".fini_array"))
       report_fatal_error(".fini_array sections are unsupported");
-    if (!WS.getSectionName().startswith(".init_array"))
+    if (!WS.getName().startswith(".init_array"))
       continue;
     if (WS.getFragmentList().empty())
       continue;
@@ -1537,13 +1541,11 @@ uint64_t WasmObjectWriter::writeObject(MCAssembler &Asm,
 
     uint16_t Priority = UINT16_MAX;
     unsigned PrefixLength = strlen(".init_array");
-    if (WS.getSectionName().size() > PrefixLength) {
-      if (WS.getSectionName()[PrefixLength] != '.')
+    if (WS.getName().size() > PrefixLength) {
+      if (WS.getName()[PrefixLength] != '.')
         report_fatal_error(
             ".init_array section priority should start with '.'");
-      if (WS.getSectionName()
-              .substr(PrefixLength + 1)
-              .getAsInteger(10, Priority))
+      if (WS.getName().substr(PrefixLength + 1).getAsInteger(10, Priority))
         report_fatal_error("invalid .init_array section priority");
     }
     const auto &DataFrag = cast<MCDataFragment>(Frag);

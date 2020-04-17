@@ -1467,11 +1467,8 @@ std::pair<AffineMap, AffineMap> FlatAffineConstraints::getLowerAndUpperBound(
     lbExprs.push_back(expr);
   }
 
-  auto lbMap = lbExprs.empty() ? AffineMap()
-                               : AffineMap::get(dimCount, symCount, lbExprs);
-
-  auto ubMap = ubExprs.empty() ? AffineMap()
-                               : AffineMap::get(dimCount, symCount, ubExprs);
+  auto lbMap = AffineMap::get(dimCount, symCount, lbExprs, context);
+  auto ubMap = AffineMap::get(dimCount, symCount, ubExprs, context);
 
   return {lbMap, ubMap};
 }

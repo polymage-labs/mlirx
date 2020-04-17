@@ -76,7 +76,6 @@ class Configuration(object):
         self.use_system_cxx_lib = False
         self.use_clang_verify = False
         self.long_tests = None
-        self.execute_external = False
 
     def get_lit_conf(self, name, default=None):
         val = self.lit_config.params.get(name, None)
@@ -133,7 +132,6 @@ class Configuration(object):
         self.configure_cxx_library_root()
         self.configure_use_clang_verify()
         self.configure_use_thread_safety()
-        self.configure_execute_external()
         self.configure_ccache()
         self.configure_compile_flags()
         self.configure_link_flags()
@@ -177,7 +175,6 @@ class Configuration(object):
         return LibcxxTestFormat(
             self.cxx,
             self.use_clang_verify,
-            self.execute_external,
             self.executor,
             exec_env=self.exec_env)
 
@@ -335,8 +332,6 @@ class Configuration(object):
             self.use_clang_verify = self.cxx.isVerifySupported()
             self.lit_config.note(
                 "inferred use_clang_verify as: %r" % self.use_clang_verify)
-        if self.use_clang_verify:
-                self.config.available_features.add('verify-support')
 
     def configure_use_thread_safety(self):
         '''If set, run clang with -verify on failing tests.'''
@@ -345,21 +340,6 @@ class Configuration(object):
             self.cxx.compile_flags += ['-Werror=thread-safety']
             self.config.available_features.add('thread-safety')
             self.lit_config.note("enabling thread-safety annotations")
-
-    def configure_execute_external(self):
-        # Choose between lit's internal shell pipeline runner and a real shell.
-        # If LIT_USE_INTERNAL_SHELL is in the environment, we use that as the
-        # default value. Otherwise we ask the target_info.
-        use_lit_shell_default = os.environ.get('LIT_USE_INTERNAL_SHELL')
-        if use_lit_shell_default is not None:
-            use_lit_shell_default = use_lit_shell_default != '0'
-        else:
-            use_lit_shell_default = self.target_info.use_lit_shell_default()
-        # Check for the command line parameter using the default value if it is
-        # not present.
-        use_lit_shell = self.get_lit_bool('use_lit_shell',
-                                          use_lit_shell_default)
-        self.execute_external = not use_lit_shell
 
     def configure_ccache(self):
         use_ccache_default = os.environ.get('LIBCXX_USE_CCACHE') is not None
@@ -1006,9 +986,6 @@ class Configuration(object):
         sub.append(('%{compile_flags}', ' '.join(map(pipes.quote, self.cxx.compile_flags))))
         sub.append(('%{link_flags}',    ' '.join(map(pipes.quote, self.cxx.link_flags))))
         sub.append(('%{link_libcxxabi}', pipes.quote(self.cxx.link_libcxxabi_flag)))
-        if self.cxx.isVerifySupported():
-            sub.append(('%{verify}', ' '.join(self.cxx.verify_flags)))
-        sub.append(('%{build}',   '%{cxx} -o %t.exe %s %{flags} %{compile_flags} %{link_flags}'))
 
         # Configure exec prefix substitutions.
         # Configure run env substitution.
@@ -1028,7 +1005,6 @@ class Configuration(object):
         sub.append(('%{exec}', '{} {} {} -- '.format(pipes.quote(sys.executable),
                                                      pipes.quote(executor),
                                                      ' '.join(exec_args))))
-        sub.append(('%{run}', '%{exec} %t.exe'))
         if self.get_lit_conf('libcxx_gdb'):
             sub.append(('%{libcxx_gdb}', self.get_lit_conf('libcxx_gdb')))
 

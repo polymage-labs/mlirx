@@ -2675,8 +2675,11 @@ struct AAIsDeadFloating : public AAIsDeadValueImpl {
     if (C.hasValue() && C.getValue())
       return ChangeStatus::UNCHANGED;
 
+    // Replace the value with undef as it is dead but keep droppable uses around
+    // as they provide information we don't want to give up on just yet.
     UndefValue &UV = *UndefValue::get(V.getType());
-    bool AnyChange = A.changeValueAfterManifest(V, UV);
+    bool AnyChange =
+        A.changeValueAfterManifest(V, UV, /* ChangeDropppable */ false);
     return AnyChange ? ChangeStatus::CHANGED : ChangeStatus::UNCHANGED;
   }
 
@@ -2703,8 +2706,10 @@ struct AAIsDeadArgument : public AAIsDeadFloating {
       if (A.registerFunctionSignatureRewrite(
               Arg, /* ReplacementTypes */ {},
               Attributor::ArgumentReplacementInfo::CalleeRepairCBTy{},
-              Attributor::ArgumentReplacementInfo::ACSRepairCBTy{}))
+              Attributor::ArgumentReplacementInfo::ACSRepairCBTy{})) {
+        Arg.dropDroppableUses();
         return ChangeStatus::CHANGED;
+      }
     return Changed;
   }
 
@@ -4988,9 +4993,10 @@ struct AAPrivatizablePtrArgument final : public AAPrivatizablePtrImpl {
     // Helper to check if for the given call site the associated argument is
     // passed to a callback where the privatization would be different.
     auto IsCompatiblePrivArgOfCallback = [&](CallSite CS) {
-      SmallVector<const Use *, 4> CBUses;
-      AbstractCallSite::getCallbackUses(CS, CBUses);
-      for (const Use *U : CBUses) {
+      SmallVector<const Use *, 4> CallbackUses;
+      AbstractCallSite::getCallbackUses(cast<CallBase>(*CS.getInstruction()),
+                                        CallbackUses);
+      for (const Use *U : CallbackUses) {
         AbstractCallSite CBACS(U);
         assert(CBACS && CBACS.isCallbackCall());
         for (Argument &CBArg : CBACS.getCalledFunction()->args()) {
@@ -5076,7 +5082,7 @@ struct AAPrivatizablePtrArgument final : public AAPrivatizablePtrImpl {
                << Arg->getParent()->getName()
                << ")\n[AAPrivatizablePtr] because it is an argument in a "
                   "direct call of ("
-               << ACS.getCallSite().getCalledFunction()->getName()
+               << ACS.getInstruction()->getCalledFunction()->getName()
                << ").\n[AAPrivatizablePtr] for which the argument "
                   "privatization is not compatible.\n";
       });
@@ -5088,7 +5094,7 @@ struct AAPrivatizablePtrArgument final : public AAPrivatizablePtrImpl {
     // here.
     auto IsCompatiblePrivArgOfOtherCallSite = [&](AbstractCallSite ACS) {
       if (ACS.isDirectCall())
-        return IsCompatiblePrivArgOfCallback(ACS.getCallSite());
+        return IsCompatiblePrivArgOfCallback(CallSite(ACS.getInstruction()));
       if (ACS.isCallbackCall())
         return IsCompatiblePrivArgOfDirectCS(ACS);
       return false;
@@ -6251,8 +6257,9 @@ AAMemoryLocationImpl::categorizeAccessedLocations(Attributor &A, Instruction &I,
                                 nullptr, Changed);
     }
 
-    // Now handle global memory if it might be accessed.
-    bool HasGlobalAccesses = !(ICSAssumedNotAccessedLocs & NO_GLOBAL_MEM);
+    // Now handle global memory if it might be accessed. This is slightly tricky
+    // as NO_GLOBAL_MEM has multiple bits set.
+    bool HasGlobalAccesses = ((~ICSAssumedNotAccessedLocs) & NO_GLOBAL_MEM);
     if (HasGlobalAccesses) {
       auto AccessPred = [&](const Instruction *, const Value *Ptr,
                             AccessKind Kind, MemoryLocationsKind MLK) {
@@ -6270,7 +6277,7 @@ AAMemoryLocationImpl::categorizeAccessedLocations(Attributor &A, Instruction &I,
                << getMemoryLocationsAsStr(AccessedLocs.getAssumed()) << "\n");
 
     // Now handle argument memory if it might be accessed.
-    bool HasArgAccesses = !(ICSAssumedNotAccessedLocs & NO_ARGUMENT_MEM);
+    bool HasArgAccesses = ((~ICSAssumedNotAccessedLocs) & NO_ARGUMENT_MEM);
     if (HasArgAccesses) {
       for (unsigned ArgNo = 0, e = ICS.getNumArgOperands(); ArgNo < e;
            ++ArgNo) {
