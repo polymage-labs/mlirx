@@ -621,26 +621,27 @@ def AffineTerminatorOp :
   let verifier = ?;
 }
 
-def AffineGrayBoxOp : Affine_Op<"graybox"> {
-  let summary = "graybox operation";
+def AffineExecuteRegionOp : Affine_Op<"execute_region"> {
+  let summary = "execute_region operation";
   let description = [{
-      The affine graybox op introduces a new symbol context for affine
+      The `affine.execute_region` op introduces a new symbol context for affine
       operations. It holds a single region,  which can be a list of one or more
       blocks. The op's region can have zero or more arguments, each of which can
       only be a memref. The operands bind 1:1 to its region's arguments. The op
       can't use any memrefs defined outside of it, but can use any other SSA
       values that dominate it. Its region's blocks can have terminators the same
       way as current MLIR functions (FuncOp) can. Control from any return ops
-      from the top level of its region returns to right after the affine.graybox
-      op. Its control flow thus conforms to the control flow semantics of
-      regions, i.e., control always returns to the immediate enclosing (parent)
-      op. The results of a graybox op match 1:1 with the return values from its
-      region's blocks;
+      from the top level of its region returns to right after the
+      affine.execute_region op. Its control flow thus conforms to the control
+      flow semantics of regions, i.e., control always returns to the immediate
+      enclosing (parent) op. The results of a execute_region op match 1:1 with
+      the return values from its region's blocks;
 
-      Ex:
+      Examples:
 
+      ```mlir
       affine.for %i = 0 to 128 {
-        affine.graybox [%rI, %rM] = (%I, %M)
+        affine.execute_region [%rI, %rM] = (%I, %M)
               : (memref<128xi32>, memref<24xf32>) -> () {
           %idx = affine.load %rI[%i] : memref<128xi32>
           %index = index_cast %idx : i32 to index
@@ -648,7 +649,9 @@ def AffineGrayBoxOp : Affine_Op<"graybox"> {
           return
         }
       }
+      ```
 
+      ```mlir
       affine.for %i = 0 to %n {
         affine.graybox [] = () : () -> () {
           // %pow can now be used as a loop bound.
@@ -659,6 +662,20 @@ def AffineGrayBoxOp : Affine_Op<"graybox"> {
           return
         }
       }
+      ```
+
+      ```mlir
+      affine.for %i = 0 to %n {
+        affine.execute_region [] = () : () -> () {
+          // %pow can now be used as a loop bound.
+          %pow = call @powi(%i) : (index) ->  index
+          affine.for %j = 0 to %pow {
+            "foo"() : () -> ()
+          }
+          return
+        }
+      }
+      ```
 
   }];
 
@@ -667,7 +684,12 @@ def AffineGrayBoxOp : Affine_Op<"graybox"> {
 
   let regions = (region AnyRegion:$region);
 
-  // TODO: builders.
+  let skipDefaultBuilders = 1;
+
+  let builders = [
+    OpBuilder<"Builder *builder, OperationState &result, "
+              "ArrayRef<Value> memrefs">
+  ];
 
   // TODO: canonicalizations related to memrefs.
   let hasCanonicalizer = 0;

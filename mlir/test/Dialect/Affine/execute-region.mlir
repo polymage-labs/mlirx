@@ -1,20 +1,20 @@
-// RUN: mlir-opt -allow-unregistered-dialect %s | FileCheck %s
+// RUN: mlir-opt %s | FileCheck %s
 
 // CHECK-LABEL: @arbitrary_bound
 func @arbitrary_bound(%n : index) {
   affine.for %i = 0 to %n {
-    affine.graybox [] = () : () -> () {
+    affine.execute_region [] = () : () -> () {
       // %pow can now be used as a loop bound.
       %pow = call @powi(%i) : (index) ->  index
       affine.for %j = 0 to %pow {
-        "foo"() : () -> ()
+        "test.foo"() : () -> ()
       }
       return
     }
-    // CHECK:      affine.graybox [] = () : () -> () {
+    // CHECK:      affine.execute_region [] = () : () -> () {
     // CHECK-NEXT:   call @powi
     // CHECK-NEXT:   affine.for
-    // CHECK-NEXT:     "foo"()
+    // CHECK-NEXT:     "test.foo"()
     // CHECK-NEXT:   }
     // CHECK-NEXT:   return
     // CHECK-NEXT: }
@@ -27,8 +27,8 @@ func @powi(index) -> index
 // CHECK-LABEL: func @arbitrary_mem_access
 func @arbitrary_mem_access(%I: memref<128xi32>, %M: memref<1024xf32>) {
   affine.for %i = 0 to 128 {
-    // CHECK: %{{.*}} = affine.graybox [{{.*}}] = ({{.*}}) : (memref<128xi32>, memref<1024xf32>) -> f32
-    affine.graybox [%rI, %rM] = (%I, %M) : (memref<128xi32>, memref<1024xf32>) -> f32 {
+    // CHECK: %{{.*}} = affine.execute_region [{{.*}}] = ({{.*}}) : (memref<128xi32>, memref<1024xf32>) -> f32
+    %ret = affine.execute_region [%rI, %rM] = (%I, %M) : (memref<128xi32>, memref<1024xf32>) -> f32 {
       %idx = affine.load %rI[%i] : memref<128xi32>
       %index = index_cast %idx : i32 to index
       %v = affine.load %rM[%index]: memref<1024xf32>
@@ -44,8 +44,8 @@ func @symbol_check(%B: memref<100xi32>, %A: memref<100xf32>) {
   affine.for %i = 0 to 100 {
     %v = affine.load %B[%i] : memref<100xi32>
     %vo = index_cast %v : i32 to index
-    // CHECK: affine.graybox [%{{.*}}] = (%{{.*}}) : (memref<100xf32>) -> () {
-    affine.graybox [%rA] = (%A) : (memref<100xf32>) -> () {
+    // CHECK: affine.execute_region [%{{.*}}] = (%{{.*}}) : (memref<100xf32>) -> () {
+    affine.execute_region [%rA] = (%A) : (memref<100xf32>) -> () {
       // %vi is now a symbol here.
       %vi = index_cast %v : i32 to index
       affine.load %rA[%vi] : memref<100xf32>
@@ -62,14 +62,33 @@ func @symbol_check(%B: memref<100xi32>, %A: memref<100xf32>) {
   return
 }
 
+// CHECK-LABEL: func @test_more_symbol_validity
+func @test_more_symbol_validity(%A: memref<100xf32>, %pos : index) {
+  %c5 = constant 5 : index
+  affine.for %i = 0 to 100 {
+    %sym = call @external() : () -> (index)
+    affine.execute_region [%rA] = (%A) : (memref<100xf32>) -> () {
+      affine.load %rA[symbol(%pos) + symbol(%sym) + %c5] : memref<100xf32>
+      return
+    }
+  }
+  affine.execute_region [%rA] = (%A) : (memref<100xf32>) -> () {
+    affine.load %rA[symbol(%pos) + %c5] : memref<100xf32>
+    return
+  }
+  return
+}
+
+func @external() -> (index)
+
 // CHECK-LABEL: func @search
 func @search(%A : memref<?x?xi32>, %S : memref<?xi32>, %key : i32) {
   %ni = dim %A, 0 : memref<?x?xi32>
   %c1 = constant 1 : index
   // This loop can be parallelized.
   affine.for %i = 0 to %ni {
-    // CHECK: affine.graybox
-    affine.graybox [%rA, %rS] = (%A, %S) : (memref<?x?xi32>, memref<?xi32>) -> () {
+    // CHECK: affine.execute_region
+    affine.execute_region [%rA, %rS] = (%A, %S) : (memref<?x?xi32>, memref<?xi32>) -> () {
       %c0 = constant 0 : index
       %nj = dim %rA, 1 : memref<?x?xi32>
       br ^bb1(%c0 : index)

@@ -124,7 +124,7 @@ func @affine_if_invalid_dimop_dim(%arg0: index, %arg1: index, %arg2: index, %arg
     %0 = alloc(%arg0, %arg1, %arg2, %arg3) : memref<?x?x?x?xf32>
     %dim = dim %0, 0 : memref<?x?x?x?xf32>
 
-    // expected-error@+1 {{operand cannot be used as a dimension id}}
+    // expected-error@+1 {{operand cannot be used as a symbol}}
     affine.if #set0(%dim)[%n0] {}
   }
   return
@@ -171,10 +171,10 @@ func @affine_min(%arg0 : index, %arg1 : index, %arg2 : index) {
 
 // -----
 
-// CHECK-LABEL: @affine_graybox_missing_capture
-func @affine_graybox_missing_capture(%M : memref<2xi32>) {
+// CHECK-LABEL: @affine.execute_region_missing_capture
+func @affine.execute_region_missing_capture(%M : memref<2xi32>) {
   affine.for %i = 0 to 10 {
-    affine.graybox [] = () : () -> () {
+    affine.execute_region [] = () : () -> () {
     // expected-error@-1 {{incoming memref not explicitly captured}}
       affine.load %M[%i] : memref<2xi32>
     }
@@ -184,9 +184,9 @@ func @affine_graybox_missing_capture(%M : memref<2xi32>) {
 
 // -----
 
-// CHECK-LABEL: @affine_graybox_wrong_capture
-func @affine_graybox_wrong_capture(%s : index) {
-  affine.graybox [%rS] = (%s) : (index) -> () {
+// CHECK-LABEL: @affine.execute_region_wrong_capture
+func @affine.execute_region_wrong_capture(%s : index) {
+  affine.execute_region [%rS] = (%s) : (index) -> () {
     // expected-error@-1 {{operand #0 must be memref}}
     "use"(%s) : (index) -> ()
   }
@@ -194,9 +194,9 @@ func @affine_graybox_wrong_capture(%s : index) {
 
 // -----
 
-// CHECK-LABEL: @affine_graybox_wrong_capture
-func @affine_graybox_wrong_capture(%A : memref<2xi32>) {
-  affine.graybox [] = (%A) : (memref<2xi32>) -> () {
+// CHECK-LABEL: @affine.execute_region_wrong_capture
+func @affine.execute_region_wrong_capture(%A : memref<2xi32>) {
+  affine.execute_region [] = (%A) : (memref<2xi32>) -> () {
     // expected-error@-1 {{incorrect number of memref captures}}
   }
   return
@@ -204,9 +204,9 @@ func @affine_graybox_wrong_capture(%A : memref<2xi32>) {
 
 // -----
 
-// CHECK-LABEL: @affine_graybox_region_type_mismatch
-func @affine_graybox_region_type_mismatch(%A : memref<2xi32>) {
-  "affine.graybox"(%A) ({
+// CHECK-LABEL: @affine.execute_region_region_type_mismatch
+func @affine.execute_region_region_type_mismatch(%A : memref<2xi32>) {
+  "affine.execute_region"(%A) ({
     // expected-error@-1 {{type of one or more region arguments does not match corresponding operand}}
     ^bb0(%rA : memref<4xi32>):
       return
@@ -215,9 +215,9 @@ func @affine_graybox_region_type_mismatch(%A : memref<2xi32>) {
 
 // -----
 
-// CHECK-LABEL: @affine_graybox_region_arg_count_mismatch
-func @affine_graybox_region_arg_count_mismatch(%A : memref<2xi32>) {
-  "affine.graybox"(%A) ({
+// CHECK-LABEL: @affine.execute_region_region_arg_count_mismatch
+func @affine.execute_region_region_arg_count_mismatch(%A : memref<2xi32>) {
+  "affine.execute_region"(%A) ({
     // expected-error@-1 {{region argument count does not match operand count}}
     ^bb0:
       return

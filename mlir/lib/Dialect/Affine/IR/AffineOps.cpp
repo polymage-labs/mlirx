@@ -87,19 +87,20 @@ Operation *AffineDialect::materializeConstant(OpBuilder &builder,
 }
 
 /// A utility function to check if a given region is attached to an op isolated
-/// from above or an affine graybox.
-static bool isIsolatedOrGrayBoxRegion(Region *region) {
+/// from above or an affine scope.
+static bool isIsolatedOrAffineExecuteRegion(Region *region) {
   return region->getParentOp()->isKnownIsolatedFromAbove() ||
-         isa<AffineGrayBoxOp>(region->getParentOp());
+         isa<AffineExecuteRegionOp>(region->getParentOp());
 }
 
 /// A utility function to check if a value is defined at the top level of an
-/// op isolated from above or an affine graybox. A value of index type defined
-/// at the top level is always a valid symbol.
+/// op isolated from above or an affine.execute_region op. A value of index type
+/// defined at the top level is always a valid symbol.
 bool mlir::isTopLevelValue(Value value) {
   if (auto arg = value.dyn_cast<BlockArgument>())
-    return isIsolatedOrGrayBoxRegion(arg.getOwner()->getParent());
-  return isIsolatedOrGrayBoxRegion(value.getDefiningOp()->getParentRegion());
+    return isIsolatedOrAffineExecuteRegion(arg.getOwner()->getParent());
+  return isIsolatedOrAffineExecuteRegion(
+      value.getDefiningOp()->getParentRegion());
 }
 
 /// A utility function to check if a value is defined at the top level of
@@ -113,16 +114,17 @@ static bool isTopLevelValue(Value value, Operation *opWithRegion) {
   return value.getDefiningOp()->getParentOp() == opWithRegion;
 }
 
-/// Returns the closest op surrounding 'op' that is either an AffineGrayBoxOp or
-/// an op isolated from above (eg. FuncOp). Asserts if called on a top-level
-/// op.
+/// Returns the closest op surrounding 'op' that is either an
+/// AffineExecuteRegionOp or an op isolated from above (eg. FuncOp). Asserts if
+/// called on a top-level op.
 //  TODO: getAffineScope should be publicly exposed for affine
 //  passes/utitlies.
 static Operation *getAffineScope(Operation *op) {
   // TODO: make this compact by introducing a variadic pack on getParentOfType.
   auto *curOp = op;
   while ((curOp = curOp->getParentOp()))
-    if (llvm::isa<AffineGrayBoxOp>(curOp) || curOp->isKnownIsolatedFromAbove())
+    if (llvm::isa<AffineExecuteRegionOp>(curOp) ||
+        curOp->isKnownIsolatedFromAbove())
       return curOp;
 
   assert(false && "op doesn't have a parent op");
@@ -141,7 +143,7 @@ bool mlir::isValidDim(Value value) {
     return isValidDim(value, getAffineScope(op));
 
   // This value has to be a block argument for an op isolated from above or an
-  // affine.for. (A graybox can't have index type arguments.)
+  // affine.for. (An affine.execute_region can't have index type arguments.)
   auto *parentOp = value.cast<BlockArgument>().getOwner()->getParentOp();
   return parentOp->isKnownIsolatedFromAbove() || isa<AffineForOp>(parentOp) ||
          isa<AffineParallelOp>(parentOp);
@@ -157,16 +159,18 @@ bool mlir::isValidDim(Value value, Operation *opWithRegion) {
   if (!value.getType().isIndex())
     return false;
 
+  // All valid symbols are okay.
+  if (isValidSymbol(value, opWithRegion))
+    return true;
+
   auto *op = value.getDefiningOp();
   if (!op) {
-    // This value has to be a block argument for a FuncOp or an affine.for.
+    // This value has to be a block argument for a FuncOp, affine.for,
+    // affine.parallel, or affine.polyfor.
     auto *parentOp = value.cast<BlockArgument>().getOwner()->getParentOp();
-    return parentOp->isKnownIsolatedFromAbove() || isa<AffineForOp>(parentOp);
+    return isa<AffineForOp>(parentOp) || isa<AffineParallelOp>(parentOp);
   }
 
-  // Top level operation or constant operation is ok.
-  if (::isTopLevelValue(value, opWithRegion) || isa<ConstantOp>(op))
-    return true;
   // Affine apply operation is ok if all of its operands are ok.
   if (auto applyOp = dyn_cast<AffineApplyOp>(op))
     return applyOp.isValidDim(opWithRegion);
@@ -182,8 +186,9 @@ bool mlir::isValidDim(Value value, Operation *opWithRegion) {
 /// for 'op'.
 template <typename AnyMemRefDefOp>
 bool isMemRefSizeValidSymbol(AnyMemRefDefOp memrefDefOp, unsigned index,
-                             Operation *op) {
-  assert(op->getNumRegions() > 0 && "only to be called on ops with regions");
+                             Operation *opWithRegion) {
+  assert(opWithRegion->getNumRegions() > 0 &&
+         "only to be called on ops with regions");
   auto memRefType = memrefDefOp.getType();
   // Statically shaped.
   if (!memRefType.isDynamicDim(index))
@@ -191,12 +196,13 @@ bool isMemRefSizeValidSymbol(AnyMemRefDefOp memrefDefOp, unsigned index,
   // Get the position of the dimension among dynamic dimensions;
   unsigned dynamicDimPos = memRefType.getDynamicDimIndex(index);
   return isValidSymbol(*(memrefDefOp.getDynamicSizes().begin() + dynamicDimPos),
-                       op);
+                       opWithRegion);
 }
 
 /// Returns true if the result of the dim op is a valid symbol.
-static bool isDimOpValidSymbol(DimOp dimOp, Operation *op) {
-  assert(op->getNumRegions() > 0 && "only to be called on ops with regions");
+static bool isDimOpValidSymbol(DimOp dimOp, Operation *opWithRegion) {
+  assert(opWithRegion->getNumRegions() > 0 &&
+         "only to be called on ops with regions");
   // The dim op is okay if its operand memref/tensor is defined at the top
   // level.
   if (isTopLevelValue(dimOp.getOperand()))
@@ -206,19 +212,19 @@ static bool isDimOpValidSymbol(DimOp dimOp, Operation *op) {
   // whose corresponding size is a valid symbol.
   unsigned index = dimOp.getIndex();
   if (auto viewOp = dyn_cast<ViewOp>(dimOp.getOperand().getDefiningOp()))
-    return isMemRefSizeValidSymbol<ViewOp>(viewOp, index, op);
+    return isMemRefSizeValidSymbol<ViewOp>(viewOp, index, opWithRegion);
   if (auto subViewOp = dyn_cast<SubViewOp>(dimOp.getOperand().getDefiningOp()))
-    return isMemRefSizeValidSymbol<SubViewOp>(subViewOp, index, op);
+    return isMemRefSizeValidSymbol<SubViewOp>(subViewOp, index, opWithRegion);
   if (auto allocOp = dyn_cast<AllocOp>(dimOp.getOperand().getDefiningOp()))
-    return isMemRefSizeValidSymbol<AllocOp>(allocOp, index, op);
+    return isMemRefSizeValidSymbol<AllocOp>(allocOp, index, opWithRegion);
   return false;
 }
 
 // Value can be used as a symbol if it is a constant, or it is defined at
-// the top level of the enclosing affine scope (graybox or func op) or dominates
-// such a scope, or it is a result of affine apply operation with symbol
-// arguments, or a result of the dim op on a memref whose corresponding size is
-// a valid symbol.
+// the top level of the enclosing affine scope (affine.execute_region or an op
+// isolated from above) or dominates such a scope, or it is a result of affine
+// apply operation with symbol arguments, or a result of the dim op on a memref
+// whose corresponding size is a valid symbol.
 bool mlir::isValidSymbol(Value value) {
   // The value must be an index type.
   if (!value.getType().isIndex())
@@ -252,9 +258,14 @@ bool mlir::isValidSymbol(Value value, Operation *opWithRegion) {
     return true;
 
   auto *defOp = value.getDefiningOp();
-  if (!defOp)
-    // A block argument that is not a top-level value isn't a valid symbol.
+  if (!defOp) {
+    // A block argument that is not a top-level value is a valid symbol if it
+    // dominates opWithRegion.
+    if (!opWithRegion->isKnownIsolatedFromAbove())
+      if (auto *parentOp = opWithRegion->getParentOp())
+        return isValidSymbol(value, parentOp);
     return false;
+  }
 
   // Constant operation is ok.
   if (isa<ConstantOp>(defOp))
@@ -269,8 +280,8 @@ bool mlir::isValidSymbol(Value value, Operation *opWithRegion) {
     return isDimOpValidSymbol(dimOp, opWithRegion);
 
   // Check for values dominating 'opWithRegion'.
-  if (auto *parentOp = opWithRegion->getParentOp())
-    if (!parentOp->isKnownIsolatedFromAbove())
+  if (!opWithRegion->isKnownIsolatedFromAbove())
+    if (auto *parentOp = opWithRegion->getParentOp())
       return isValidSymbol(value, parentOp);
 
   return false;
@@ -1530,7 +1541,7 @@ struct AffineStrideNormalizer : public OpRewritePattern<AffineForOp> {
   using OpRewritePattern<AffineForOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(AffineForOp forOp,
-                                     PatternRewriter &rewriter) const override {
+                                PatternRewriter &rewriter) const override {
     SmallVector<Value, 4> lbOperands(forOp.getLowerBoundOperands());
     SmallVector<Value, 4> ubOperands(forOp.getUpperBoundOperands());
 
@@ -2312,11 +2323,32 @@ LogicalResult AffinePrefetchOp::fold(ArrayRef<Attribute> cstOperands,
 }
 
 //===----------------------------------------------------------------------===//
-// AffineGrayBoxOp
+// AffineExecuteRegionOp
 //===----------------------------------------------------------------------===//
 //
 
-static LogicalResult verify(AffineGrayBoxOp op) {
+// TODO: missing region body.
+void AffineExecuteRegionOp::build(Builder *builder, OperationState &result,
+                                  ArrayRef<Value> memrefs) {
+  // Create a region and an empty entry block. The arguments of the region are
+  // the supplied memrefs.
+  Region *region = result.addRegion();
+  Block *body = new Block();
+  region->push_back(body);
+
+  SmallVector<Type, 4> memrefTypes;
+  memrefTypes.reserve(memrefs.size());
+  for (auto v : memrefs) {
+    memrefTypes.push_back(v.getType());
+  }
+  body->addArguments(memrefTypes);
+  region->push_back(body);
+
+  // Set the operands list as resizable so that we can add memrefs.
+  result.setOperandListToResizable();
+}
+
+static LogicalResult verify(AffineExecuteRegionOp op) {
   // All memref uses in the graybox region should be explicitly captured.
   // FIXME: change this walk to an affine walk that doesn't walk inner
   // grayboxes.
@@ -2335,7 +2367,7 @@ static LogicalResult verify(AffineGrayBoxOp op) {
     if (auto *defOp = memref.getDefiningOp())
       // FIXME: this will only work if the memrefs collected above didn't
       // include any from inner grayboxes.
-      if (defOp->getParentOfType<AffineGrayBoxOp>() == op)
+      if (defOp->getParentOfType<AffineExecuteRegionOp>() == op)
         continue;
     return op.emitOpError("incoming memref not explicitly captured");
   }
@@ -2356,7 +2388,7 @@ static LogicalResult verify(AffineGrayBoxOp op) {
 
 // Custom form syntax.
 //
-// (ssa-id `=`)? `affine.graybox` `[` memref-region-arg-list `]`
+// (ssa-id `=`)? `affine.execute_region` `[` memref-region-arg-list `]`
 //                                   `=` `(` memref-use-list `)`
 //                  `:` memref-type-list-parens `->` function-result-type `{`
 //    block+
@@ -2364,7 +2396,7 @@ static LogicalResult verify(AffineGrayBoxOp op) {
 //
 // Ex:
 //
-//  affine.graybox [%rI, %rM] = (%I, %M)
+//  affine.execute_region [%rI, %rM] = (%I, %M)
 //        : (memref<128xi32>, memref<1024xf32>) -> () {
 //      %idx = affine.load %rI[%i] : memref<128xi32>
 //      %index = index_cast %idx : i32 to index
@@ -2372,8 +2404,8 @@ static LogicalResult verify(AffineGrayBoxOp op) {
 //      return
 //    }
 //
-static ParseResult parseAffineGrayBoxOp(OpAsmParser &parser,
-                                        OperationState &result) {
+static ParseResult parseAffineExecuteRegionOp(OpAsmParser &parser,
+                                              OperationState &result) {
   // Memref operands.
   SmallVector<OpAsmParser::OperandType, 4> memrefs;
 
@@ -2418,8 +2450,8 @@ static ParseResult parseAffineGrayBoxOp(OpAsmParser &parser,
   return success();
 }
 
-static void print(OpAsmPrinter &p, AffineGrayBoxOp op) {
-  p << AffineGrayBoxOp::getOperationName() << " [";
+static void print(OpAsmPrinter &p, AffineExecuteRegionOp op) {
+  p << AffineExecuteRegionOp::getOperationName() << " [";
   // TODO: consider shadowing region arguments.
   p.printOperands(op.region().front().getArguments());
   p << "] = (";
