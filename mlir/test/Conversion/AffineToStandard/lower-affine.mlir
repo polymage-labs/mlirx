@@ -591,6 +591,43 @@ func @affine_dma_wait(%arg0 : index) {
   return
 }
 
+// CHECK-LABEL: func @affine.execute_region
+func @affine.execute_region(%I: memref<128xi32>, %M: memref<1024xf32>, %n : index) {
+  affine.for %i = 0 to 128 {
+    affine.execute_region [%rI, %rM] = (%I, %M) : (memref<128xi32>, memref<1024xf32>) -> () {
+      %idx = affine.load %rI[%i] : memref<128xi32>
+      %index = index_cast %idx : i32 to index
+      affine.load %rM[%index]: memref<1024xf32>
+      return
+    }
+  // CHECK:      loop.for %arg3 = %c0 to %c128 step %c1 {
+  // CHECK-NEXT:   %[[IDX1:.*]] = load %arg0[%arg3] : memref<128xi32>
+  // CHECK-NEXT:   %[[IDX2:.*]] = index_cast %[[IDX1]] : i32 to index
+  // CHECK-NEXT:   load %arg1[%[[IDX2]]] : memref<1024xf32>
+  // CHECK-NEXT: }
+  }
+  affine.for %i = 0 to %n {
+    affine.execute_region [] = () : () -> () {
+      %pow = call @powi(%i) : (index) ->  index
+      affine.for %j = 0 to %pow {
+        addi %j, %j : index
+      }
+      return
+    }
+  }
+  // CHECK:      loop.for %arg3 =
+  // CHECK-NEXT:   %[[UB:.*]] = call @powi(%arg3) : (index) -> index
+  // CHECK-NEXT:   %[[LB:.*]] = constant 0 : index
+  // CHECK-NEXT:   constant 1 : index
+  // CHECK-NEXT:   loop.for %arg4 = %[[LB]] to %[[UB]] step %c1{{.*}} {
+  // CHECK-NEXT:     addi
+  // CHECK-NEXT:   }
+  // CHECK-NEXT: }
+  return
+}
+
+func @powi(index) -> index
+
 // CHECK-LABEL: func @affine_min
 // CHECK-SAME: %[[ARG0:.*]]: index, %[[ARG1:.*]]: index
 func @affine_min(%arg0: index, %arg1: index) -> index{
