@@ -8,13 +8,6 @@ into standard unrestricted for's and if's respectively. In particular, with an
 *affine.execute_region*, it is possible to represent *every* load and store operation
 using an *affine.load* and *affine.store* respectively.
 
-Some form of this op was prototyped by @Alex Zinenko a while ago as discussed on
-this thread:
-https://groups.google.com/a/tensorflow.org/forum/#!topic/mlir/kxbrc6i59go
-But the implementation is dated, not available, and there is no publicly
-available documentation on it. This proposal has aspects that are different from
-the previous design with significant implications.
-
 ## Op Description
 
 1. The *affine.execute_region* op introduces a new symbol context for affine
@@ -31,11 +24,14 @@ the previous design with significant implications.
 
 2. The requirement for an SSA value to be a valid symbol
    ([mlir::isValidSymbol](https://github.com/llvm/llvm-project/blob/3671cf5558a273a865007405503793746e4ddbb7/lib/Dialect/AffineOps/AffineOps.cpp#L128))
-   changes so that it also includes (a) symbols at the top-level of any
-   *affine.execute_region*, and (b) those values that dominate an *affine.execute_region*. In
-   the latter case, symbol validity is sensitive to the enclosing graybox. As
-   such, there has to be an additional method: mlir::isValidSymbol(Value \*v,
-   Operation \*op) to check for symbol validity for use in the specific op.
+   is now sensitive to a 'scope', which is identified by the closest surrounding
+   op that is either an *affine.execute_region* or another FuncLikeOp (whichever
+   is closer) - let such an op be called a scope op. Given a scope op, valid
+   symbols also includes (a) symbols at the top-level of such a scope op, (b)
+   those values that dominate the scope op. Symbol validity is sensitive to the
+   enclosing execute_region/FuncLikeOp.  As such, there has to be an additional
+   method: mlir::isValidSymbol(Value \*v, Operation \*op) to check for symbol
+   validity for use in the specific op.
 
 3. The op is not [isolated from
    above](https://github.com/llvm/llvm-project/blob/be6746fc3b9e6bd0527cc961256e362f44130cd4/include/mlir/IR/OperationSupport.h#L76)
@@ -43,9 +39,11 @@ the previous design with significant implications.
      and affine passes (see further below on ''affine walks'', which do not walk
      into affine.execute_region's when walking from above).  All SSA values
    (other than
-   memrefs) that dominate the op can be used in the graybox. Constants and
+   memrefs) that dominate the op can be used in the execute_region. Constants
+   and
    other replacements can freely propagate into it. Since memrefs from outside
-   can't be used in the graybox and have to be explicitly provided as operands,
+   can't be used in the execute_region and have to be explicitly provided as
+   operands,
    canonicalization or replacement for them will only happen through rewrite
    patterns registered on *affine.execute_region* op. More on this further below.
 
@@ -71,10 +69,9 @@ the previous design with significant implications.
 ## Terminology
 
 An *affine scope* is the set of all ops that have the same closest enclosing
-*affine.execute_region* op or the same enclosing function op (if one or both of them
-have no enclosing *affine.execute_region*).
-
-Every MLIR op is always part of a unique *affine scope*.
+*affine.execute_region* op or function op (if one or both of them
+have no enclosing *affine.execute_region*). Every MLIR op is always part of a
+unique *affine scope*.
 
 ## Goals
 
@@ -84,8 +81,8 @@ non-affine and failed verification will be affine with affine.execute_region's
 inserted at the right places. In addition, the design choices made herein ensure
 that:
 
-* nearly all existing pattern rewrites work across graybox op boundaries,
-* all existing affine passes work correctly as is in the graybox ops while
+* nearly all existing pattern rewrites work across execute_region op boundaries,
+* all existing affine passes work correctly as is in the execute_region ops while
   allowing affine passes to work seamlessly at an affine.execute_region-local
   affine level,
 * everything that forced function outlining due to symbol restrictions will no
@@ -190,7 +187,7 @@ All affine.for with an affine.execute_region.
           }
         }
         return
-      }  // graybox end
+      }  // execute_region end
     }  // %j
   }  // %i
 ```
@@ -261,8 +258,9 @@ for (i = 0; i < N; ++i) {
    an *affine.execute_region*'s region. This is easily implemented as a
    canonicalization on the op, and will allow removal of dead memrefs that would
    otherwise have operand uses in affine.execute_region ops
-   with the corresponding region arguments not having any uses inside the gray
-   box. Canonicalization patterns would be needed to drop duplicate region
+   with the corresponding region arguments not having any uses inside the
+   execute_region. Canonicalization patterns would be needed to drop duplicate
+   region
    arguments and unused region arguments.
    [MemRefCastFold](https://github.com/llvm/llvm-project/blob/ef77ad99a621985aeca1df94168efc9489de95b6/lib/Dialect/StandardOps/Ops.cpp#L228)
    is another canonicalization pattern that the *affine.execute_region* has to
@@ -274,7 +272,7 @@ for (i = 0; i < N; ++i) {
    explicitly checking for escaping/hidden memref accesses. More discussion on
    this is further below in the Rationale section.
 
-*  **Memref replacement across gray boxes**
+*  **Memref replacement across execute_region's**
    There are situations/utilities where one can consistently perform
    rewriting/transformation/analysis cutting across affine.execute_region's. One example is
    [normalizeMemRefs](https://github.com/llvm/llvm-project/blob/331c663bd2735699267abcc850897aeaea8433eb/include/mlir/Transforms/Utils.h#L89),
@@ -286,7 +284,7 @@ for (i = 0; i < N; ++i) {
    so.
    In other cases like scalar replacement, memref packing / explicit copying,
    DMA generation, pipelining of DMAs, transformations are supposed to be
-   blocked by those boundaries because the accesses inside the graybox can't be
+   blocked by those boundaries because the accesses inside the execute_region can't be
    meaningfully analyzed in the context of the surrounding code. As such, the
    memrefs there are treated as escaping / non-dereferencing.
 
@@ -366,16 +364,16 @@ func @foo(%A : ..., %X : ..., %Y : ..., %Z : ...) {
 }
 ```
 
-In the above IR, %idx is a valid symbol for the graybox and thus the load and
-store on %Y in the graybox is affine. For most polyhedral analysis and
-transformation, the graybox is treated opaquely; the inside of the graybox
+In the above IR, %idx is a valid symbol for the execute_region and thus the load and
+store on %Y in the execute_region is affine. For most polyhedral analysis and
+transformation, the execute_region is treated opaquely; the inside of the execute_region
 itself is all locally affine. There is no way to analyze or represent
-dependences precisely between the store on %Y outside the graybox and the
-load/store on it inside the graybox. Depedence analysis relies on symbolic
+dependences precisely between the store on %Y outside the execute_region and the
+load/store on it inside the execute_region. Depedence analysis relies on symbolic
 context which is unique to a specific [*affine scope*](#Terminology).
 
 Note that all scalars within their dominance scope are used freely in the
-graybox region. As an example, any pass that computes memref regions for the
+execute_region region. As an example, any pass that computes memref regions for the
 purpose of packing, explicit copying, or estimating memory footprints will only
 be able to compute regions for %A, %X, %Z while traversing the outer affine
 region.  There is no way to meaningful represent the region of %Y accessed from
@@ -408,14 +406,14 @@ scan of uses that currently happens via methods like getUses(),
 replaceAllMemRefUsesWith() will all just work transparently and do the work: the
 non-dereferencing uses of that memref on an affine.execute_region op just makes
 things like double buffering, data copy generation, etc. all bail out on those
-(just because it isn't polyhedrally analyzeable unless the graybox can be
+(just because it isn't polyhedrally analyzeable unless the execute_region can be
 eliminated and you get a larger encompassing [*affine scope*](#Terminology)) --
 the same way they currently bail out on any call ops taking memrefs as arguments
 or return ops returning memrefs.  The same is true for memref dependence
 analysis: there isn't a way to represent dependences between an affine access
-and another one that is inside another graybox dominated by it - for all these
+and another one that is inside another execute_region dominated by it - for all these
 purposes, the latter access is like one happening on a memref that has escaped
-at the graybox op boundary. With explicit capture of memref's, an
+at the execute_region op boundary. With explicit capture of memref's, an
 affine.execute_region gets treated as any other op (for eg. like a 'call' op
 that takes memref as an operand), and so for an affine pass, you don't even have
 to know that the affine.execute_region exists, and one won't even have to modify
@@ -523,6 +521,6 @@ capture only the memrefs used inside an *affine.execute_region*'s region is a go
 middle ground to make it easier to let standard SSA passes / scalar optimization
 / canonicalization work unhindered in conjunction with polyhedral passes, and
 with the latter not worrying about  explicitly checking for escaping/hidden
-memref accesses in graybox ops. In the whole scheme of things, a design that
+memref accesses in execute_region ops. In the whole scheme of things, a design that
 implicitly captures everything is not radically different that it'd be hard to
 switch from one to the other at a later stage.
