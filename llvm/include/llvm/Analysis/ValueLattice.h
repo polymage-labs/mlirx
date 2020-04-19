@@ -75,7 +75,7 @@ class ValueLatticeElement {
     overdefined,
   };
 
-  ValueLatticeElementTy Tag : 6;
+  ValueLatticeElementTy Tag : 8;
   /// Number of times a constant range has been extended with widening enabled.
   unsigned NumRangeExtensions : 8;
 
@@ -121,12 +121,6 @@ public:
     // destroy Range.
     if (isConstantRange() && !Other.isConstantRange())
       Range.~ConstantRange();
-
-    // If we change the state of this from a valid ConstVal to another a state
-    // without a valid ConstVal, zero the pointer.
-    if ((isConstant() || isNotConstant()) && !Other.isConstant() &&
-        !Other.isNotConstant())
-      ConstVal = nullptr;
 
     switch (Other.Tag) {
     case constantrange:
@@ -229,8 +223,6 @@ public:
   bool markOverdefined() {
     if (isOverdefined())
       return false;
-    if (isConstant() || isNotConstant())
-      ConstVal = nullptr;
     if (isConstantRange())
       Range.~ConstantRange();
     Tag = overdefined;
