@@ -207,7 +207,7 @@ func @affine.execute_region_wrong_capture(%A : memref<2xi32>) {
 // CHECK-LABEL: @affine.execute_region_region_type_mismatch
 func @affine.execute_region_region_type_mismatch(%A : memref<2xi32>) {
   "affine.execute_region"(%A) ({
-    // expected-error@-1 {{type of one or more region arguments does not match corresponding operand}}
+    // expected-error@-1 {{region argument 0 does not match corresponding operand}}
     ^bb0(%rA : memref<4xi32>):
       return
   }) : (memref<2xi32>) -> ()

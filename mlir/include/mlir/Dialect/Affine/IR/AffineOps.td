@@ -770,16 +770,12 @@ def AffineExecuteRegionOp : Affine_Op<"execute_region", [PolyhedralScope]> {
   let description = [{
       The `affine.execute_region` op introduces a new symbol context for affine
       operations. It holds a single region,  which can be a list of one or more
-      blocks. The op's region can have zero or more arguments, each of which can
-      only be a memref. The operands bind 1:1 to its region's arguments. The op
-      can't use any memrefs defined outside of it, but can use any other SSA
-      values that dominate it. Its region's blocks can have terminators the same
-      way as current MLIR functions (FuncOp) can. Control from any return ops
-      from the top level of its region returns to right after the
-      affine.execute_region op. Its control flow thus conforms to the control
-      flow semantics of regions, i.e., control always returns to the immediate
-      enclosing (parent) op. The results of a execute_region op match 1:1 with
-      the return values from its region's blocks;
+      blocks, and its semantics are to execute its region exactly once. The op's
+      region can have zero or more arguments, each of which can only be a
+      memref. The operands bind 1:1 to its region's arguments. The op can't use
+      any memrefs defined outside of it, but can use any other SSA values that
+      dominate it. The results of a execute_region op match 1:1 with the return
+      values from its region's blocks;
 
       Examples:
 
@@ -797,7 +793,7 @@ def AffineExecuteRegionOp : Affine_Op<"execute_region", [PolyhedralScope]> {
 
       ```mlir
       affine.for %i = 0 to %n {
-        affine.graybox [] = () : () -> () {
+        affine.execute_region [] = () : () -> () {
           // %pow can now be used as a loop bound.
           %pow = call @powi(%i) : (index) ->  index
           affine.for %j = 0 to %pow {
@@ -810,7 +806,7 @@ def AffineExecuteRegionOp : Affine_Op<"execute_region", [PolyhedralScope]> {
 
       ```mlir
       affine.for %i = 0 to %n {
-        affine.execute_region [] = () : () -> () {
+        affine.execute_region : () -> () {
           // %pow can now be used as a loop bound.
           %pow = call @powi(%i) : (index) ->  index
           affine.for %j = 0 to %pow {
@@ -831,8 +827,8 @@ def AffineExecuteRegionOp : Affine_Op<"execute_region", [PolyhedralScope]> {
   let skipDefaultBuilders = 1;
 
   let builders = [
-    OpBuilder<"Builder *builder, OperationState &result, "
-              "ArrayRef<Value> memrefs">
+    OpBuilder<"Builder &builder, OperationState &result, "
+              "ValueRange memrefs">
   ];
 
   // TODO: canonicalizations related to memrefs.

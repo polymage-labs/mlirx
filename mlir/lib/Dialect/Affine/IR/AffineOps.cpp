@@ -2321,27 +2321,20 @@ LogicalResult AffinePrefetchOp::fold(ArrayRef<Attribute> cstOperands,
 //
 
 // TODO: missing region body.
-void AffineExecuteRegionOp::build(Builder *builder, OperationState &result,
-                                  ArrayRef<Value> memrefs) {
+void AffineExecuteRegionOp::build(Builder &builder, OperationState &result,
+                                  ValueRange memrefs) {
   // Create a region and an empty entry block. The arguments of the region are
   // the supplied memrefs.
   Region *region = result.addRegion();
   Block *body = new Block();
   region->push_back(body);
-
-  SmallVector<Type, 4> memrefTypes;
-  memrefTypes.reserve(memrefs.size());
-  for (auto v : memrefs) {
-    memrefTypes.push_back(v.getType());
-  }
-  body->addArguments(memrefTypes);
-  region->push_back(body);
+  body->addArguments(memrefs.getTypes());
 }
 
 static LogicalResult verify(AffineExecuteRegionOp op) {
-  // All memref uses in the graybox region should be explicitly captured.
+  // All memref uses in the execute_region region should be explicitly captured.
   // FIXME: change this walk to an affine walk that doesn't walk inner
-  // grayboxes.
+  // execute_regions.
   DenseSet<Value> memrefsUsed;
   op.region().walk([&](Operation *innerOp) {
     for (auto v : innerOp->getOperands())
@@ -2349,14 +2342,15 @@ static LogicalResult verify(AffineExecuteRegionOp op) {
         memrefsUsed.insert(v);
   });
 
-  // For each memref use, ensure either a graybox argument or a local def.
+  // For each memref use, ensure either an execute_region argument or a local
+  // def.
   for (auto memref : memrefsUsed) {
     if (auto arg = memref.dyn_cast<BlockArgument>())
       if (arg.getOwner()->getParent()->getParentOp() == op)
         continue;
     if (auto *defOp = memref.getDefiningOp())
       // FIXME: this will only work if the memrefs collected above didn't
-      // include any from inner grayboxes.
+      // include any from inner execute_regions.
       if (defOp->getParentOfType<AffineExecuteRegionOp>() == op)
         continue;
     return op.emitOpError("incoming memref not explicitly captured");
@@ -2367,10 +2361,10 @@ static LogicalResult verify(AffineExecuteRegionOp op) {
   if (entryBlock.getNumArguments() != op.getNumOperands())
     return op.emitOpError("region argument count does not match operand count");
 
-  for (auto &argEn : llvm::enumerate(entryBlock.getArguments())) {
+  for (auto argEn : llvm::enumerate(entryBlock.getArguments())) {
     if (op.getOperand(argEn.index()).getType() != argEn.value().getType())
-      return op.emitOpError("type of one or more region arguments does not "
-                            "match corresponding operand");
+      return op.emitOpError("region argument ")
+             << argEn.index() << " does not match corresponding operand";
   }
 
   return success();
