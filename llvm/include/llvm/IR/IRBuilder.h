@@ -1709,7 +1709,7 @@ public:
       const DataLayout &DL = BB->getModule()->getDataLayout();
       Align = DL.getABITypeAlign(Val->getType());
     }
-    return Insert(new StoreInst(Val, Ptr, isVolatile, Align));
+    return Insert(new StoreInst(Val, Ptr, isVolatile, *Align));
   }
   FenceInst *CreateFence(AtomicOrdering Ordering,
                          SyncScope::ID SSID = SyncScope::System,
@@ -2377,8 +2377,10 @@ public:
     return CreateShuffleVector(V1, V2, IntMask, Name);
   }
 
-  Value *CreateShuffleVector(Value *V1, Value *V2, ArrayRef<uint32_t> Mask,
-                             const Twine &Name = "") {
+  LLVM_ATTRIBUTE_DEPRECATED(Value *CreateShuffleVector(Value *V1, Value *V2,
+                                                       ArrayRef<uint32_t> Mask,
+                                                       const Twine &Name = ""),
+                            "Pass indices as 'int' instead") {
     SmallVector<int, 16> IntMask;
     IntMask.assign(Mask.begin(), Mask.end());
     return CreateShuffleVector(V1, V2, IntMask, Name);

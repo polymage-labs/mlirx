@@ -66,7 +66,7 @@ func @load_non_affine_index(%arg0 : index) {
   %0 = alloc() : memref<10xf32>
   affine.for %i0 = 0 to 10 {
     %1 = muli %i0, %arg0 : index
-    // expected-error@+1 {{op index must be a dimension or symbol identifier}}
+    // expected-error@+1 {{operand cannot be used as a dimension id}}
     %v = affine.load %0[%1] : memref<10xf32>
   }
   return
@@ -79,7 +79,7 @@ func @store_non_affine_index(%arg0 : index) {
   %1 = constant 11.0 : f32
   affine.for %i0 = 0 to 10 {
     %2 = muli %i0, %arg0 : index
-    // expected-error@+1 {{op index must be a dimension or symbol identifier}}
+    // expected-error@+1 {{operand cannot be used as a dimension id}}
     affine.store %1, %0[%2] : memref<10xf32>
   }
   return

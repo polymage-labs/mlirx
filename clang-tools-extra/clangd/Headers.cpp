@@ -8,8 +8,8 @@
 
 #include "Headers.h"
 #include "Compiler.h"
-#include "Logger.h"
 #include "SourceCode.h"
+#include "support/Logger.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/CompilerInvocation.h"
 #include "clang/Frontend/FrontendActions.h"
@@ -28,7 +28,7 @@ public:
 
   // Record existing #includes - both written and resolved paths. Only #includes
   // in the main file are collected.
-  void InclusionDirective(SourceLocation HashLoc, const Token & /*IncludeTok*/,
+  void InclusionDirective(SourceLocation HashLoc, const Token &IncludeTok,
                           llvm::StringRef FileName, bool IsAngled,
                           CharSourceRange FilenameRange, const FileEntry *File,
                           llvm::StringRef /*SearchPath*/,
@@ -44,6 +44,7 @@ public:
       Inc.Resolved = std::string(File ? File->tryGetRealPathName() : "");
       Inc.HashOffset = SM.getFileOffset(HashLoc);
       Inc.FileKind = FileKind;
+      Inc.Directive = IncludeTok.getIdentifierInfo()->getPPKeywordID();
     }
     if (File) {
       auto *IncludingFileEntry = SM.getFileEntryForID(SM.getFileID(HashLoc));

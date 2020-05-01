@@ -1400,7 +1400,8 @@ private:
 
   /// \returns the scalarization cost for this type. Scalarization in this
   /// context means the creation of vectors from a group of scalars.
-  int getGatherCost(Type *Ty, const DenseSet<unsigned> &ShuffledIndices) const;
+  int getGatherCost(VectorType *Ty,
+                    const DenseSet<unsigned> &ShuffledIndices) const;
 
   /// \returns the scalarization cost for this list of values. Assuming that
   /// this subtree gets vectorized, we may need to extract the values from the
@@ -3658,22 +3659,17 @@ bool BoUpSLP::isFullyVectorizableTinyTree() const {
   return true;
 }
 
-bool BoUpSLP::isLoadCombineReductionCandidate(unsigned RdxOpcode) const {
-  if (RdxOpcode != Instruction::Or)
-    return false;
-
-  unsigned NumElts = VectorizableTree[0]->Scalars.size();
-  Value *FirstReduced = VectorizableTree[0]->Scalars[0];
-
-  // Look past the reduction to find a source value. Arbitrarily follow the
+static bool isLoadCombineCandidate(Value *Root, unsigned NumElts,
+                                   TargetTransformInfo *TTI) {
+  // Look past the root to find a source value. Arbitrarily follow the
   // path through operand 0 of any 'or'. Also, peek through optional
   // shift-left-by-constant.
-  Value *ZextLoad = FirstReduced;
+  Value *ZextLoad = Root;
   while (match(ZextLoad, m_Or(m_Value(), m_Value())) ||
          match(ZextLoad, m_Shl(m_Value(), m_Constant())))
     ZextLoad = cast<BinaryOperator>(ZextLoad)->getOperand(0);
 
-  // Check if the input to the reduction is an extended load.
+  // Check if the input is an extended load.
   Value *LoadPtr;
   if (!match(ZextLoad, m_ZExt(m_Load(m_Value(LoadPtr)))))
     return false;
@@ -3683,16 +3679,24 @@ bool BoUpSLP::isLoadCombineReductionCandidate(unsigned RdxOpcode) const {
   // But <16 x i8> --> i128 is not, so the backend probably can't reduce it.
   Type *SrcTy = LoadPtr->getType()->getPointerElementType();
   unsigned LoadBitWidth = SrcTy->getIntegerBitWidth() * NumElts;
-  LLVMContext &Context = FirstReduced->getContext();
-  if (!TTI->isTypeLegal(IntegerType::get(Context, LoadBitWidth)))
+  if (!TTI->isTypeLegal(IntegerType::get(Root->getContext(), LoadBitWidth)))
     return false;
 
   // Everything matched - assume that we can fold the whole sequence using
   // load combining.
-  LLVM_DEBUG(dbgs() << "SLP: Assume load combining for scalar reduction of "
-             << *(cast<Instruction>(FirstReduced)) << "\n");
+  LLVM_DEBUG(dbgs() << "SLP: Assume load combining for tree starting at "
+             << *(cast<Instruction>(Root)) << "\n");
 
   return true;
+}
+
+bool BoUpSLP::isLoadCombineReductionCandidate(unsigned RdxOpcode) const {
+  if (RdxOpcode != Instruction::Or)
+    return false;
+
+  unsigned NumElts = VectorizableTree[0]->Scalars.size();
+  Value *FirstReduced = VectorizableTree[0]->Scalars[0];
+  return isLoadCombineCandidate(FirstReduced, NumElts, TTI);
 }
 
 bool BoUpSLP::isTreeTinyAndNotFullyVectorizable() const {
@@ -3871,12 +3875,15 @@ int BoUpSLP::getTreeCost() {
   return Cost;
 }
 
-int BoUpSLP::getGatherCost(Type *Ty,
+int BoUpSLP::getGatherCost(VectorType *Ty,
                            const DenseSet<unsigned> &ShuffledIndices) const {
-  int Cost = 0;
-  for (unsigned i = 0, e = cast<VectorType>(Ty)->getNumElements(); i < e; ++i)
+  unsigned NumElts = Ty->getNumElements();
+  APInt DemandedElts = APInt::getNullValue(NumElts);
+  for (unsigned i = 0; i < NumElts; ++i)
     if (!ShuffledIndices.count(i))
-      Cost += TTI->getVectorInstrCost(Instruction::InsertElement, Ty, i);
+      DemandedElts.setBit(i);
+  int Cost = TTI->getScalarizationOverhead(Ty, DemandedElts, /*Insert*/ true,
+                                           /*Extract*/ false);
   if (!ShuffledIndices.empty())
     Cost += TTI->getShuffleCost(TargetTransformInfo::SK_PermuteSingleSrc, Ty);
   return Cost;
@@ -4079,7 +4086,7 @@ Value *BoUpSLP::vectorizeTree(ArrayRef<Value *> VL) {
 }
 
 static void inversePermutation(ArrayRef<unsigned> Indices,
-                               SmallVectorImpl<unsigned> &Mask) {
+                               SmallVectorImpl<int> &Mask) {
   Mask.clear();
   const unsigned E = Indices.size();
   Mask.resize(E);
@@ -4161,7 +4168,7 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
     case Instruction::ExtractElement: {
       Value *V = E->getSingleOperand(0);
       if (!E->ReorderIndices.empty()) {
-        OrdersType Mask;
+        SmallVector<int, 4> Mask;
         inversePermutation(E->ReorderIndices, Mask);
         Builder.SetInsertPoint(VL0);
         V = Builder.CreateShuffleVector(V, UndefValue::get(VecTy), Mask,
@@ -4186,7 +4193,7 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
       LoadInst *V = Builder.CreateAlignedLoad(VecTy, Ptr, LI->getAlign());
       Value *NewV = propagateMetadata(V, E->Scalars);
       if (!E->ReorderIndices.empty()) {
-        OrdersType Mask;
+        SmallVector<int, 4> Mask;
         inversePermutation(E->ReorderIndices, Mask);
         NewV = Builder.CreateShuffleVector(NewV, UndefValue::get(VecTy), Mask,
                                            "reorder_shuffle");
@@ -4375,7 +4382,7 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
       LI = Builder.CreateAlignedLoad(VecTy, VecPtr, Alignment);
       Value *V = propagateMetadata(LI, E->Scalars);
       if (IsReorder) {
-        OrdersType Mask;
+        SmallVector<int, 4> Mask;
         inversePermutation(E->ReorderIndices, Mask);
         V = Builder.CreateShuffleVector(V, UndefValue::get(V->getType()),
                                         Mask, "reorder_shuffle");
@@ -4400,10 +4407,10 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
 
       Value *VecValue = vectorizeTree(E->getOperand(0));
       if (IsReorder) {
-        OrdersType Mask;
-        inversePermutation(E->ReorderIndices, Mask);
+        SmallVector<int, 4> Mask(E->ReorderIndices.begin(),
+                                 E->ReorderIndices.end());
         VecValue = Builder.CreateShuffleVector(
-            VecValue, UndefValue::get(VecValue->getType()), E->ReorderIndices,
+            VecValue, UndefValue::get(VecValue->getType()), Mask,
             "reorder_shuffle");
       }
       Value *ScalarPtr = SI->getPointerOperand();
@@ -6890,7 +6897,7 @@ private:
   int getReductionCost(TargetTransformInfo *TTI, Value *FirstReducedVal,
                        unsigned ReduxWidth) {
     Type *ScalarTy = FirstReducedVal->getType();
-    Type *VecTy = VectorType::get(ScalarTy, ReduxWidth);
+    VectorType *VecTy = VectorType::get(ScalarTy, ReduxWidth);
 
     int PairwiseRdxCost;
     int SplittingRdxCost;
@@ -6907,7 +6914,7 @@ private:
     case RK_Max:
     case RK_UMin:
     case RK_UMax: {
-      Type *VecCondTy = CmpInst::makeCmpResultType(VecTy);
+      auto *VecCondTy = cast<VectorType>(CmpInst::makeCmpResultType(VecTy));
       bool IsUnsigned = ReductionData.getKind() == RK_UMin ||
                         ReductionData.getKind() == RK_UMax;
       PairwiseRdxCost =
@@ -7014,6 +7021,34 @@ static bool findBuildAggregate(Value *LastInsertInst, TargetTransformInfo *TTI,
          "Expected insertelement or insertvalue instruction!");
   UserCost = 0;
   do {
+    // TODO: Use TTI's getScalarizationOverhead for sequence of inserts rather
+    // than sum of single inserts as the latter may overestimate cost.
+    // This work should imply improving cost estimation for extracts that
+    // added in for external (for vectorization tree) users.
+    // For example, in following case all extracts added in order to feed
+    // into external users (inserts), which in turn form sequence to build
+    // an aggregate that we do match here:
+    //  %4 = extractelement <4 x i64> %3, i32 0
+    //  %v0 = insertelement <4 x i64> undef, i64 %4, i32 0
+    //  %5 = extractelement <4 x i64> %3, i32 1
+    //  %v1 = insertelement <4 x i64> %v0, i64 %5, i32 1
+    //  %6 = extractelement <4 x i64> %3, i32 2
+    //  %v2 = insertelement <4 x i64> %v1, i64 %6, i32 2
+    //  %7 = extractelement <4 x i64> %3, i32 3
+    //  %v3 = insertelement <4 x i64> %v2, i64 %7, i32 3
+    //
+    // Cost of this entire sequence is currently estimated as sum of single
+    // extracts (as this aggregate build sequence is an external to
+    // vectorization tree user) minus cost of the aggregate build.
+    // As this whole sequence will be optimized away we want the cost to be
+    // zero. But it is not quite possible using given approach (at least for
+    // X86) because inserts can be more expensive than extracts for longer
+    // vector lengths so the difference turns out not zero in such a case.
+    // Ideally we want to match this entire sequence and treat it as a no-op
+    // (i.e. do not count into final cost at all).
+    // Currently the difference tends to be negative thus adding a bias
+    // toward favoring vectorization. If we switch into using TTI interface
+    // the bias tendency will remain but will be lower.
     Value *InsertedOperand;
     if (auto *IE = dyn_cast<InsertElementInst>(LastInsertInst)) {
       InsertedOperand = IE->getOperand(1);

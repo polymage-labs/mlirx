@@ -70,6 +70,11 @@ bool LLParser::Run() {
         Lex.getLoc(),
         "Can't read textual IR with a Context that discards named Values");
 
+  if (M) {
+    if (ParseTargetDefinitions())
+      return true;
+  }
+
   return ParseTopLevelEntities() || ValidateEndOfModule() ||
          ValidateEndOfIndex();
 }
@@ -294,6 +299,23 @@ bool LLParser::ValidateEndOfIndex() {
 // Top-Level Entities
 //===----------------------------------------------------------------------===//
 
+bool LLParser::ParseTargetDefinitions() {
+  while (true) {
+    switch (Lex.getKind()) {
+    case lltok::kw_target:
+      if (ParseTargetDefinition())
+        return true;
+      break;
+    case lltok::kw_source_filename:
+      if (ParseSourceFileName())
+        return true;
+      break;
+    default:
+      return false;
+    }
+  }
+}
+
 bool LLParser::ParseTopLevelEntities() {
   // If there is no Module, then parse just the summary index entries.
   if (!M) {
@@ -322,11 +344,6 @@ bool LLParser::ParseTopLevelEntities() {
     case lltok::kw_declare: if (ParseDeclare()) return true; break;
     case lltok::kw_define:  if (ParseDefine()) return true; break;
     case lltok::kw_module:  if (ParseModuleAsm()) return true; break;
-    case lltok::kw_target:  if (ParseTargetDefinition()) return true; break;
-    case lltok::kw_source_filename:
-      if (ParseSourceFileName())
-        return true;
-      break;
     case lltok::kw_deplibs: if (ParseDepLibs()) return true; break;
     case lltok::LocalVarID: if (ParseUnnamedType()) return true; break;
     case lltok::LocalVar:   if (ParseNamedType()) return true; break;
@@ -1328,6 +1345,13 @@ bool LLParser::ParseFnAttributeValuePairs(AttrBuilder &B,
     case lltok::kw_uwtable: B.addAttribute(Attribute::UWTable); break;
     case lltok::kw_willreturn: B.addAttribute(Attribute::WillReturn); break;
     case lltok::kw_writeonly: B.addAttribute(Attribute::WriteOnly); break;
+    case lltok::kw_preallocated: {
+      Type *Ty;
+      if (ParsePreallocated(Ty))
+        return true;
+      B.addPreallocatedAttr(Ty);
+      break;
+    }
 
     // Error handling.
     case lltok::kw_inreg:
@@ -1356,7 +1380,9 @@ bool LLParser::ParseFnAttributeValuePairs(AttrBuilder &B,
       break;
     }
 
-    Lex.Lex();
+    // ParsePreallocated() consumes token
+    if (Token != lltok::kw_preallocated)
+      Lex.Lex();
   }
 }
 
@@ -1620,6 +1646,13 @@ bool LLParser::ParseOptionalParamAttrs(AttrBuilder &B) {
       B.addByValAttr(Ty);
       continue;
     }
+    case lltok::kw_preallocated: {
+      Type *Ty;
+      if (ParsePreallocated(Ty))
+        return true;
+      B.addPreallocatedAttr(Ty);
+      continue;
+    }
     case lltok::kw_dereferenceable: {
       uint64_t Bytes;
       if (ParseOptionalDerefAttrBytes(lltok::kw_dereferenceable, Bytes))
@@ -1787,10 +1820,15 @@ bool LLParser::ParseOptionalReturnAttrs(AttrBuilder &B) {
     case lltok::kw_uwtable:
       HaveError |= Error(Lex.getLoc(), "invalid use of function-only attribute");
       break;
-
     case lltok::kw_readnone:
     case lltok::kw_readonly:
       HaveError |= Error(Lex.getLoc(), "invalid use of attribute on return type");
+      break;
+    case lltok::kw_preallocated:
+      HaveError |=
+          Error(Lex.getLoc(),
+                "invalid use of parameter-only/call site-only attribute");
+      break;
     }
 
     Lex.Lex();
@@ -2495,6 +2533,21 @@ bool LLParser::ParseByValWithOptionalType(Type *&Result) {
     return true;
   if (!EatIfPresent(lltok::lparen))
     return false;
+  if (ParseType(Result))
+    return true;
+  if (!EatIfPresent(lltok::rparen))
+    return Error(Lex.getLoc(), "expected ')'");
+  return false;
+}
+
+/// ParsePreallocated
+///   ::= preallocated(<ty>)
+bool LLParser::ParsePreallocated(Type *&Result) {
+  Result = nullptr;
+  if (!EatIfPresent(lltok::kw_preallocated))
+    return true;
+  if (!EatIfPresent(lltok::lparen))
+    return Error(Lex.getLoc(), "expected '('");
   if (ParseType(Result))
     return true;
   if (!EatIfPresent(lltok::rparen))
@@ -4658,7 +4711,7 @@ bool LLParser::ParseDICompileUnit(MDNode *&Result, bool IsDistinct) {
   OPTIONAL(splitDebugInlining, MDBoolField, = true);                           \
   OPTIONAL(debugInfoForProfiling, MDBoolField, = false);                       \
   OPTIONAL(nameTableKind, NameTableKindField, );                               \
-  OPTIONAL(debugBaseAddress, MDBoolField, = false);                            \
+  OPTIONAL(rangesBaseAddress, MDBoolField, = false);                           \
   OPTIONAL(sysroot, MDStringField, );                                          \
   OPTIONAL(sdk, MDStringField, );
   PARSE_MD_FIELDS();
@@ -4669,7 +4722,7 @@ bool LLParser::ParseDICompileUnit(MDNode *&Result, bool IsDistinct) {
       runtimeVersion.Val, splitDebugFilename.Val, emissionKind.Val, enums.Val,
       retainedTypes.Val, globals.Val, imports.Val, macros.Val, dwoId.Val,
       splitDebugInlining.Val, debugInfoForProfiling.Val, nameTableKind.Val,
-      debugBaseAddress.Val, sysroot.Val, sdk.Val);
+      rangesBaseAddress.Val, sysroot.Val, sdk.Val);
   return false;
 }
 

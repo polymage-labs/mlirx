@@ -646,24 +646,8 @@ Module *Preprocessor::getModuleForLocation(SourceLocation Loc) {
 }
 
 const FileEntry *
-Preprocessor::getModuleHeaderToIncludeForDiagnostics(SourceLocation IncLoc,
-                                                     Module *M,
-                                                     SourceLocation Loc) {
-  assert(M && "no module to include");
-
-  // If the context is the global module fragment of some module, we never
-  // want to return that file; instead, we want the innermost include-guarded
-  // header that it included.
-  bool InGlobalModuleFragment = M->Kind == Module::GlobalModuleFragment;
-
-  // If we have a module import syntax, we shouldn't include a header to
-  // make a particular module visible.
-  if ((getLangOpts().ObjC || getLangOpts().CPlusPlusModules ||
-       getLangOpts().ModulesTS) &&
-      !InGlobalModuleFragment)
-    return nullptr;
-
-  Module *TopM = M->getTopLevelModule();
+Preprocessor::getHeaderToIncludeForDiagnostics(SourceLocation IncLoc,
+                                               SourceLocation Loc) {
   Module *IncM = getModuleForLocation(IncLoc);
 
   // Walk up through the include stack, looking through textual headers of M
@@ -677,37 +661,50 @@ Preprocessor::getModuleHeaderToIncludeForDiagnostics(SourceLocation IncLoc,
     if (!FE)
       break;
 
-    if (InGlobalModuleFragment) {
-      if (getHeaderSearchInfo().isFileMultipleIncludeGuarded(FE))
-        return FE;
-      Loc = SM.getIncludeLoc(ID);
-      continue;
-    }
+    // We want to find all possible modules that might contain this header, so
+    // search all enclosing directories for module maps and load them.
+    HeaderInfo.hasModuleMap(FE->getName(), /*Root*/ nullptr,
+                            SourceMgr.isInSystemHeader(Loc));
 
-    bool InTextualHeader = false;
-    for (auto Header : HeaderInfo.getModuleMap().findAllModulesForHeader(FE)) {
-      if (!Header.getModule()->isSubModuleOf(TopM))
-        continue;
-
-      if (!(Header.getRole() & ModuleMap::TextualHeader)) {
-        // If this is an accessible, non-textual header of M's top-level module
-        // that transitively includes the given location and makes the
-        // corresponding module visible, this is the thing to #include.
-        if (Header.isAccessibleFrom(IncM))
-          return FE;
-
+    bool InPrivateHeader = false;
+    for (auto Header : HeaderInfo.findAllModulesForHeader(FE)) {
+      if (!Header.isAccessibleFrom(IncM)) {
         // It's in a private header; we can't #include it.
         // FIXME: If there's a public header in some module that re-exports it,
         // then we could suggest including that, but it's not clear that's the
         // expected way to make this entity visible.
+        InPrivateHeader = true;
         continue;
       }
 
-      InTextualHeader = true;
+      // We'll suggest including textual headers below if they're
+      // include-guarded.
+      if (Header.getRole() & ModuleMap::TextualHeader)
+        continue;
+
+      // If we have a module import syntax, we shouldn't include a header to
+      // make a particular module visible. Let the caller know they should
+      // suggest an import instead.
+      if (getLangOpts().ObjC || getLangOpts().CPlusPlusModules ||
+          getLangOpts().ModulesTS)
+        return nullptr;
+
+      // If this is an accessible, non-textual header of M's top-level module
+      // that transitively includes the given location and makes the
+      // corresponding module visible, this is the thing to #include.
+      return FE;
     }
 
-    if (!InTextualHeader)
-      break;
+    // FIXME: If we're bailing out due to a private header, we shouldn't suggest
+    // an import either.
+    if (InPrivateHeader)
+      return nullptr;
+
+    // If the header is includable and has an include guard, assume the
+    // intended way to expose its contents is by #include, not by importing a
+    // module that transitively includes it.
+    if (getHeaderSearchInfo().isFileMultipleIncludeGuarded(FE))
+      return FE;
 
     Loc = SM.getIncludeLoc(ID);
   }
@@ -1940,19 +1937,6 @@ Preprocessor::ImportAction Preprocessor::HandleHeaderIncludeOrImport(
     return {ImportAction::None};
   }
 
-  // Check for circular inclusion of the main file.
-  // We can't generate a consistent preamble with regard to the conditional
-  // stack if the main file is included again as due to the preamble bounds
-  // some directives (e.g. #endif of a header guard) will never be seen.
-  // Since this will lead to confusing errors, avoid the inclusion.
-  if (File && PreambleConditionalStack.isRecording() &&
-      SourceMgr.translateFile(&File->getFileEntry()) ==
-          SourceMgr.getMainFileID()) {
-    Diag(FilenameTok.getLocation(),
-         diag::err_pp_including_mainfile_in_preamble);
-    return {ImportAction::None};
-  }
-
   // Should we enter the source file? Set to Skip if either the source file is
   // known to have no effect beyond its effect on module visibility -- that is,
   // if it's got an include guard that is already defined, set to Import if it
@@ -2068,6 +2052,19 @@ Preprocessor::ImportAction Preprocessor::HandleHeaderIncludeOrImport(
     // serialization layer can't cope with it. This means we get local
     // submodule visibility semantics wrong in that case.
     Action = (SuggestedModule && !getLangOpts().CompilingPCH) ? Import : Skip;
+  }
+
+  // Check for circular inclusion of the main file.
+  // We can't generate a consistent preamble with regard to the conditional
+  // stack if the main file is included again as due to the preamble bounds
+  // some directives (e.g. #endif of a header guard) will never be seen.
+  // Since this will lead to confusing errors, avoid the inclusion.
+  if (Action == Enter && File && PreambleConditionalStack.isRecording() &&
+      SourceMgr.translateFile(&File->getFileEntry()) ==
+          SourceMgr.getMainFileID()) {
+    Diag(FilenameTok.getLocation(),
+         diag::err_pp_including_mainfile_in_preamble);
+    return {ImportAction::None};
   }
 
   if (Callbacks && !IsImportDecl) {
@@ -2802,7 +2799,9 @@ void Preprocessor::HandleDefineDirective(
   // warn-because-unused-macro set. If it gets used it will be removed from set.
   if (getSourceManager().isInMainFile(MI->getDefinitionLoc()) &&
       !Diags->isIgnored(diag::pp_macro_not_used, MI->getDefinitionLoc()) &&
-      !MacroExpansionInDirectivesOverride) {
+      !MacroExpansionInDirectivesOverride &&
+      getSourceManager().getFileID(MI->getDefinitionLoc()) !=
+          getPredefinesFileID()) {
     MI->setIsWarnIfUnused(true);
     WarnUnusedMacroLocs.insert(MI->getDefinitionLoc());
   }

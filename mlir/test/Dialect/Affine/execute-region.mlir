@@ -49,7 +49,7 @@ func @symbol_check(%B: memref<100xi32>, %A: memref<100xf32>) {
       // %vi is now a symbol here.
       %vi = index_cast %v : i32 to index
       affine.load %rA[%vi] : memref<100xf32>
-      // %vo is also a symbol (dominates the graybox).
+      // %vo is also a symbol (dominates the execute_region).
       affine.load %rA[%vo] : memref<100xf32>
       return
     }

@@ -60,25 +60,28 @@ Example:
 ### Restrictions on Dimensions and Symbols
 
 The affine dialect imposes certain restrictions on dimension and symbolic
-identifiers to enable powerful analysis and transformation. An SSA value is a
-valid symbol if it is either (1) a region argument for an op that is either
-"isolated from above" (like the FuncOp) or is an affine graybox op, (2) a value
-defined at the top level of (outside of all loops, if operations, or other
-operations with regions) of an affine graybox op or an op "isolated from above",
-(3) a value that dominates the closest enclosing affine graybox or an op
-"isolated from above", (4) the result of a [`constant`
-operation](Standard.md#constant-operation), (4) the result of an [`affine.apply`
-operation](#affineapply-operation) that recursively takes as arguments any
-symbolic identifiers, or (5) the result of a [`dim`
-operation](Standard.md#dim-operation) on either a memref that is a function
-argument or a memref where the corresponding dimension is either static or a
-dynamic one in turn bound to a symbolic identifier. Note that as a result of
-(3), symbol validity is sensitive to the location at which the value binds to
-the symbol. Dimensions may be bound not only to anything that a symbol is bound
-to, but also to induction variables of enclosing [`affine.for`
-operations](#affinefor-operation), and the result of an [`affine.apply`
-operation](#affineapply-operation) (which recursively may use other dimensions
-and symbols).
+identifiers to enable powerful analysis and transformation. An SSA value's use
+can be bound to a symbolic identifier if that SSA value is either
+1. a region argument for an op with trait `PolyhedralScope` (eg. `FuncOp`),
+2. a value defined at the top level of a `PolyhedralScope` op (i.e., immediately
+enclosed by the latter),
+3. a value that dominates the `PolyhedralScope` op enclosing the value's use,
+4. the result of a [`constant` operation](Standard.md#constant-operation),
+5. the result of an [`affine.apply`
+operation](#affineapply-operation) that recursively takes as arguments any valid
+symbolic identifiers, or
+6. the result of a [`dim` operation](Standard.md#dim-operation) on either a
+memref that is an argument to a `PolyhedralScope` op or a memref where the
+corresponding dimension is either static or a dynamic one in turn bound to a
+valid symbol.
+
+Note that as a result of rule (3) above, symbol validity is sensitive to the
+location of the SSA use.  Dimensions may be bound not only to anything that a
+symbol is bound to, but also to induction variables of enclosing
+[`affine.for`](#affinefor-operation) and
+[`affine.parallel`](#affineparallel-operation) operations, and the result of an
+[`affine.apply` operation](#affineapply-operation) (which recursively may use
+other dimensions and symbols).
 
 ### Affine Expressions
 

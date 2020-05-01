@@ -113,6 +113,11 @@ New checks
   Flags use of the `C` standard library functions ``memset``, ``memcpy`` and
   ``memcmp`` and similar derivatives on non-trivial types.
 
+- New :doc:`llvmlibc-callee-namespace
+  <clang-tidy/checks/llvmlibc-callee-namespace>` check.
+
+  Checks all calls resolve to functions within ``__llvm_libc`` namespace.
+
 - New :doc:`llvmlibc-implementation-in-namespace
   <clang-tidy/checks/llvmlibc-implementation-in-namespace>` check.
 
@@ -188,6 +193,11 @@ Renamed checks
 - The 'fuchsia-restrict-system-headers' check was renamed to :doc:`portability-restrict-system-includes
   <clang-tidy/checks/portability-restrict-system-includes>`
 
+Other improvements
+^^^^^^^^^^^^^^^^^^
+
+- For 'run-clang-tidy.py' add option to use alpha checkers from clang-analyzer.
+
 Improvements to include-fixer
 -----------------------------
 
@@ -210,4 +220,3 @@ The improvements are...
 
 Clang-tidy visual studio plugin
 -------------------------------
-

@@ -1,6 +1,7 @@
 add_subdirectory(Utils)
 
 add_mlir_library(MLIRTransforms
+  BufferPlacement.cpp
   Canonicalizer.cpp
   CSE.cpp
   DialectConversion.cpp
@@ -13,6 +14,7 @@ add_mlir_library(MLIRTransforms
   OpStats.cpp
   ParallelLoopCollapsing.cpp
   PipelineDataTransfer.cpp
+  SCCP.cpp
   StripDebugInfo.cpp
   SymbolDCE.cpp
   ViewOpGraph.cpp

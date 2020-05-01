@@ -1,5 +1,6 @@
 add_llvm_library(MLIRTestTransforms
   TestAllReduceLowering.cpp
+  TestBufferPlacement.cpp
   TestCallGraph.cpp
   TestConstantFold.cpp
   TestConvertGPUKernelToCubin.cpp
@@ -8,7 +9,6 @@ add_llvm_library(MLIRTestTransforms
   TestGpuMemoryPromotion.cpp
   TestGpuParallelLoopMapping.cpp
   TestInlining.cpp
-  TestLinalgMatmulToVector.cpp
   TestLinalgTransforms.cpp
   TestLiveness.cpp
   TestLoopMapping.cpp
@@ -25,7 +25,6 @@ add_llvm_library(MLIRTestTransforms
 
   DEPENDS
   MLIRStandardOpsIncGen
-  MLIRTestLinalgMatmulToVectorPatternsIncGen
   MLIRTestLinalgTransformPatternsIncGen
   MLIRTestVectorTransformPatternsIncGen
 )

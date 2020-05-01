@@ -55,7 +55,7 @@ func @affine_load_invalid_dim(%M : memref<10xi32>) {
   "unknown"() ({
   ^bb0(%arg: index):
     affine.load %M[%arg] : memref<10xi32>
-    // expected-error@-1 {{index must be a dimension or symbol identifier}}
+    // expected-error@-1 {{operand cannot be used as a dimension id}}
     br ^bb1
   ^bb1:
     br ^bb1

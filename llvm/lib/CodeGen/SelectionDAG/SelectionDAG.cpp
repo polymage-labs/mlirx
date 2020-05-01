@@ -4240,6 +4240,8 @@ static SDValue FoldBUILD_VECTOR(const SDLoc &DL, EVT VT,
                                 SelectionDAG &DAG) {
   int NumOps = Ops.size();
   assert(NumOps != 0 && "Can't build an empty vector!");
+  assert(!VT.isScalableVector() &&
+         "BUILD_VECTOR cannot be used with scalable types");
   assert(VT.getVectorNumElements() == (unsigned)NumOps &&
          "Incorrect element count in BUILD_VECTOR!");
 
@@ -5613,8 +5615,11 @@ SDValue SelectionDAG::getNode(unsigned Opcode, const SDLoc &DL, EVT VT,
     llvm_unreachable("should use getVectorShuffle constructor!");
   case ISD::INSERT_VECTOR_ELT: {
     ConstantSDNode *N3C = dyn_cast<ConstantSDNode>(N3);
-    // INSERT_VECTOR_ELT into out-of-bounds element is an UNDEF
-    if (N3C && N3C->getZExtValue() >= N1.getValueType().getVectorNumElements())
+    // INSERT_VECTOR_ELT into out-of-bounds element is an UNDEF, except
+    // for scalable vectors where we will generate appropriate code to
+    // deal with out-of-bounds cases correctly.
+    if (N3C && N1.getValueType().isFixedLengthVector() &&
+        N3C->getZExtValue() >= N1.getValueType().getVectorNumElements())
       return getUNDEF(VT);
 
     // Undefined index can be assumed out-of-bounds, so that's UNDEF too.
@@ -9458,6 +9463,37 @@ std::pair<EVT, EVT> SelectionDAG::GetSplitDestVTs(const EVT &VT) const {
   else
     LoVT = HiVT = VT.getHalfNumVectorElementsVT(*getContext());
 
+  return std::make_pair(LoVT, HiVT);
+}
+
+/// GetDependentSplitDestVTs - Compute the VTs needed for the low/hi parts of a
+/// type, dependent on an enveloping VT that has been split into two identical
+/// pieces. Sets the HiIsEmpty flag when hi type has zero storage size.
+std::pair<EVT, EVT>
+SelectionDAG::GetDependentSplitDestVTs(const EVT &VT, const EVT &EnvVT,
+                                       bool *HiIsEmpty) const {
+  EVT EltTp = VT.getVectorElementType();
+  bool IsScalable = VT.isScalableVector();
+  // Examples:
+  //   custom VL=8  with enveloping VL=8/8 yields 8/0 (hi empty)
+  //   custom VL=9  with enveloping VL=8/8 yields 8/1
+  //   custom VL=10 with enveloping VL=8/8 yields 8/2
+  //   etc.
+  unsigned VTNumElts = VT.getVectorNumElements();
+  unsigned EnvNumElts = EnvVT.getVectorNumElements();
+  EVT LoVT, HiVT;
+  if (VTNumElts > EnvNumElts) {
+    LoVT = EnvVT;
+    HiVT = EVT::getVectorVT(*getContext(), EltTp, VTNumElts - EnvNumElts,
+                            IsScalable);
+    *HiIsEmpty = false;
+  } else {
+    // Flag that hi type has zero storage size, but return split envelop type
+    // (this would be easier if vector types with zero elements were allowed).
+    LoVT = EVT::getVectorVT(*getContext(), EltTp, VTNumElts, IsScalable);
+    HiVT = EnvVT;
+    *HiIsEmpty = true;
+  }
   return std::make_pair(LoVT, HiVT);
 }
 

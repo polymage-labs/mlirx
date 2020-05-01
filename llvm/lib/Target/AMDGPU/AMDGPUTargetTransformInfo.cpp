@@ -620,8 +620,8 @@ unsigned GCNTTIImpl::getCFInstrCost(unsigned Opcode) {
   }
 }
 
-int GCNTTIImpl::getArithmeticReductionCost(unsigned Opcode, Type *Ty,
-                                              bool IsPairwise) {
+int GCNTTIImpl::getArithmeticReductionCost(unsigned Opcode, VectorType *Ty,
+                                           bool IsPairwise) {
   EVT OrigTy = TLI->getValueType(DL, Ty);
 
   // Computes cost on targets that have packed math instructions(which support
@@ -635,7 +635,7 @@ int GCNTTIImpl::getArithmeticReductionCost(unsigned Opcode, Type *Ty,
   return LT.first * getFullRateInstrCost();
 }
 
-int GCNTTIImpl::getMinMaxReductionCost(Type *Ty, Type *CondTy,
+int GCNTTIImpl::getMinMaxReductionCost(VectorType *Ty, VectorType *CondTy,
                                           bool IsPairwise,
                                           bool IsUnsigned) {
   EVT OrigTy = TLI->getValueType(DL, Ty);
@@ -782,7 +782,7 @@ bool GCNTTIImpl::isSourceOfDivergence(const Value *V) const {
 
   // Assume all function calls are a source of divergence.
   if (const CallInst *CI = dyn_cast<CallInst>(V)) {
-    if (isa<InlineAsm>(CI->getCalledValue()))
+    if (CI->isInlineAsm())
       return isInlineAsmSourceOfDivergence(CI);
     return true;
   }
@@ -810,7 +810,7 @@ bool GCNTTIImpl::isAlwaysUniform(const Value *V) const {
   }
 
   if (const CallInst *CI = dyn_cast<CallInst>(V)) {
-    if (isa<InlineAsm>(CI->getCalledValue()))
+    if (CI->isInlineAsm())
       return !isInlineAsmSourceOfDivergence(CI);
     return false;
   }
@@ -838,7 +838,7 @@ bool GCNTTIImpl::isAlwaysUniform(const Value *V) const {
   // If we have inline asm returning mixed SGPR and VGPR results, we inferred
   // divergent for the overall struct return. We need to override it in the
   // case we're extracting an SGPR component here.
-  if (isa<InlineAsm>(CI->getCalledValue()))
+  if (CI->isInlineAsm())
     return !isInlineAsmSourceOfDivergence(CI, ExtValue->getIndices());
 
   return false;
@@ -899,10 +899,9 @@ bool GCNTTIImpl::rewriteIntrinsicWithAddressSpace(
   }
 }
 
-unsigned GCNTTIImpl::getShuffleCost(TTI::ShuffleKind Kind, Type *Tp, int Index,
-                                       Type *SubTp) {
+unsigned GCNTTIImpl::getShuffleCost(TTI::ShuffleKind Kind, VectorType *VT,
+                                    int Index, VectorType *SubTp) {
   if (ST->hasVOP3PInsts()) {
-    VectorType *VT = cast<VectorType>(Tp);
     if (VT->getNumElements() == 2 &&
         DL.getTypeSizeInBits(VT->getElementType()) == 16) {
       // With op_sel VOP3P instructions freely can access the low half or high
@@ -919,7 +918,7 @@ unsigned GCNTTIImpl::getShuffleCost(TTI::ShuffleKind Kind, Type *Tp, int Index,
     }
   }
 
-  return BaseT::getShuffleCost(Kind, Tp, Index, SubTp);
+  return BaseT::getShuffleCost(Kind, VT, Index, SubTp);
 }
 
 bool GCNTTIImpl::areInlineCompatible(const Function *Caller,
@@ -950,11 +949,12 @@ void GCNTTIImpl::getUnrollingPreferences(Loop *L, ScalarEvolution &SE,
   CommonTTI.getUnrollingPreferences(L, SE, UP);
 }
 
-unsigned GCNTTIImpl::getUserCost(const User *U,
-                                 ArrayRef<const Value *> Operands) {
+unsigned
+GCNTTIImpl::getUserCost(const User *U, ArrayRef<const Value *> Operands,
+                        TTI::TargetCostKind CostKind) {
   const Instruction *I = dyn_cast<Instruction>(U);
   if (!I)
-    return BaseT::getUserCost(U, Operands);
+    return BaseT::getUserCost(U, Operands, CostKind);
 
   // Estimate different operations to be optimized out
   switch (I->getOpcode()) {
@@ -981,13 +981,13 @@ unsigned GCNTTIImpl::getUserCost(const User *U,
       return getIntrinsicInstrCost(II->getIntrinsicID(), II->getType(), Args,
                                    FMF, 1, II);
     } else {
-      return BaseT::getUserCost(U, Operands);
+      return BaseT::getUserCost(U, Operands, CostKind);
     }
   }
   case Instruction::ShuffleVector: {
     const ShuffleVectorInst *Shuffle = cast<ShuffleVectorInst>(I);
-    Type *Ty = Shuffle->getType();
-    Type *SrcTy = Shuffle->getOperand(0)->getType();
+    auto *Ty = cast<VectorType>(Shuffle->getType());
+    auto *SrcTy = cast<VectorType>(Shuffle->getOperand(0)->getType());
 
     // TODO: Identify and add costs for insert subvector, etc.
     int SubIndex;
@@ -995,7 +995,7 @@ unsigned GCNTTIImpl::getUserCost(const User *U,
       return getShuffleCost(TTI::SK_ExtractSubvector, SrcTy, SubIndex, Ty);
 
     if (Shuffle->changesLength())
-      return BaseT::getUserCost(U, Operands);
+      return BaseT::getUserCost(U, Operands, CostKind);
 
     if (Shuffle->isIdentity())
       return 0;
@@ -1060,7 +1060,7 @@ unsigned GCNTTIImpl::getUserCost(const User *U,
     break;
   }
 
-  return BaseT::getUserCost(U, Operands);
+  return BaseT::getUserCost(U, Operands, CostKind);
 }
 
 unsigned R600TTIImpl::getHardwareNumberOfRegisters(bool Vec) const {

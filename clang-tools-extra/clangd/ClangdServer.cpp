@@ -13,7 +13,6 @@
 #include "FormattedString.h"
 #include "HeaderSourceSwitch.h"
 #include "Headers.h"
-#include "Logger.h"
 #include "ParsedAST.h"
 #include "Preamble.h"
 #include "Protocol.h"
@@ -21,13 +20,14 @@
 #include "SemanticSelection.h"
 #include "SourceCode.h"
 #include "TUScheduler.h"
-#include "Trace.h"
 #include "XRefs.h"
 #include "index/CanonicalIncludes.h"
 #include "index/FileIndex.h"
 #include "index/Merge.h"
 #include "refactor/Rename.h"
 #include "refactor/Tweak.h"
+#include "support/Logger.h"
+#include "support/Trace.h"
 #include "clang/Format/Format.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/CompilerInvocation.h"
@@ -280,11 +280,8 @@ void ClangdServer::signatureHelp(PathRef File, Position Pos,
                              Pos, FS, Index));
   };
 
-  // Unlike code completion, we wait for an up-to-date preamble here.
-  // Signature help is often triggered after code completion. If the code
-  // completion inserted a header to make the symbol available, then using
-  // the old preamble would yield useless results.
-  WorkScheduler.runWithPreamble("SignatureHelp", File, TUScheduler::Consistent,
+  // Unlike code completion, we wait for a preamble here.
+  WorkScheduler.runWithPreamble("SignatureHelp", File, TUScheduler::Stale,
                                 std::move(Action));
 }
 

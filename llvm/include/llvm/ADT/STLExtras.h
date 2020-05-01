@@ -1123,9 +1123,13 @@ public:
   }
 
   /// Compare this range with another.
-  template <typename OtherT> bool operator==(const OtherT &other) {
-    return size() == std::distance(other.begin(), other.end()) &&
+  template <typename OtherT> bool operator==(const OtherT &other) const {
+    return size() ==
+               static_cast<size_t>(std::distance(other.begin(), other.end())) &&
            std::equal(begin(), end(), other.begin());
+  }
+  template <typename OtherT> bool operator!=(const OtherT &other) const {
+    return !(*this == other);
   }
 
   /// Return the size of this range.
@@ -1445,24 +1449,6 @@ inline void sort(Container &&C, Compare Comp) {
 //===----------------------------------------------------------------------===//
 //     Extra additions to <algorithm>
 //===----------------------------------------------------------------------===//
-
-/// For a container of pointers, deletes the pointers and then clears the
-/// container.
-template<typename Container>
-void DeleteContainerPointers(Container &C) {
-  for (auto V : C)
-    delete V;
-  C.clear();
-}
-
-/// In a container of pairs (usually a map) whose second element is a pointer,
-/// deletes the second elements and then clears the container.
-template<typename Container>
-void DeleteContainerSeconds(Container &C) {
-  for (auto &V : C)
-    delete V.second;
-  C.clear();
-}
 
 /// Get the size of a range. This is a wrapper function around std::distance
 /// which is only enabled when the operation is O(1).

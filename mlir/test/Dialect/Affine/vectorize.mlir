@@ -164,7 +164,8 @@ func @outer_loop_vec_with_inner_for_op_operand(%arg0 : index, %arg1 : index, %A 
   affine.for %i = affine_map<(d0) -> (d0 * 16)>(%arg0) to affine_map<(d0) -> (d0 * 16 + 16)>(%arg0) {
     affine.for %j = affine_map<(d0) -> (d0 * 8)>(%arg1) to affine_map<(d0) -> (d0 * 8 + 8)>(%arg1) {
       // CHECK: affine.load %{{.*}}[{{.*}}] : memref<16xvector<8xf32>>
-      affine.load %A[%j] : memref<128xf32>
+      %x = affine.load %A[%j] : memref<128xf32>
+      affine.store %x, %A[%j] : memref<128xf32>
     }
   }
   return
