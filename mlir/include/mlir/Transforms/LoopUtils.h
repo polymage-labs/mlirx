@@ -22,6 +22,7 @@
 
 namespace mlir {
 class AffineForOp;
+class AffineParallelOp;
 class FuncOp;
 class OpBuilder;
 class Value;
@@ -157,6 +158,11 @@ Loops tilePerfectlyNested(loop::ForOp rootForOp, ArrayRef<Value> sizes);
 /// invariant are hoisted out of the loop when that's valid.
 //  TODO: This currently works only on innermost affine for op's.
 void scalarReplace(AffineForOp forOp);
+
+/// Replaces all affine for ops that can be parallelized with 1-D affine ParallelOp.
+// MLIR::isLoopParallel give the affine forOps which can be parallelized.
+/// No cost model for it to drive this parallelization at the moment.
+void affineParallelize(AffineForOp forOp);
 
 /// Explicit copy / DMA generation options for mlir::affineDataCopyGenerate.
 struct AffineCopyOptions {
