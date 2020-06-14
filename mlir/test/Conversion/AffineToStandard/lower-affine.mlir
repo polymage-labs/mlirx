@@ -657,3 +657,19 @@ func @affine_max(%arg0: index, %arg1: index) -> index{
   %0 = affine.max affine_map<(d0,d1) -> (d0 - d1, d1 - d0)>(%arg0, %arg1)
   return %0 : index
 }
+
+// CHECK-LABEL: func @dot(
+// CHECK-SAME: %[[ARG0:.*]]: memref<100x100xf32>, %[[ARG1:.*]]: memref<100x100xf32>) {
+func @dot(%o: memref<100x100xf32>, %a: memref<100x100xf32>) {
+  affine.parallel (%i, %j) = (0, 0) to (100, 100) {
+  }
+  return
+}
+
+// CHECK-DAG:    %[[C100:.*]] = constant 100
+// CHECK-DAG:    %[[C100_1:.*]] = constant 100
+// CHECK-DAG:    %[[C0:.*]] = constant 0
+// CHECK-DAG:    %[[C0_1:.*]] = constant 0
+// CHECK-DAG:    %[[C1:.*]] = constant 1
+// CHECK-DAG:    %[[C1_1:.*]] = constant 1
+// CHECK-DAG:    loop.parallel (%arg2, %arg3) = (%[[C0]], %[[C0_1]]) to (%[[C100]], %[[C100_1]]) step (%[[C1]], %[[C1_1]]) {

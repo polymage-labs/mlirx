@@ -14,6 +14,7 @@
 namespace mlir {
 class AffineExpr;
 class AffineForOp;
+class AffineParallelOp;
 class AffineMap;
 class Location;
 struct LogicalResult;
