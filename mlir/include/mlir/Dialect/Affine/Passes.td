@@ -91,6 +91,11 @@ def AffineLoopUnrollAndJam : FunctionPass<"affine-loop-unroll-jam"> {
   ];
 }
 
+def AffineParallelize : FunctionPass<"affine-parallelize"> {
+  let summary = "Auto-parallelize affine.for ops";
+  let constructor = "mlir::createAffineParallelizePass()";
+}
+
 def AffineScalarReplacement : FunctionPass<"affine-scalrep"> {
   let summary = "Perform scalar replacement of affine memrefs accesses";
   let description = [{

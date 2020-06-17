@@ -39,6 +39,10 @@ createAffineLoopInvariantCodeMotionPass();
 /// Creates a pass to vectorize affine loops (the new one).
 std::unique_ptr<OperationPass<FuncOp>> createAffineVectorizePass();
 
+/// Creates a pass to convert all parallel affine.for's into 1-d affine.parallel ops.
+std::unique_ptr<OperationPass<FuncOp>> createAffineParallelizePass();
+
+
 /// Performs packing (or explicit copying) of accessed memref regions into
 /// buffers in the specified faster memory space through either pointwise copies
 /// or DMA operations.
