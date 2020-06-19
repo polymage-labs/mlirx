@@ -9,9 +9,9 @@
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANGD_HOVER_H
 #define LLVM_CLANG_TOOLS_EXTRA_CLANGD_HOVER_H
 
-#include "FormattedString.h"
 #include "ParsedAST.h"
 #include "Protocol.h"
+#include "support/Markup.h"
 #include "clang/Index/IndexSymbol.h"
 
 namespace clang {
@@ -59,6 +59,9 @@ struct HoverInfo {
   /// Source code containing the definition of the symbol.
   std::string Definition;
 
+  /// Access specifier for declarations inside class/struct/unions, empty for
+  /// others.
+  std::string AccessSpecifier;
   /// Pretty-printed variable type.
   /// Set only for variables.
   llvm::Optional<std::string> Type;

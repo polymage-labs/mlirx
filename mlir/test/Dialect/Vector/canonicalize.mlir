@@ -13,9 +13,9 @@ func @create_vector_mask_to_constant_mask() -> (vector<4x3xi1>) {
 
 // -----
 
-func @strided_slice_of_constant_mask() -> (vector<2x2xi1>) {
+func @extract_strided_slice_of_constant_mask() -> (vector<2x2xi1>) {
   %0 = vector.constant_mask [2, 2] : vector<4x3xi1>
-  %1 = vector.strided_slice %0
+  %1 = vector.extract_strided_slice %0
     {offsets = [0, 0], sizes = [2, 2], strides = [1, 1]}
       : vector<4x3xi1> to vector<2x2xi1>
   // CHECK: vector.constant_mask [2, 2] : vector<2x2xi1>
@@ -24,9 +24,9 @@ func @strided_slice_of_constant_mask() -> (vector<2x2xi1>) {
 
 // -----
 
-func @strided_slice_of_constant_mask() -> (vector<2x2xi1>) {
+func @extract_strided_slice_of_constant_mask() -> (vector<2x2xi1>) {
   %0 = vector.constant_mask [2, 2] : vector<4x3xi1>
-  %1 = vector.strided_slice %0
+  %1 = vector.extract_strided_slice %0
     {offsets = [1, 0], sizes = [2, 2], strides = [1, 1]}
       : vector<4x3xi1> to vector<2x2xi1>
   // CHECK: vector.constant_mask [1, 2] : vector<2x2xi1>
@@ -35,9 +35,9 @@ func @strided_slice_of_constant_mask() -> (vector<2x2xi1>) {
 
 // -----
 
-func @strided_slice_of_constant_mask() -> (vector<2x2xi1>) {
+func @extract_strided_slice_of_constant_mask() -> (vector<2x2xi1>) {
   %0 = vector.constant_mask [2, 2] : vector<4x3xi1>
-  %1 = vector.strided_slice %0
+  %1 = vector.extract_strided_slice %0
     {offsets = [0, 1], sizes = [2, 2], strides = [1, 1]}
       : vector<4x3xi1> to vector<2x2xi1>
   // CHECK: vector.constant_mask [2, 1] : vector<2x2xi1>
@@ -46,9 +46,9 @@ func @strided_slice_of_constant_mask() -> (vector<2x2xi1>) {
 
 // -----
 
-func @strided_slice_of_constant_mask() -> (vector<2x2xi1>) {
+func @extract_strided_slice_of_constant_mask() -> (vector<2x2xi1>) {
   %0 = vector.constant_mask [2, 2] : vector<4x3xi1>
-  %1 = vector.strided_slice %0
+  %1 = vector.extract_strided_slice %0
     {offsets = [2, 0], sizes = [2, 2], strides = [1, 1]}
       : vector<4x3xi1> to vector<2x2xi1>
   // CHECK: vector.constant_mask [0, 0] : vector<2x2xi1>
@@ -57,9 +57,9 @@ func @strided_slice_of_constant_mask() -> (vector<2x2xi1>) {
 
 // -----
 
-func @strided_slice_of_constant_mask() -> (vector<2x1xi1>) {
+func @extract_strided_slice_of_constant_mask() -> (vector<2x1xi1>) {
   %0 = vector.constant_mask [2, 2] : vector<4x3xi1>
-  %1 = vector.strided_slice %0
+  %1 = vector.extract_strided_slice %0
     {offsets = [0, 2], sizes = [2, 1], strides = [1, 1]}
       : vector<4x3xi1> to vector<2x1xi1>
   // CHECK: vector.constant_mask [0, 0] : vector<2x1xi1>
@@ -68,9 +68,9 @@ func @strided_slice_of_constant_mask() -> (vector<2x1xi1>) {
 
 // -----
 
-func @strided_slice_of_constant_mask() -> (vector<2x1xi1>) {
+func @extract_strided_slice_of_constant_mask() -> (vector<2x1xi1>) {
   %0 = vector.constant_mask [2, 2] : vector<4x3xi1>
-  %1 = vector.strided_slice %0
+  %1 = vector.extract_strided_slice %0
     {offsets = [0, 1], sizes = [2, 1], strides = [1, 1]}
       : vector<4x3xi1> to vector<2x1xi1>
   // CHECK: vector.constant_mask [2, 1] : vector<2x1xi1>
@@ -79,9 +79,9 @@ func @strided_slice_of_constant_mask() -> (vector<2x1xi1>) {
 
 // -----
 
-func @strided_slice_of_constant_mask() -> (vector<2x1xi1>) {
+func @extract_strided_slice_of_constant_mask() -> (vector<2x1xi1>) {
   %0 = vector.constant_mask [2, 2] : vector<4x3xi1>
-  %1 = vector.strided_slice %0
+  %1 = vector.extract_strided_slice %0
     {offsets = [1, 1], sizes = [2, 1], strides = [1, 1]}
       : vector<4x3xi1> to vector<2x1xi1>
   // CHECK: vector.constant_mask [1, 1] : vector<2x1xi1>
@@ -158,4 +158,20 @@ func @transpose_3D_sequence(%arg : vector<4x3x2xf32>) -> vector<4x3x2xf32> {
   %7 = addf %5, %6 : vector<4x3x2xf32>
   // CHECK-NEXT: return [[ADD]]
   return %7 : vector<4x3x2xf32>
+}
+
+// -----
+
+// CHECK-LABEL: cast_transfers
+func @cast_transfers(%A: memref<4x8xf32>) -> (vector<4x8xf32>) {
+  %c0 = constant 0 : index
+  %f0 = constant 0.0 : f32
+  %0 = memref_cast %A : memref<4x8xf32> to memref<?x?xf32>
+
+  // CHECK: vector.transfer_read %{{.*}} : memref<4x8xf32>, vector<4x8xf32>
+  %1 = vector.transfer_read %0[%c0, %c0], %f0 : memref<?x?xf32>, vector<4x8xf32>
+
+  // CHECK: vector.transfer_write %{{.*}} : vector<4x8xf32>, memref<4x8xf32>
+  vector.transfer_write %1, %0[%c0, %c0] : vector<4x8xf32>, memref<?x?xf32>
+  return %1 : vector<4x8xf32>
 }

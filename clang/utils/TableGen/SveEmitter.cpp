@@ -65,7 +65,7 @@ public:
 
 class SVEType {
   TypeSpec TS;
-  bool Float, Signed, Immediate, Void, Constant, Pointer;
+  bool Float, Signed, Immediate, Void, Constant, Pointer, BFloat;
   bool DefaultType, IsScalable, Predicate, PredicatePattern, PrefetchOp;
   unsigned Bitwidth, ElementBitwidth, NumVectors;
 
@@ -74,9 +74,9 @@ public:
 
   SVEType(TypeSpec TS, char CharMod)
       : TS(TS), Float(false), Signed(true), Immediate(false), Void(false),
-        Constant(false), Pointer(false), DefaultType(false), IsScalable(true),
-        Predicate(false), PredicatePattern(false), PrefetchOp(false),
-        Bitwidth(128), ElementBitwidth(~0U), NumVectors(1) {
+        Constant(false), Pointer(false), BFloat(false), DefaultType(false),
+        IsScalable(true), Predicate(false), PredicatePattern(false),
+        PrefetchOp(false), Bitwidth(128), ElementBitwidth(~0U), NumVectors(1) {
     if (!TS.empty())
       applyTypespec();
     applyModifier(CharMod);
@@ -93,8 +93,12 @@ public:
   bool isVoid() const { return Void & !Pointer; }
   bool isDefault() const { return DefaultType; }
   bool isFloat() const { return Float; }
-  bool isInteger() const { return !Float && !Predicate; }
-  bool isScalarPredicate() const { return !Float && ElementBitwidth == 1; }
+  bool isBFloat() const { return BFloat; }
+  bool isFloatingPoint() const { return Float || BFloat; }
+  bool isInteger() const { return !isFloatingPoint() && !Predicate; }
+  bool isScalarPredicate() const {
+    return !isFloatingPoint() && Predicate && NumVectors == 0;
+  }
   bool isPredicateVector() const { return Predicate; }
   bool isPredicatePattern() const { return PredicatePattern; }
   bool isPrefetchOp() const { return PrefetchOp; }
@@ -211,13 +215,13 @@ public:
   /// Return true if the intrinsic takes a splat operand.
   bool hasSplat() const {
     // These prototype modifiers are described in arm_sve.td.
-    return Proto.find_first_of("ajfrKLR") != std::string::npos;
+    return Proto.find_first_of("ajfrKLR@") != std::string::npos;
   }
 
   /// Return the parameter index of the splat operand.
   unsigned getSplatIdx() const {
     // These prototype modifiers are described in arm_sve.td.
-    auto Idx = Proto.find_first_of("ajfrKLR");
+    auto Idx = Proto.find_first_of("ajfrKLR@");
     assert(Idx != std::string::npos && Idx > 0 &&
            "Prototype has no splat operand");
     return Idx - 1;
@@ -235,6 +239,23 @@ private:
 
 class SVEEmitter {
 private:
+  // The reinterpret builtins are generated separately because they
+  // need the cross product of all types (121 functions in total),
+  // which is inconvenient to specify in the arm_sve.td file or
+  // generate in CGBuiltin.cpp.
+  struct ReinterpretTypeInfo {
+    const char *Suffix;
+    const char *Type;
+    const char *BuiltinType;
+  };
+  SmallVector<ReinterpretTypeInfo, 11> Reinterprets = {
+      {"s8", "svint8_t", "q16Sc"},   {"s16", "svint16_t", "q8Ss"},
+      {"s32", "svint32_t", "q4Si"},  {"s64", "svint64_t", "q2SWi"},
+      {"u8", "svuint8_t", "q16Uc"},  {"u16", "svuint16_t", "q8Us"},
+      {"u32", "svuint32_t", "q4Ui"}, {"u64", "svuint64_t", "q2UWi"},
+      {"f16", "svfloat16_t", "q8h"}, {"f32", "svfloat32_t", "q4f"},
+      {"f64", "svfloat64_t", "q2d"}};
+
   RecordKeeper &Records;
   llvm::StringMap<uint64_t> EltTypes;
   llvm::StringMap<uint64_t> MemEltTypes;
@@ -343,7 +364,7 @@ std::string SVEType::builtin_str() const {
 
   if (isVoidPointer())
     S += "v";
-  else if (!Float)
+  else if (!isFloatingPoint())
     switch (ElementBitwidth) {
     case 1: S += "b"; break;
     case 8: S += "c"; break;
@@ -353,15 +374,19 @@ std::string SVEType::builtin_str() const {
     case 128: S += "LLLi"; break;
     default: llvm_unreachable("Unhandled case!");
     }
-  else
+  else if (isFloat())
     switch (ElementBitwidth) {
     case 16: S += "h"; break;
     case 32: S += "f"; break;
     case 64: S += "d"; break;
     default: llvm_unreachable("Unhandled case!");
     }
+  else if (isBFloat()) {
+    assert(ElementBitwidth == 16 && "Not a valid BFloat.");
+    S += "y";
+  }
 
-  if (!isFloat()) {
+  if (!isFloatingPoint()) {
     if ((isChar() || isPointer()) && !isVoidPointer()) {
       // Make chars and typed pointers explicitly signed.
       if (Signed)
@@ -402,23 +427,26 @@ std::string SVEType::str() const {
   else {
     if (isScalableVector())
       S += "sv";
-    if (!Signed && !Float)
+    if (!Signed && !isFloatingPoint())
       S += "u";
 
     if (Float)
       S += "float";
-    else if (isScalarPredicate())
+    else if (isScalarPredicate() || isPredicateVector())
       S += "bool";
+    else if (isBFloat())
+      S += "bfloat";
     else
       S += "int";
 
-    if (!isScalarPredicate())
+    if (!isScalarPredicate() && !isPredicateVector())
       S += utostr(ElementBitwidth);
     if (!isScalableVector() && isVector())
       S += "x" + utostr(getNumElements());
     if (NumVectors > 1)
       S += "x" + utostr(NumVectors);
-    S += "_t";
+    if (!isScalarPredicate())
+      S += "_t";
   }
 
   if (Constant)
@@ -433,7 +461,6 @@ void SVEType::applyTypespec() {
     switch (I) {
     case 'P':
       Predicate = true;
-      ElementBitwidth = 1;
       break;
     case 'U':
       Signed = false;
@@ -462,6 +489,10 @@ void SVEType::applyTypespec() {
       Float = true;
       ElementBitwidth = 64;
       break;
+    case 'b':
+      BFloat = true;
+      ElementBitwidth = 16;
+      break;
     default:
       llvm_unreachable("Unhandled type code!");
     }
@@ -471,6 +502,15 @@ void SVEType::applyTypespec() {
 
 void SVEType::applyModifier(char Mod) {
   switch (Mod) {
+  case '2':
+    NumVectors = 2;
+    break;
+  case '3':
+    NumVectors = 3;
+    break;
+  case '4':
+    NumVectors = 4;
+    break;
   case 'v':
     Void = true;
     break;
@@ -495,18 +535,50 @@ void SVEType::applyModifier(char Mod) {
   case 'q':
     ElementBitwidth /= 4;
     break;
+  case 'b':
+    Signed = false;
+    Float = false;
+    ElementBitwidth /= 4;
+    break;
   case 'o':
     ElementBitwidth *= 4;
     break;
   case 'P':
     Signed = true;
     Float = false;
+    BFloat = false;
     Predicate = true;
     Bitwidth = 16;
     ElementBitwidth = 1;
     break;
   case 's':
   case 'a':
+    Bitwidth = ElementBitwidth;
+    NumVectors = 0;
+    break;
+  case 'R':
+    ElementBitwidth /= 2;
+    NumVectors = 0;
+    break;
+  case 'r':
+    ElementBitwidth /= 4;
+    NumVectors = 0;
+    break;
+  case '@':
+    Signed = false;
+    Float = false;
+    ElementBitwidth /= 4;
+    NumVectors = 0;
+    break;
+  case 'K':
+    Signed = true;
+    Float = false;
+    Bitwidth = ElementBitwidth;
+    NumVectors = 0;
+    break;
+  case 'L':
+    Signed = false;
+    Float = false;
     Bitwidth = ElementBitwidth;
     NumVectors = 0;
     break;
@@ -580,6 +652,16 @@ void SVEType::applyModifier(char Mod) {
   case 'j':
     ElementBitwidth = Bitwidth = 64;
     NumVectors = 0;
+    break;
+  case 'f':
+    Signed = false;
+    ElementBitwidth = Bitwidth = 64;
+    NumVectors = 0;
+    break;
+  case 'g':
+    Signed = false;
+    Float = false;
+    ElementBitwidth = 64;
     break;
   case 't':
     Signed = true;
@@ -715,7 +797,6 @@ Intrinsic::Intrinsic(StringRef Name, StringRef Proto, uint64_t MergeTy,
       BaseTypeSpec(BT), Class(Class), Guard(Guard.str()),
       MergeSuffix(MergeSuffix.str()), BaseType(BT, 'd'), Flags(Flags),
       ImmChecks(Checks.begin(), Checks.end()) {
-
   // Types[0] is the return value.
   for (unsigned I = 0; I < Proto.size(); ++I) {
     SVEType T(BaseTypeSpec, Proto[I]);
@@ -741,18 +822,7 @@ Intrinsic::Intrinsic(StringRef Name, StringRef Proto, uint64_t MergeTy,
 }
 
 std::string Intrinsic::getBuiltinTypeStr() {
-  std::string S;
-
-  SVEType RetT = getReturnType();
-  // Since the return value must be one type, return a vector type of the
-  // appropriate width which we will bitcast.  An exception is made for
-  // returning structs of 2, 3, or 4 vectors which are returned in a sret-like
-  // fashion, storing them to a pointer arg.
-  if (RetT.getNumVectors() > 1) {
-    S += "vv*"; // void result with void* first argument
-  } else
-    S += RetT.builtin_str();
-
+  std::string S = getReturnType().builtin_str();
   for (unsigned I = 0; I < getNumParams(); ++I)
     S += getParamType(I).builtin_str();
 
@@ -790,6 +860,8 @@ std::string Intrinsic::replaceTemplatedArgs(std::string Name, TypeSpec TS,
       TypeCode = T.isSigned() ? 's' : 'u';
     else if (T.isPredicateVector())
       TypeCode = 'b';
+    else if (T.isBFloat())
+      TypeCode = "bf";
     else
       TypeCode = 'f';
     Ret.replace(Pos, NumChars, TypeCode + utostr(T.getElementSizeInBits()));
@@ -863,6 +935,11 @@ uint64_t SVEEmitter::encodeTypeFlags(const SVEType &T) {
     default:
       llvm_unreachable("Unhandled float element bitwidth!");
     }
+  }
+
+  if (T.isBFloat()) {
+    assert(T.getElementSizeInBits() == 16 && "Not a valid BFloat.");
+    return encodeEltType("EltTyBFloat16");
   }
 
   if (T.isPredicateVector()) {
@@ -985,6 +1062,10 @@ void SVEEmitter::createHeader(raw_ostream &OS) {
   OS << "#error \"SVE support not enabled\"\n";
   OS << "#else\n\n";
 
+  OS << "#if !defined(__LITTLE_ENDIAN__)\n";
+  OS << "#error \"Big endian is currently not supported for arm_sve.h\"\n";
+  OS << "#endif\n";
+
   OS << "#include <stdint.h>\n\n";
   OS << "#ifdef  __cplusplus\n";
   OS << "extern \"C\" {\n";
@@ -995,7 +1076,6 @@ void SVEEmitter::createHeader(raw_ostream &OS) {
   OS << "typedef __fp16 float16_t;\n";
   OS << "typedef float float32_t;\n";
   OS << "typedef double float64_t;\n";
-  OS << "typedef bool bool_t;\n\n";
 
   OS << "typedef __SVInt8_t svint8_t;\n";
   OS << "typedef __SVInt16_t svint16_t;\n";
@@ -1006,8 +1086,47 @@ void SVEEmitter::createHeader(raw_ostream &OS) {
   OS << "typedef __SVUint32_t svuint32_t;\n";
   OS << "typedef __SVUint64_t svuint64_t;\n";
   OS << "typedef __SVFloat16_t svfloat16_t;\n";
+  OS << "typedef __SVBFloat16_t svbfloat16_t;\n\n";
+
+  OS << "#ifdef __ARM_FEATURE_BF16_SCALAR_ARITHMETIC\n";
+  OS << "typedef __bf16 bfloat16_t;\n";
+  OS << "#endif\n\n";
+
   OS << "typedef __SVFloat32_t svfloat32_t;\n";
   OS << "typedef __SVFloat64_t svfloat64_t;\n";
+  OS << "typedef __clang_svint8x2_t svint8x2_t;\n";
+  OS << "typedef __clang_svint16x2_t svint16x2_t;\n";
+  OS << "typedef __clang_svint32x2_t svint32x2_t;\n";
+  OS << "typedef __clang_svint64x2_t svint64x2_t;\n";
+  OS << "typedef __clang_svuint8x2_t svuint8x2_t;\n";
+  OS << "typedef __clang_svuint16x2_t svuint16x2_t;\n";
+  OS << "typedef __clang_svuint32x2_t svuint32x2_t;\n";
+  OS << "typedef __clang_svuint64x2_t svuint64x2_t;\n";
+  OS << "typedef __clang_svfloat16x2_t svfloat16x2_t;\n";
+  OS << "typedef __clang_svfloat32x2_t svfloat32x2_t;\n";
+  OS << "typedef __clang_svfloat64x2_t svfloat64x2_t;\n";
+  OS << "typedef __clang_svint8x3_t svint8x3_t;\n";
+  OS << "typedef __clang_svint16x3_t svint16x3_t;\n";
+  OS << "typedef __clang_svint32x3_t svint32x3_t;\n";
+  OS << "typedef __clang_svint64x3_t svint64x3_t;\n";
+  OS << "typedef __clang_svuint8x3_t svuint8x3_t;\n";
+  OS << "typedef __clang_svuint16x3_t svuint16x3_t;\n";
+  OS << "typedef __clang_svuint32x3_t svuint32x3_t;\n";
+  OS << "typedef __clang_svuint64x3_t svuint64x3_t;\n";
+  OS << "typedef __clang_svfloat16x3_t svfloat16x3_t;\n";
+  OS << "typedef __clang_svfloat32x3_t svfloat32x3_t;\n";
+  OS << "typedef __clang_svfloat64x3_t svfloat64x3_t;\n";
+  OS << "typedef __clang_svint8x4_t svint8x4_t;\n";
+  OS << "typedef __clang_svint16x4_t svint16x4_t;\n";
+  OS << "typedef __clang_svint32x4_t svint32x4_t;\n";
+  OS << "typedef __clang_svint64x4_t svint64x4_t;\n";
+  OS << "typedef __clang_svuint8x4_t svuint8x4_t;\n";
+  OS << "typedef __clang_svuint16x4_t svuint16x4_t;\n";
+  OS << "typedef __clang_svuint32x4_t svuint32x4_t;\n";
+  OS << "typedef __clang_svuint64x4_t svuint64x4_t;\n";
+  OS << "typedef __clang_svfloat16x4_t svfloat16x4_t;\n";
+  OS << "typedef __clang_svfloat32x4_t svfloat32x4_t;\n";
+  OS << "typedef __clang_svfloat64x4_t svfloat64x4_t;\n";
   OS << "typedef __SVBool_t  svbool_t;\n\n";
 
   OS << "typedef enum\n";
@@ -1050,6 +1169,22 @@ void SVEEmitter::createHeader(raw_ostream &OS) {
   OS << "/* Function attributes */\n";
   OS << "#define __aio static inline __attribute__((__always_inline__, "
         "__nodebug__, __overloadable__))\n\n";
+
+  // Add reinterpret functions.
+  for (auto ShortForm : { false, true } )
+    for (const ReinterpretTypeInfo &From : Reinterprets)
+      for (const ReinterpretTypeInfo &To : Reinterprets) {
+        if (ShortForm) {
+          OS << "__aio " << From.Type << " svreinterpret_" << From.Suffix;
+          OS << "(" << To.Type << " op) {\n";
+          OS << "  return __builtin_sve_reinterpret_" << From.Suffix << "_"
+             << To.Suffix << "(op);\n";
+          OS << "}\n\n";
+        } else
+          OS << "#define svreinterpret_" << From.Suffix << "_" << To.Suffix
+             << "(...) __builtin_sve_reinterpret_" << From.Suffix << "_"
+             << To.Suffix << "(__VA_ARGS__)\n";
+      }
 
   SmallVector<std::unique_ptr<Intrinsic>, 128> Defs;
   std::vector<Record *> RV = Records.getAllDerivedDefinitions("Inst");
@@ -1125,8 +1260,16 @@ void SVEEmitter::createBuiltins(raw_ostream &OS) {
       OS << "BUILTIN(__builtin_sve_" << Def->getMangledName() << ", \""
          << Def->getBuiltinTypeStr() << "\", \"n\")\n";
   }
+
+  // Add reinterpret builtins
+  for (const ReinterpretTypeInfo &From : Reinterprets)
+    for (const ReinterpretTypeInfo &To : Reinterprets)
+      OS << "BUILTIN(__builtin_sve_reinterpret_" << From.Suffix << "_"
+         << To.Suffix << +", \"" << From.BuiltinType << To.BuiltinType
+         << "\", \"n\")\n";
+
   OS << "#endif\n\n";
-}
+  }
 
 void SVEEmitter::createCodeGenMap(raw_ostream &OS) {
   std::vector<Record *> RV = Records.getAllDerivedDefinitions("Inst");

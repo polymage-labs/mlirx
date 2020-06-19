@@ -335,13 +335,13 @@ func @malformed_type(%a : intt) { // expected-error {{expected non-function type
 
 func @resulterror() -> i32 {
 ^bb42:
-  return    // expected-error {{'std.return' op has 0 operands, but enclosing function returns 1}}
+  return    // expected-error {{'std.return' op has 0 operands, but enclosing op returns 1}}
 }
 
 // -----
 
 func @func_resulterror() -> i32 {
-  return // expected-error {{'std.return' op has 0 operands, but enclosing function returns 1}}
+  return // expected-error {{'std.return' op has 0 operands, but enclosing op returns 1}}
 }
 
 // -----
@@ -467,7 +467,7 @@ func @dominance_failure() {
 
 func @return_type_mismatch() -> i32 {
   %0 = "foo"() : ()->f32
-  return %0 : f32  // expected-error {{type of return operand 0 ('f32') doesn't match function result type ('i32')}}
+  return %0 : f32  // expected-error {{type of return operand 0 ('f32') doesn't match function result type ('i32') in enclosing op}}
 }
 
 // -----
@@ -686,6 +686,22 @@ func @elementsattr_toolarge2() -> () {
 ^bb0:
   "foo"(){bar = dense<[-777]> : tensor<1xi8>} : () -> () // expected-error {{integer constant out of range}}
 }
+
+// -----
+
+"foo"(){bar = dense<[()]> : tensor<complex<i64>>} : () -> () // expected-error {{expected element literal of primitive type}}
+
+// -----
+
+"foo"(){bar = dense<[(10)]> : tensor<complex<i64>>} : () -> () // expected-error {{expected ',' between complex elements}}
+
+// -----
+
+"foo"(){bar = dense<[(10,)]> : tensor<complex<i64>>} : () -> () // expected-error {{expected element literal of primitive type}}
+
+// -----
+
+"foo"(){bar = dense<[(10,10]> : tensor<complex<i64>>} : () -> () // expected-error {{expected ')' after complex elements}}
 
 // -----
 
@@ -1495,4 +1511,38 @@ func @really_large_bound() {
 func @duplicate_dictionary_attr_key() {
   // expected-error @+1 {{duplicate key in dictionary attribute}}
   "foo.op"() {a, a} : () -> ()
+}
+
+// -----
+
+func @forward_reference_type_check() -> (i8) {
+  br ^bb2
+
+^bb1:
+  // expected-note @+1 {{previously used here with type 'i8'}}
+  return %1 : i8
+
+^bb2:
+  // expected-error @+1 {{definition of SSA value '%1#0' has type 'f32'}}
+  %1 = "bar"() : () -> (f32)
+  br ^bb1
+}
+
+// -----
+
+func @dominance_error_in_unreachable_op() -> i1 {
+  %c = constant false
+  return %c : i1
+^bb0:
+  "dummy" () ({  // unreachable
+    ^bb1:
+// expected-error @+1 {{operand #0 does not dominate this use}}
+      %2:3 = "bar"(%1) : (i64) -> (i1,i1,i1)
+      br ^bb4
+    ^bb2:
+      br ^bb2
+    ^bb4:
+      %1 = "foo"() : ()->i64   // expected-note {{operand defined here}}
+  }) : () -> ()
+  return %c : i1
 }

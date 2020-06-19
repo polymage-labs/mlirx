@@ -132,8 +132,8 @@ static Expected<std::string> getPdbPathFromExe(StringRef ExePath) {
 
   StringRef PdbPath;
   const llvm::codeview::DebugInfo *PdbInfo = nullptr;
-  if (auto EC = ObjFile->getDebugPDBInfo(PdbInfo, PdbPath))
-    return make_error<RawError>(EC);
+  if (Error E = ObjFile->getDebugPDBInfo(PdbInfo, PdbPath))
+    return std::move(E);
 
   return std::string(PdbPath);
 }
@@ -181,6 +181,12 @@ NativeSession::searchForPdb(const PdbSearchOptions &Opts) {
   if (auto File = loadPdbFile(PdbPath, Allocator))
     return std::string(PdbPath);
   else
+    consumeError(File.takeError());
+
+  // Check path that was in the executable.
+  if (auto File = loadPdbFile(PathFromExe, Allocator))
+    return std::string(PathFromExe);
+  else
     return File.takeError();
 
   return make_error<RawError>("PDB not found");
@@ -210,12 +216,12 @@ bool NativeSession::addressForVA(uint64_t VA, uint32_t &Section,
 
 bool NativeSession::addressForRVA(uint32_t RVA, uint32_t &Section,
                                   uint32_t &Offset) const {
+  Section = 0;
+  Offset = 0;
+
   auto Dbi = Pdb->getPDBDbiStream();
   if (!Dbi)
     return false;
-
-  Section = 0;
-  Offset = 0;
 
   if ((int32_t)RVA < 0)
     return true;
@@ -231,19 +237,25 @@ bool NativeSession::addressForRVA(uint32_t RVA, uint32_t &Section,
 }
 
 std::unique_ptr<PDBSymbol>
-NativeSession::findSymbolByAddress(uint64_t Address, PDB_SymType Type) const {
-  return nullptr;
+NativeSession::findSymbolByAddress(uint64_t Address, PDB_SymType Type) {
+  uint32_t Section;
+  uint32_t Offset;
+  addressForVA(Address, Section, Offset);
+  return findSymbolBySectOffset(Section, Offset, Type);
 }
 
-std::unique_ptr<PDBSymbol>
-NativeSession::findSymbolByRVA(uint32_t RVA, PDB_SymType Type) const {
-  return nullptr;
+std::unique_ptr<PDBSymbol> NativeSession::findSymbolByRVA(uint32_t RVA,
+                                                          PDB_SymType Type) {
+  uint32_t Section;
+  uint32_t Offset;
+  addressForRVA(RVA, Section, Offset);
+  return findSymbolBySectOffset(Section, Offset, Type);
 }
 
 std::unique_ptr<PDBSymbol>
 NativeSession::findSymbolBySectOffset(uint32_t Sect, uint32_t Offset,
-                                      PDB_SymType Type) const {
-  return nullptr;
+                                      PDB_SymType Type) {
+  return Cache.findSymbolBySectOffset(Sect, Offset, Type);
 }
 
 std::unique_ptr<IPDBEnumLineNumbers>
@@ -255,18 +267,19 @@ NativeSession::findLineNumbers(const PDBSymbolCompiland &Compiland,
 std::unique_ptr<IPDBEnumLineNumbers>
 NativeSession::findLineNumbersByAddress(uint64_t Address,
                                         uint32_t Length) const {
-  return nullptr;
+  return Cache.findLineNumbersByVA(Address, Length);
 }
 
 std::unique_ptr<IPDBEnumLineNumbers>
 NativeSession::findLineNumbersByRVA(uint32_t RVA, uint32_t Length) const {
-  return nullptr;
+  return findLineNumbersByAddress(getLoadAddress() + RVA, Length);
 }
 
 std::unique_ptr<IPDBEnumLineNumbers>
 NativeSession::findLineNumbersBySectOffset(uint32_t Section, uint32_t Offset,
                                            uint32_t Length) const {
-  return nullptr;
+  uint64_t VA = getVAFromSectOffset(Section, Offset);
+  return findLineNumbersByAddress(VA, Length);
 }
 
 std::unique_ptr<IPDBEnumSourceFiles>
@@ -306,7 +319,7 @@ std::unique_ptr<IPDBEnumSourceFiles> NativeSession::getSourceFilesForCompiland(
 
 std::unique_ptr<IPDBSourceFile>
 NativeSession::getSourceFileById(uint32_t FileId) const {
-  return nullptr;
+  return Cache.getSourceFileById(FileId);
 }
 
 std::unique_ptr<IPDBEnumDataStreams> NativeSession::getDebugStreams() const {
@@ -351,4 +364,25 @@ NativeExeSymbol &NativeSession::getNativeGlobalScope() const {
   const_cast<NativeSession &>(*this).initializeExeSymbol();
 
   return Cache.getNativeSymbolById<NativeExeSymbol>(ExeSymbol);
+}
+
+uint32_t NativeSession::getRVAFromSectOffset(uint32_t Section,
+                                             uint32_t Offset) const {
+  if (Section <= 0)
+    return 0;
+
+  auto Dbi = getDbiStreamPtr(*Pdb);
+  if (!Dbi)
+    return 0;
+
+  uint32_t MaxSection = Dbi->getSectionHeaders().size();
+  if (Section > MaxSection + 1)
+    Section = MaxSection + 1;
+  auto &Sec = Dbi->getSectionHeaders()[Section - 1];
+  return Sec.VirtualAddress + Offset;
+}
+
+uint64_t NativeSession::getVAFromSectOffset(uint32_t Section,
+                                            uint32_t Offset) const {
+  return LoadAddress + getRVAFromSectOffset(Section, Offset);
 }

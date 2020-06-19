@@ -38,6 +38,12 @@ StringRef OperationName::getDialect() const {
   return getStringRef().split('.').first;
 }
 
+/// Return the operation name with dialect name stripped, if it has one.
+StringRef OperationName::stripDialect() const {
+  auto splitName = getStringRef().split(".");
+  return splitName.second.empty() ? splitName.first : splitName.second;
+}
+
 /// Return the name of this operation.  This always succeeds.
 StringRef OperationName::getStringRef() const {
   if (auto *op = representation.dyn_cast<const AbstractOperation *>())
@@ -70,9 +76,9 @@ Operation *Operation::create(Location location, OperationName name,
 
 /// Create a new Operation from operation state.
 Operation *Operation::create(const OperationState &state) {
-  return Operation::create(
-      state.location, state.name, state.types, state.operands,
-      MutableDictionaryAttr(state.attributes), state.successors, state.regions);
+  return Operation::create(state.location, state.name, state.types,
+                           state.operands, state.attributes, state.successors,
+                           state.regions);
 }
 
 /// Create a new Operation with the specific fields.
@@ -490,6 +496,20 @@ void Operation::moveBefore(Block *block,
                            llvm::iplist<Operation>::iterator iterator) {
   block->getOperations().splice(iterator, getBlock()->getOperations(),
                                 getIterator());
+}
+
+/// Unlink this operation from its current block and insert it right after
+/// `existingOp` which may be in the same or another block in the same function.
+void Operation::moveAfter(Operation *existingOp) {
+  moveAfter(existingOp->getBlock(), existingOp->getIterator());
+}
+
+/// Unlink this operation from its current block and insert it right after
+/// `iterator` in the specified block.
+void Operation::moveAfter(Block *block,
+                          llvm::iplist<Operation>::iterator iterator) {
+  assert(iterator != block->end() && "cannot move after end of block");
+  moveBefore(&*std::next(iterator));
 }
 
 /// This drops all operand uses from this operation, which is an essential
@@ -1085,17 +1105,27 @@ Value impl::foldCastOp(Operation *op) {
 /// is empty, insert a new block first. `buildTerminatorOp` should return the
 /// terminator operation to insert.
 void impl::ensureRegionTerminator(
-    Region &region, Location loc,
-    function_ref<Operation *(OpBuilder &)> buildTerminatorOp) {
+    Region &region, OpBuilder &builder, Location loc,
+    function_ref<Operation *(OpBuilder &, Location)> buildTerminatorOp) {
+  OpBuilder::InsertionGuard guard(builder);
   if (region.empty())
-    region.push_back(new Block);
+    builder.createBlock(&region);
 
   Block &block = region.back();
   if (!block.empty() && block.back().isKnownTerminator())
     return;
 
-  OpBuilder builder(loc.getContext());
-  block.push_back(buildTerminatorOp(builder));
+  builder.setInsertionPointToEnd(&block);
+  builder.insert(buildTerminatorOp(builder, loc));
+}
+
+/// Create a simple OpBuilder and forward to the OpBuilder version of this
+/// function.
+void impl::ensureRegionTerminator(
+    Region &region, Builder &builder, Location loc,
+    function_ref<Operation *(OpBuilder &, Location)> buildTerminatorOp) {
+  OpBuilder opBuilder(builder.getContext());
+  ensureRegionTerminator(region, opBuilder, loc, buildTerminatorOp);
 }
 
 //===----------------------------------------------------------------------===//

@@ -403,9 +403,22 @@ bool llvm::wouldInstructionBeTriviallyDead(Instruction *I,
         II->getIntrinsicID() == Intrinsic::launder_invariant_group)
       return true;
 
-    // Lifetime intrinsics are dead when their right-hand is undef.
-    if (II->isLifetimeStartOrEnd())
-      return isa<UndefValue>(II->getArgOperand(1));
+    if (II->isLifetimeStartOrEnd()) {
+      auto *Arg = II->getArgOperand(1);
+      // Lifetime intrinsics are dead when their right-hand is undef.
+      if (isa<UndefValue>(Arg))
+        return true;
+      // If the right-hand is an alloc, global, or argument and the only uses
+      // are lifetime intrinsics then the intrinsics are dead.
+      if (isa<AllocaInst>(Arg) || isa<GlobalValue>(Arg) || isa<Argument>(Arg))
+        return llvm::all_of(Arg->uses(), [](Use &Use) {
+          if (IntrinsicInst *IntrinsicUse =
+                  dyn_cast<IntrinsicInst>(Use.getUser()))
+            return IntrinsicUse->isLifetimeStartOrEnd();
+          return false;
+        });
+      return false;
+    }
 
     // Assumptions are dead if their condition is trivially true.  Guards on
     // true are operationally no-ops.  In the future we can consider more
@@ -1168,7 +1181,7 @@ static Align enforceKnownAlignment(Value *V, Align Alignment, Align PrefAlign,
     // stripPointerCasts recurses through infinite layers of bitcasts,
     // while computeKnownBits is not allowed to traverse more than 6
     // levels.
-    Alignment = max(AI->getAlign(), Alignment);
+    Alignment = std::max(AI->getAlign(), Alignment);
     if (PrefAlign <= Alignment)
       return Alignment;
 
@@ -1615,23 +1628,18 @@ static MetadataAsValue *wrapValueInMetadata(LLVMContext &C, Value *V) {
   return MetadataAsValue::get(C, ValueAsMetadata::get(V));
 }
 
-bool llvm::salvageDebugInfo(Instruction &I) {
+/// Where possible to salvage debug information for \p I do so
+/// and return True. If not possible mark undef and return False.
+void llvm::salvageDebugInfo(Instruction &I) {
   SmallVector<DbgVariableIntrinsic *, 1> DbgUsers;
   findDbgUsers(DbgUsers, &I);
-  if (DbgUsers.empty())
-    return false;
-
-  return salvageDebugInfoForDbgValues(I, DbgUsers);
+  salvageDebugInfoForDbgValues(I, DbgUsers);
 }
 
-void llvm::salvageDebugInfoOrMarkUndef(Instruction &I) {
-  if (!salvageDebugInfo(I))
-    replaceDbgUsesWithUndef(&I);
-}
-
-bool llvm::salvageDebugInfoForDbgValues(
+void llvm::salvageDebugInfoForDbgValues(
     Instruction &I, ArrayRef<DbgVariableIntrinsic *> DbgUsers) {
   auto &Ctx = I.getContext();
+  bool Salvaged = false;
   auto wrapMD = [&](Value *V) { return wrapValueInMetadata(Ctx, V); };
 
   for (auto *DII : DbgUsers) {
@@ -1646,14 +1654,22 @@ bool llvm::salvageDebugInfoForDbgValues(
     // salvageDebugInfoImpl should fail on examining the first element of
     // DbgUsers, or none of them.
     if (!DIExpr)
-      return false;
+      break;
 
     DII->setOperand(0, wrapMD(I.getOperand(0)));
     DII->setOperand(2, MetadataAsValue::get(Ctx, DIExpr));
     LLVM_DEBUG(dbgs() << "SALVAGE: " << *DII << '\n');
+    Salvaged = true;
   }
 
-  return true;
+  if (Salvaged)
+    return;
+
+  for (auto *DII : DbgUsers) {
+    Value *Undef = UndefValue::get(I.getType());
+    DII->setOperand(0, MetadataAsValue::get(DII->getContext(),
+                                            ValueAsMetadata::get(Undef)));
+  }
 }
 
 DIExpression *llvm::salvageDebugInfoImpl(Instruction &I,
@@ -1685,13 +1701,14 @@ DIExpression *llvm::salvageDebugInfoImpl(Instruction &I,
   };
 
   if (auto *CI = dyn_cast<CastInst>(&I)) {
-    // No-op casts and zexts are irrelevant for debug info.
-    if (CI->isNoopCast(DL) || isa<ZExtInst>(&I))
+    // No-op casts are irrelevant for debug info.
+    if (CI->isNoopCast(DL))
       return SrcDIExpr;
 
     Type *Type = CI->getType();
-    // Casts other than Trunc or SExt to scalar types cannot be salvaged.
-    if (Type->isVectorTy() || (!isa<TruncInst>(&I) && !isa<SExtInst>(&I)))
+    // Casts other than Trunc, SExt, or ZExt to scalar types cannot be salvaged.
+    if (Type->isVectorTy() ||
+        !(isa<TruncInst>(&I) || isa<SExtInst>(&I) || isa<ZExtInst>(&I)))
       return nullptr;
 
     Value *FromValue = CI->getOperand(0);
@@ -1808,7 +1825,7 @@ static bool rewriteDebugUsers(
 
   if (!UndefOrSalvage.empty()) {
     // Try to salvage the remaining debug users.
-    salvageDebugInfoOrMarkUndef(From);
+    salvageDebugInfo(From);
     Changed = true;
   }
 
@@ -1968,6 +1985,11 @@ CallInst *llvm::createCallMatchingInvoke(InvokeInst *II) {
   NewCall->setAttributes(II->getAttributes());
   NewCall->setDebugLoc(II->getDebugLoc());
   NewCall->copyMetadata(*II);
+
+  // If the invoke had profile metadata, drop it.
+  if (NewCall->hasMetadata(LLVMContext::MD_prof))
+    NewCall->setMetadata(LLVMContext::MD_prof, nullptr);
+
   return NewCall;
 }
 
@@ -2246,7 +2268,7 @@ bool llvm::removeUnreachableBlocks(Function &F, DomTreeUpdater *DTU,
   SmallSetVector<BasicBlock *, 8> DeadBlockSet;
   for (BasicBlock &BB : F) {
     // Skip reachable basic blocks
-    if (Reachable.find(&BB) != Reachable.end())
+    if (Reachable.count(&BB))
       continue;
     DeadBlockSet.insert(&BB);
   }
@@ -3039,31 +3061,26 @@ Value *llvm::invertCondition(Value *Condition) {
   if (match(Condition, m_Not(m_Value(NotCondition))))
     return NotCondition;
 
-  if (Instruction *Inst = dyn_cast<Instruction>(Condition)) {
-    // Third: Check all the users for an invert
-    BasicBlock *Parent = Inst->getParent();
-    for (User *U : Condition->users())
-      if (Instruction *I = dyn_cast<Instruction>(U))
-        if (I->getParent() == Parent && match(I, m_Not(m_Specific(Condition))))
-          return I;
+  BasicBlock *Parent = nullptr;
+  Instruction *Inst = dyn_cast<Instruction>(Condition);
+  if (Inst)
+    Parent = Inst->getParent();
+  else if (Argument *Arg = dyn_cast<Argument>(Condition))
+    Parent = &Arg->getParent()->getEntryBlock();
+  assert(Parent && "Unsupported condition to invert");
 
-    // Last option: Create a new instruction
-    auto Inverted = BinaryOperator::CreateNot(Inst, "");
-    if (isa<PHINode>(Inst)) {
-      // FIXME: This fails if the inversion is to be used in a
-      // subsequent PHINode in the same basic block.
-      Inverted->insertBefore(&*Parent->getFirstInsertionPt());
-    } else {
-      Inverted->insertAfter(Inst);
-    }
-    return Inverted;
-  }
+  // Third: Check all the users for an invert
+  for (User *U : Condition->users())
+    if (Instruction *I = dyn_cast<Instruction>(U))
+      if (I->getParent() == Parent && match(I, m_Not(m_Specific(Condition))))
+        return I;
 
-  if (Argument *Arg = dyn_cast<Argument>(Condition)) {
-    BasicBlock &EntryBlock = Arg->getParent()->getEntryBlock();
-    return BinaryOperator::CreateNot(Condition, Arg->getName() + ".inv",
-                                     &*EntryBlock.getFirstInsertionPt());
-  }
-
-  llvm_unreachable("Unhandled condition to invert");
+  // Last option: Create a new instruction
+  auto *Inverted =
+      BinaryOperator::CreateNot(Condition, Condition->getName() + ".inv");
+  if (Inst && !isa<PHINode>(Inst))
+    Inverted->insertAfter(Inst);
+  else
+    Inverted->insertBefore(&*Parent->getFirstInsertionPt());
+  return Inverted;
 }

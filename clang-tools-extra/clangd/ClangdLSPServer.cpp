@@ -7,9 +7,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "ClangdLSPServer.h"
+#include "CodeComplete.h"
 #include "Diagnostics.h"
 #include "DraftStore.h"
-#include "FormattedString.h"
 #include "GlobalCompilationDatabase.h"
 #include "Protocol.h"
 #include "SemanticHighlighting.h"
@@ -42,6 +42,11 @@
 namespace clang {
 namespace clangd {
 namespace {
+
+// Tracks end-to-end latency of high level lsp calls. Measurements are in
+// seconds.
+constexpr trace::Metric LSPLatency("lsp_latency", trace::Metric::Distribution,
+                                   "method_name");
 
 // LSP defines file versions as numbers that increase.
 // ClangdServer treats them as opaque and therefore uses strings instead.
@@ -185,7 +190,7 @@ public:
     WithContext HandlerContext(handlerContext());
     // Calls can be canceled by the client. Add cancellation context.
     WithContext WithCancel(cancelableRequestContext(ID));
-    trace::Span Tracer(Method);
+    trace::Span Tracer(Method, LSPLatency);
     SPAN_ATTACH(Tracer, "Params", Params);
     ReplyOnce Reply(ID, Method, &Server, Tracer.Args);
     log("<-- {0}({1})", Method, ID);
@@ -297,7 +302,7 @@ public:
         elog("Failed to decode {0} request.", Method);
         return;
       }
-      trace::Span Tracer(Method);
+      trace::Span Tracer(Method, LSPLatency);
       SPAN_ATTACH(Tracer, "Params", RawParams);
       (Server.*Handler)(P);
     };
@@ -509,7 +514,7 @@ void ClangdLSPServer::onInitialize(const InitializeParams &Params,
   if (ClangdServerOpts.ResourceDir)
     Mangler.ResourceDir = *ClangdServerOpts.ResourceDir;
   CDB.emplace(BaseCDB.get(), Params.initializationOptions.fallbackFlags,
-              tooling::ArgumentsAdjuster(Mangler));
+              tooling::ArgumentsAdjuster(std::move(Mangler)));
   {
     // Switch caller's context with LSPServer's background context. Since we
     // rather want to propagate information from LSPServer's context into the
@@ -519,7 +524,7 @@ void ClangdLSPServer::onInitialize(const InitializeParams &Params,
     if (NegotiatedOffsetEncoding)
       WithOffsetEncoding.emplace(kCurrentOffsetEncoding,
                                  *NegotiatedOffsetEncoding);
-    Server.emplace(*CDB, FSProvider, ClangdServerOpts,
+    Server.emplace(*CDB, TFS, ClangdServerOpts,
                    static_cast<ClangdServer::Callbacks *>(this));
   }
   applyConfiguration(Params.initializationOptions.ConfigSettings);
@@ -589,9 +594,8 @@ void ClangdLSPServer::onInitialize(const InitializeParams &Params,
              llvm::json::Object{
                  {"allCommitCharacters", " \t()[]{}<>:;,+-/*%^&#?.=\"'|"},
                  {"resolveProvider", false},
-                 // We do extra checks for '>' and ':' in completion to only
-                 // trigger on '->' and '::'.
-                 {"triggerCharacters", {".", ">", ":"}},
+                 // We do extra checks, e.g. that > is part of ->.
+                 {"triggerCharacters", {".", "<", ">", ":", "\"", "/"}},
              }},
             {"semanticTokensProvider",
              llvm::json::Object{
@@ -1290,7 +1294,7 @@ void ClangdLSPServer::onSemanticTokens(const SemanticTokensParams &Params,
         Result.tokens = toSemanticTokens(*HT);
         {
           std::lock_guard<std::mutex> Lock(SemanticTokensMutex);
-          auto& Last = LastSemanticTokens[File];
+          auto &Last = LastSemanticTokens[File];
 
           Last.tokens = Result.tokens;
           increment(Last.resultId);
@@ -1315,7 +1319,7 @@ void ClangdLSPServer::onSemanticTokensEdits(
         SemanticTokensOrEdits Result;
         {
           std::lock_guard<std::mutex> Lock(SemanticTokensMutex);
-          auto& Last = LastSemanticTokens[File];
+          auto &Last = LastSemanticTokens[File];
 
           if (PrevResultID == Last.resultId) {
             Result.edits = diffTokens(Last.tokens, Toks);
@@ -1336,16 +1340,15 @@ void ClangdLSPServer::onSemanticTokensEdits(
 }
 
 ClangdLSPServer::ClangdLSPServer(
-    class Transport &Transp, const FileSystemProvider &FSProvider,
+    class Transport &Transp, const ThreadsafeFS &TFS,
     const clangd::CodeCompleteOptions &CCOpts,
     const clangd::RenameOptions &RenameOpts,
     llvm::Optional<Path> CompileCommandsDir, bool UseDirBasedCDB,
     llvm::Optional<OffsetEncoding> ForcedOffsetEncoding,
     const ClangdServer::Options &Opts)
     : BackgroundContext(Context::current().clone()), Transp(Transp),
-      MsgHandler(new MessageHandler(*this)), FSProvider(FSProvider),
-      CCOpts(CCOpts), RenameOpts(RenameOpts),
-      SupportedSymbolKinds(defaultSymbolKinds()),
+      MsgHandler(new MessageHandler(*this)), TFS(TFS), CCOpts(CCOpts),
+      RenameOpts(RenameOpts), SupportedSymbolKinds(defaultSymbolKinds()),
       SupportedCompletionItemKinds(defaultCompletionItemKinds()),
       UseDirBasedCDB(UseDirBasedCDB),
       CompileCommandsDir(std::move(CompileCommandsDir)), ClangdServerOpts(Opts),
@@ -1421,23 +1424,19 @@ std::vector<Fix> ClangdLSPServer::getFixes(llvm::StringRef File,
   return FixItsIter->second;
 }
 
+// A completion request is sent when the user types '>' or ':', but we only
+// want to trigger on '->' and '::'. We check the preceeding text to make
+// sure it matches what we expected.
+// Running the lexer here would be more robust (e.g. we can detect comments
+// and avoid triggering completion there), but we choose to err on the side
+// of simplicity here.
 bool ClangdLSPServer::shouldRunCompletion(
     const CompletionParams &Params) const {
-  llvm::StringRef Trigger = Params.context.triggerCharacter;
-  if (Params.context.triggerKind != CompletionTriggerKind::TriggerCharacter ||
-      (Trigger != ">" && Trigger != ":"))
+  if (Params.context.triggerKind != CompletionTriggerKind::TriggerCharacter)
     return true;
-
   auto Code = DraftMgr.getDraft(Params.textDocument.uri.file());
   if (!Code)
     return true; // completion code will log the error for untracked doc.
-
-  // A completion request is sent when the user types '>' or ':', but we only
-  // want to trigger on '->' and '::'. We check the preceeding character to make
-  // sure it matches what we expected.
-  // Running the lexer here would be more robust (e.g. we can detect comments
-  // and avoid triggering completion there), but we choose to err on the side
-  // of simplicity here.
   auto Offset = positionToOffset(Code->Contents, Params.position,
                                  /*AllowColumnsBeyondLineLength=*/false);
   if (!Offset) {
@@ -1445,15 +1444,7 @@ bool ClangdLSPServer::shouldRunCompletion(
          Params.position, Params.textDocument.uri.file());
     return true;
   }
-  if (*Offset < 2)
-    return false;
-
-  if (Trigger == ">")
-    return Code->Contents[*Offset - 2] == '-'; // trigger only on '->'.
-  if (Trigger == ":")
-    return Code->Contents[*Offset - 2] == ':'; // trigger only on '::'.
-  assert(false && "unhandled trigger character");
-  return true;
+  return allowImplicitCompletion(Code->Contents, *Offset);
 }
 
 void ClangdLSPServer::onHighlightingsReady(

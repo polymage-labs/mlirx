@@ -16,6 +16,8 @@
 #include "clang/Frontend/CompilerInvocation.h"
 #include "clang/Frontend/FrontendActions.h"
 #include "clang/Lex/PreprocessorOptions.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Path.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -25,7 +27,9 @@ namespace clangd {
 namespace {
 
 using ::testing::AllOf;
+using ::testing::Contains;
 using ::testing::ElementsAre;
+using ::testing::Not;
 using ::testing::UnorderedElementsAre;
 
 class HeadersTest : public ::testing::Test {
@@ -41,20 +45,19 @@ private:
   std::unique_ptr<CompilerInstance> setupClang() {
     auto Cmd = CDB.getCompileCommand(MainFile);
     assert(static_cast<bool>(Cmd));
-    auto VFS = FS.getFileSystem();
-    VFS->setCurrentWorkingDirectory(Cmd->Directory);
 
     ParseInputs PI;
     PI.CompileCommand = *Cmd;
-    PI.FS = VFS;
+    PI.TFS = &FS;
     auto CI = buildCompilerInvocation(PI, IgnoreDiags);
     EXPECT_TRUE(static_cast<bool>(CI));
     // The diagnostic options must be set before creating a CompilerInstance.
     CI->getDiagnosticOpts().IgnoreWarnings = true;
+    auto VFS = PI.TFS->view(Cmd->Directory);
     auto Clang = prepareCompilerInstance(
         std::move(CI), /*Preamble=*/nullptr,
-        llvm::MemoryBuffer::getMemBuffer(FS.Files[MainFile], MainFile), VFS,
-        IgnoreDiags);
+        llvm::MemoryBuffer::getMemBuffer(FS.Files[MainFile], MainFile),
+        std::move(VFS), IgnoreDiags);
 
     EXPECT_FALSE(Clang->getFrontendOpts().Inputs.empty());
     return Clang;
@@ -117,7 +120,7 @@ protected:
     return Edit;
   }
 
-  MockFSProvider FS;
+  MockFS FS;
   MockCompilationDatabase CDB;
   std::string MainFile = testPath("main.cpp");
   std::string Subdir = testPath("sub");
@@ -127,7 +130,7 @@ protected:
 
 MATCHER_P(Written, Name, "") { return arg.Written == Name; }
 MATCHER_P(Resolved, Name, "") { return arg.Resolved == Name; }
-MATCHER_P(IncludeLine, N, "") { return arg.R.start.line == N; }
+MATCHER_P(IncludeLine, N, "") { return arg.HashLine == N; }
 MATCHER_P(Directive, D, "") { return arg.Directive == D; }
 
 MATCHER_P2(Distance, File, D, "") {
@@ -302,6 +305,27 @@ TEST(Headers, NoHeaderSearchInfo) {
             llvm::None);
 }
 
+TEST_F(HeadersTest, PresumedLocations) {
+  std::string HeaderFile = "__preamble_patch__.h";
+
+  // Line map inclusion back to main file.
+  std::string HeaderContents =
+      llvm::formatv("#line 0 \"{0}\"", llvm::sys::path::filename(MainFile));
+  HeaderContents += R"cpp(
+#line 3
+#include <a.h>)cpp";
+  FS.Files[HeaderFile] = HeaderContents;
+
+  // Including through non-builtin file has no effects.
+  FS.Files[MainFile] = "#include \"__preamble_patch__.h\"\n\n";
+  EXPECT_THAT(collectIncludes().MainFileIncludes,
+              Not(Contains(Written("<a.h>"))));
+
+  // Now include through built-in file.
+  CDB.ExtraClangFlags = {"-include", testPath(HeaderFile)};
+  EXPECT_THAT(collectIncludes().MainFileIncludes,
+              Contains(AllOf(IncludeLine(2), Written("<a.h>"))));
+}
 } // namespace
 } // namespace clangd
 } // namespace clang

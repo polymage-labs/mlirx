@@ -14,13 +14,14 @@
 #ifndef MLIR_DIALECT_AFFINE_IR_AFFINEOPS_H
 #define MLIR_DIALECT_AFFINE_IR_AFFINEOPS_H
 
+#include "mlir/Dialect/Affine/IR/AffineMemoryOpInterfaces.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/StandardTypes.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
-#include "mlir/Interfaces/SideEffects.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 
 namespace mlir {
 class AffineApplyOp;
@@ -32,9 +33,9 @@ class FlatAffineConstraints;
 class OpBuilder;
 
 /// A utility function to check if a value is defined at the top level of an
-/// op with trait `PolyhedralScope` or is a region argument for such an op. A
-/// value of index type defined at the top level is always a valid symbol for
-/// all its uses.
+/// op with trait `AffineScope` or is a region argument for such an op. A value
+/// of index type defined at the top level is always a valid symbol for all its
+/// uses.
 bool isTopLevelValue(Value value);
 
 /// AffineDmaStartOp starts a non-blocking DMA operation that transfers data
@@ -318,7 +319,7 @@ public:
 };
 
 /// Returns true if the given Value can be used as a dimension id in the region
-/// of the closest surrounding op that has the trait `PolyhedralScope`.
+/// of the closest surrounding op that has the trait `AffineScope`.
 bool isValidDim(Value value);
 
 /// Returns true if the given Value can be used as a dimension id in `region`,
@@ -326,7 +327,7 @@ bool isValidDim(Value value);
 bool isValidDim(Value value, Region *region);
 
 /// Returns true if the given value can be used as a symbol in the region of the
-/// closest surrounding op that has the trait `PolyhedralScope`.
+/// closest surrounding op that has the trait `AffineScope`.
 bool isValidSymbol(Value value);
 
 /// Returns true if the given Value can be used as a symbol for `region`, i.e.,
@@ -379,6 +380,21 @@ AffineForOp getForInductionVarOwner(Value val);
 /// in the output argument `ivs`.
 void extractForInductionVars(ArrayRef<AffineForOp> forInsts,
                              SmallVectorImpl<Value> *ivs);
+
+/// Builds a perfect nest of affine "for" loops, i.e. each loop except the
+/// innermost only contains another loop and a terminator. The loops iterate
+/// from "lbs" to "ubs" with "steps". The body of the innermost loop is
+/// populated by calling "bodyBuilderFn" and providing it with an OpBuilder, a
+/// Location and a list of loop induction variables.
+void buildAffineLoopNest(OpBuilder &builder, Location loc,
+                         ArrayRef<int64_t> lbs, ArrayRef<int64_t> ubs,
+                         ArrayRef<int64_t> steps,
+                         function_ref<void(OpBuilder &, Location, ValueRange)>
+                             bodyBuilderFn = nullptr);
+void buildAffineLoopNest(OpBuilder &builder, Location loc, ValueRange lbs,
+                         ValueRange ubs, ArrayRef<int64_t> steps,
+                         function_ref<void(OpBuilder &, Location, ValueRange)>
+                             bodyBuilderFn = nullptr);
 
 /// AffineBound represents a lower or upper bound in the for operation.
 /// This class does not own the underlying operands. Instead, it refers

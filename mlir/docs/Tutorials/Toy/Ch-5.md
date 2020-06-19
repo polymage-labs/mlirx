@@ -76,7 +76,7 @@ void ToyToAffineLoweringPass::runOnFunction() {
 
 Above, we first set the toy dialect to illegal, and then the print operation
 as legal. We could have done this the other way around.
-Individual operations always take precendence over the (more generic) dialect
+Individual operations always take precedence over the (more generic) dialect
 definitions, so the order doesn't matter. See `ConversionTarget::getOpInfo`
 for the details.
 
@@ -124,7 +124,7 @@ struct TransposeOpLowering : public mlir::ConversionPattern {
           // This allows for using the nice named accessors that are generated
           // by the ODS. This adaptor is automatically provided by the ODS
           // framework.
-          TransposeOpOperandAdaptor transposeAdaptor(memRefOperands);
+          TransposeOpAdaptor transposeAdaptor(memRefOperands);
           mlir::Value input = transposeAdaptor.input();
 
           // Transpose the elements by generating a load from the reverse
@@ -268,8 +268,8 @@ func @main() {
   }
 
   // Multiply and store into the output buffer.
-  affine.for %arg0 = 0 to 2 {
-    affine.for %arg1 = 0 to 3 {
+  affine.for %arg0 = 0 to 3 {
+    affine.for %arg1 = 0 to 2 {
       %3 = affine.load %1[%arg0, %arg1] : memref<3x2xf64>
       %4 = affine.load %1[%arg0, %arg1] : memref<3x2xf64>
       %5 = mulf %3, %4 : f64
@@ -336,7 +336,7 @@ func @main() {
 
 Here, we can see that a redundant allocation was removed, the two loop nests
 were fused, and some unnecessary `load`s were removed. You can build `toyc-ch5`
-and try yourself: `toyc-ch5 test/Examples/Toy/Ch5/affine-lowering.mlir 
+and try yourself: `toyc-ch5 test/Examples/Toy/Ch5/affine-lowering.mlir
 -emit=mlir-affine`. We can also check our optimizations by adding `-opt`.
 
 In this chapter we explored some aspects of partial lowering, with the intent to

@@ -20,6 +20,8 @@ add_flang_library(FortranSemantics
   check-omp-structure.cpp
   check-purity.cpp
   check-return.cpp
+  check-select-rank.cpp
+  check-select-type.cpp
   check-stop.cpp
   compute-offsets.cpp
   expression.cpp

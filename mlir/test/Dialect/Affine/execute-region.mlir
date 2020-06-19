@@ -83,14 +83,14 @@ func @external() -> (index)
 
 // CHECK-LABEL: func @search
 func @search(%A : memref<?x?xi32>, %S : memref<?xi32>, %key : i32) {
-  %ni = dim %A, 0 : memref<?x?xi32>
+  %c0 = constant 0 : index
+  %ni = dim %A, %c0 : memref<?x?xi32>
   %c1 = constant 1 : index
   // This loop can be parallelized.
   affine.for %i = 0 to %ni {
     // CHECK: affine.execute_region
     affine.execute_region [%rA, %rS] = (%A, %S) : (memref<?x?xi32>, memref<?xi32>) -> () {
-      %c0 = constant 0 : index
-      %nj = dim %rA, 1 : memref<?x?xi32>
+      %nj = dim %rA, %c1 : memref<?x?xi32>
       br ^bb1(%c0 : index)
 
     ^bb1(%j: index):

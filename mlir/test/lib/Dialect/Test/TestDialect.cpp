@@ -174,6 +174,28 @@ TestBranchOp::getMutableSuccessorOperands(unsigned index) {
 }
 
 //===----------------------------------------------------------------------===//
+// TestFoldToCallOp
+//===----------------------------------------------------------------------===//
+
+namespace {
+struct FoldToCallOpPattern : public OpRewritePattern<FoldToCallOp> {
+  using OpRewritePattern<FoldToCallOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(FoldToCallOp op,
+                                PatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<CallOp>(op, ArrayRef<Type>(), op.calleeAttr(),
+                                        ValueRange());
+    return success();
+  }
+};
+} // end anonymous namespace
+
+void FoldToCallOp::getCanonicalizationPatterns(
+    OwningRewritePatternList &results, MLIRContext *context) {
+  results.insert<FoldToCallOpPattern>(context);
+}
+
+//===----------------------------------------------------------------------===//
 // Test IsolatedRegionOp - parse passthrough region arguments.
 //===----------------------------------------------------------------------===//
 
@@ -201,18 +223,18 @@ static void print(OpAsmPrinter &p, IsolatedRegionOp op) {
 }
 
 //===----------------------------------------------------------------------===//
-// Test PolyhedralScopeOp
+// Test AffineScopeOp
 //===----------------------------------------------------------------------===//
 
-static ParseResult parsePolyhedralScopeOp(OpAsmParser &parser,
-                                          OperationState &result) {
+static ParseResult parseAffineScopeOp(OpAsmParser &parser,
+                                      OperationState &result) {
   // Parse the body region, and reuse the operand info as the argument info.
   Region *body = result.addRegion();
   return parser.parseRegion(*body, /*arguments=*/{}, /*argTypes=*/{});
 }
 
-static void print(OpAsmPrinter &p, PolyhedralScopeOp op) {
-  p << "test.polyhedral_scope ";
+static void print(OpAsmPrinter &p, AffineScopeOp op) {
+  p << "test.affine_scope ";
   p.printRegion(op.region(), /*printEntryBlockArgs=*/false);
 }
 
@@ -323,9 +345,18 @@ LogicalResult TestOpWithVariadicResultsAndFolder::fold(
   return success();
 }
 
+OpFoldResult TestOpInPlaceFold::fold(ArrayRef<Attribute> operands) {
+  assert(operands.size() == 1);
+  if (operands.front()) {
+    setAttr("attr", operands.front());
+    return getResult();
+  }
+  return {};
+}
+
 LogicalResult mlir::OpWithInferTypeInterfaceOp::inferReturnTypes(
     MLIRContext *, Optional<Location> location, ValueRange operands,
-    ArrayRef<NamedAttribute> attributes, RegionRange regions,
+    DictionaryAttr attributes, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   if (operands[0].getType() != operands[1].getType()) {
     return emitOptionalError(location, "operand type mismatch ",
@@ -338,7 +369,7 @@ LogicalResult mlir::OpWithInferTypeInterfaceOp::inferReturnTypes(
 
 LogicalResult OpWithShapedTypeInferTypeInterfaceOp::inferReturnTypeComponents(
     MLIRContext *context, Optional<Location> location, ValueRange operands,
-    ArrayRef<NamedAttribute> attributes, RegionRange regions,
+    DictionaryAttr attributes, RegionRange regions,
     SmallVectorImpl<ShapedTypeComponents> &inferredReturnShapes) {
   // Create return type consisting of the last element of the first operand.
   auto operandType = *operands.getTypes().begin();

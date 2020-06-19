@@ -14,6 +14,9 @@
 #include "TestFS.h"
 #include "refactor/Rename.h"
 #include "support/Logger.h"
+#include "support/TestTracer.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Testing/Support/SupportHelpers.h"
 #include "gmock/gmock.h"
@@ -60,7 +63,7 @@ protected:
       stop();
   }
 
-  MockFSProvider FS;
+  MockFS FS;
   CodeCompleteOptions CCOpts;
   RenameOptions RenameOpts;
   ClangdServer::Options Opts = ClangdServer::optsForTest();
@@ -128,11 +131,19 @@ TEST_F(LSPTest, Diagnostics) {
 
 TEST_F(LSPTest, DiagnosticsHeaderSaved) {
   auto &Client = start();
-  FS.Files["foo.h"] = "#define VAR original";
   Client.didOpen("foo.cpp", R"cpp(
     #include "foo.h"
     int x = VAR;
   )cpp");
+  EXPECT_THAT(Client.diagnostics("foo.cpp"),
+              llvm::ValueIs(testing::ElementsAre(
+                  DiagMessage("'foo.h' file not found"),
+                  DiagMessage("Use of undeclared identifier 'VAR'"))));
+  // Now create the header.
+  FS.Files["foo.h"] = "#define VAR original";
+  Client.notify(
+      "textDocument/didSave",
+      llvm::json::Object{{"textDocument", Client.documentID("foo.h")}});
   EXPECT_THAT(Client.diagnostics("foo.cpp"),
               llvm::ValueIs(testing::ElementsAre(
                   DiagMessage("Use of undeclared identifier 'original'"))));
@@ -147,6 +158,15 @@ TEST_F(LSPTest, DiagnosticsHeaderSaved) {
                   DiagMessage("Use of undeclared identifier 'changed'"))));
 }
 
+TEST_F(LSPTest, RecordsLatencies) {
+  trace::TestTracer Tracer;
+  auto &Client = start();
+  llvm::StringLiteral MethodName = "method_name";
+  EXPECT_THAT(Tracer.takeMetric("lsp_latency", MethodName), testing::SizeIs(0));
+  llvm::consumeError(Client.call(MethodName, {}).take().takeError());
+  stop();
+  EXPECT_THAT(Tracer.takeMetric("lsp_latency", MethodName), testing::SizeIs(1));
+}
 } // namespace
 } // namespace clangd
 } // namespace clang

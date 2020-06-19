@@ -1,4 +1,4 @@
-// RUN: mlir-opt %s -convert-gpu-to-rocdl -split-input-file | FileCheck %s --dump-input-on-failure
+// RUN: mlir-opt %s -convert-gpu-to-rocdl -split-input-file | FileCheck %s
 
 gpu.module @test_module {
   // CHECK-LABEL: func @gpu_index_ops()
@@ -37,6 +37,17 @@ gpu.module @test_module {
                %bIdX, %bIdY, %bIdZ, %gDimX, %gDimY, %gDimZ
         : index, index, index, index, index, index,
           index, index, index, index, index, index
+  }
+}
+
+// -----
+
+gpu.module @test_module {
+  // CHECK-LABEL: func @gpu_sync()
+  func @gpu_sync() {
+    // CHECK: rocdl.barrier
+    gpu.barrier
+    std.return
   }
 }
 

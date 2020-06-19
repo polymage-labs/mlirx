@@ -166,7 +166,7 @@ static mlir::ParseResult parseConstantOp(mlir::OpAsmParser &parser,
   return success();
 }
 
-/// The 'OpAsmPrinter' class is a stream that will allows for formatting
+/// The 'OpAsmPrinter' class is a stream that allows for formatting
 /// strings, attributes, operands, types, etc.
 static void print(mlir::OpAsmPrinter &printer, ConstantOp op) {
   printer << "toy.constant ";
@@ -291,10 +291,9 @@ static mlir::LogicalResult verify(ReturnOp op) {
       resultType.isa<mlir::UnrankedTensorType>())
     return mlir::success();
 
-  return op.emitError() << "type of return operand ("
-                        << *op.operand_type_begin()
+  return op.emitError() << "type of return operand (" << inputType
                         << ") doesn't match function result type ("
-                        << results.front() << ")";
+                        << resultType << ")";
 }
 
 //===----------------------------------------------------------------------===//

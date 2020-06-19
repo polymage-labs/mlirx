@@ -52,7 +52,7 @@ struct EquivalenceObject {
 using EquivalenceSet = std::vector<EquivalenceObject>;
 
 class Scope {
-  using mapType = std::map<SourceName, common::Reference<Symbol>>;
+  using mapType = std::map<SourceName, MutableSymbolRef>;
 
 public:
   ENUM_CLASS(Kind, Global, Module, MainProgram, Subprogram, BlockData,
@@ -89,7 +89,7 @@ public:
   Symbol *symbol() { return symbol_; }
   const Symbol *symbol() const { return symbol_; }
 
-  const Symbol *GetSymbol() const;
+  inline const Symbol *GetSymbol() const;
   const Scope *GetDerivedTypeParent() const;
   const Scope &GetDerivedTypeBase() const;
   std::optional<SourceName> GetName() const;
@@ -110,7 +110,7 @@ public:
 
   // Return symbols in declaration order (the iterators above are in name order)
   SymbolVector GetSymbols() const;
-  std::vector<common::Reference<Symbol>> GetSymbols();
+  MutableSymbolVector GetSymbols();
 
   iterator find(const SourceName &name);
   const_iterator find(const SourceName &name) const {
@@ -147,7 +147,10 @@ public:
   // Make a copy of a symbol in this scope; nullptr if one is already there
   Symbol *CopySymbol(const Symbol &);
 
-  const std::list<EquivalenceSet> &equivalenceSets() const;
+  std::list<EquivalenceSet> &equivalenceSets() { return equivalenceSets_; }
+  const std::list<EquivalenceSet> &equivalenceSets() const {
+    return equivalenceSets_;
+  }
   void add_equivalenceSet(EquivalenceSet &&);
   // Cray pointers are saved as map of pointee name -> pointer symbol
   const mapType &crayPointers() const { return crayPointers_; }
@@ -187,8 +190,8 @@ public:
 
   std::size_t size() const { return size_; }
   void set_size(std::size_t size) { size_ = size; }
-  std::size_t align() const { return align_; }
-  void set_align(std::size_t align) { align_ = align; }
+  std::size_t alignment() const { return alignment_; }
+  void set_alignment(std::size_t alignment) { alignment_ = alignment; }
 
   ImportKind GetImportKind() const;
   // Names appearing in IMPORT statements in this scope
@@ -203,6 +206,9 @@ public:
   const DerivedTypeSpec *derivedTypeSpec() const { return derivedTypeSpec_; }
   DerivedTypeSpec *derivedTypeSpec() { return derivedTypeSpec_; }
   void set_derivedTypeSpec(DerivedTypeSpec &spec) { derivedTypeSpec_ = &spec; }
+
+  bool hasSAVE() const { return hasSAVE_; }
+  void set_hasSAVE(bool yes = true) { hasSAVE_ = yes; }
 
   // The range of the source of this and nested scopes.
   const parser::CharBlock &sourceRange() const { return sourceRange_; }
@@ -226,7 +232,7 @@ private:
   Scope &parent_; // this is enclosing scope, not extended derived type base
   const Kind kind_;
   std::size_t size_{0}; // size in bytes
-  std::size_t align_{0}; // required alignment in bytes
+  std::size_t alignment_{0}; // required alignment in bytes
   parser::CharBlock sourceRange_;
   Symbol *const symbol_; // if not null, symbol_->scope() == this
   std::list<Scope> children_;
@@ -240,6 +246,7 @@ private:
   std::optional<ImportKind> importKind_;
   std::set<SourceName> importNames_;
   DerivedTypeSpec *derivedTypeSpec_{nullptr}; // dTS->scope() == this
+  bool hasSAVE_{false}; // scope has a bare SAVE statement
   // When additional data members are added to Scope, remember to
   // copy them, if appropriate, in InstantiateDerivedType().
 
@@ -252,5 +259,13 @@ private:
 
   friend llvm::raw_ostream &operator<<(llvm::raw_ostream &, const Scope &);
 };
+
+// Inline so that it can be called from Evaluate without a link-time dependency.
+
+inline const Symbol *Scope::GetSymbol() const {
+  return symbol_ ? symbol_
+                 : derivedTypeSpec_ ? &derivedTypeSpec_->typeSymbol() : nullptr;
+}
+
 } // namespace Fortran::semantics
 #endif // FORTRAN_SEMANTICS_SCOPE_H_

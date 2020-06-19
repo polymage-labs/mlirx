@@ -906,14 +906,14 @@ bool SampleProfileLoader::inlineCallInstruction(CallBase &CB) {
   // when cost exceeds threshold without checking all IRs in the callee.
   // The acutal cost does not matter because we only checks isNever() to
   // see if it is legal to inline the callsite.
-  InlineCost Cost = getInlineCost(CB, Params, GetTTI(*CalledFunction), GetAC,
-                                  None, GetTLI, nullptr, nullptr);
+  InlineCost Cost =
+      getInlineCost(CB, Params, GetTTI(*CalledFunction), GetAC, GetTLI);
   if (Cost.isNever()) {
     ORE->emit(OptimizationRemarkAnalysis(CSINLINE_DEBUG, "InlineFail", DLoc, BB)
               << "incompatible inlining");
     return false;
   }
-  InlineFunctionInfo IFI(nullptr, &GetAC);
+  InlineFunctionInfo IFI(nullptr, GetAC);
   if (InlineFunction(CB, IFI).isSuccess()) {
     // The call to InlineFunction erases I, so we can't pass it here.
     ORE->emit(OptimizationRemark(CSINLINE_DEBUG, "InlineSuccess", DLoc, BB)
@@ -933,7 +933,7 @@ bool SampleProfileLoader::shouldInlineColdCallee(CallBase &CallInst) {
     return false;
 
   InlineCost Cost = getInlineCost(CallInst, getInlineParams(), GetTTI(*Callee),
-                                  GetAC, None, GetTLI, nullptr, nullptr);
+                                  GetAC, GetTLI);
 
   return Cost.getCost() <= SampleColdCallSiteThreshold;
 }
@@ -944,7 +944,7 @@ void SampleProfileLoader::emitOptimizationRemarksForInlineCandidates(
   for (auto I : Candidates) {
     Function *CalledFunction = I->getCalledFunction();
     if (CalledFunction) {
-      ORE->emit(OptimizationRemarkAnalysis(CSINLINE_DEBUG, "InlineAttempt", 
+      ORE->emit(OptimizationRemarkAnalysis(CSINLINE_DEBUG, "InlineAttempt",
                                            I->getDebugLoc(), I->getParent())
                 << "previous inlining reattempted for "
                 << (Hot ? "hotness: '" : "size: '")
@@ -1025,7 +1025,7 @@ bool SampleProfileLoader::inlineHotFunctions(
                                      PSI->getOrCompHotCountThreshold());
             continue;
           }
-          auto CalleeFunctionName = FS->getFuncNameInModule(F.getParent());
+          auto CalleeFunctionName = FS->getFuncName();
           // If it is a recursive call, we do not inline it as it could bloat
           // the code exponentially. There is way to better handle this, e.g.
           // clone the caller first, and inline the cloned caller if it is
@@ -1042,6 +1042,7 @@ bool SampleProfileLoader::inlineHotFunctions(
           if (R != SymbolMap.end() && R->getValue() &&
               !R->getValue()->isDeclaration() &&
               R->getValue()->getSubprogram() &&
+              R->getValue()->hasFnAttribute("use-sample-profile") &&
               isLegalToPromote(*I, R->getValue(), &Reason)) {
             uint64_t C = FS->getEntrySamples();
             auto &DI =
@@ -1785,7 +1786,7 @@ SampleProfileLoader::buildFunctionOrder(Module &M, CallGraph *CG) {
 
   if (!ProfileTopDownLoad || CG == nullptr) {
     for (Function &F : M)
-      if (!F.isDeclaration())
+      if (!F.isDeclaration() && F.hasFnAttribute("use-sample-profile"))
         FunctionOrderList.push_back(&F);
     return FunctionOrderList;
   }
@@ -1795,7 +1796,7 @@ SampleProfileLoader::buildFunctionOrder(Module &M, CallGraph *CG) {
   while (!CGI.isAtEnd()) {
     for (CallGraphNode *node : *CGI) {
       auto F = node->getFunction();
-      if (F && !F->isDeclaration())
+      if (F && !F->isDeclaration() && F->hasFnAttribute("use-sample-profile"))
         FunctionOrderList.push_back(F);
     }
     ++CGI;
@@ -1843,15 +1844,16 @@ ModulePass *llvm::createSampleProfileLoaderPass(StringRef Name) {
 
 bool SampleProfileLoader::runOnModule(Module &M, ModuleAnalysisManager *AM,
                                       ProfileSummaryInfo *_PSI, CallGraph *CG) {
-  GUIDToFuncNameMapper Mapper(M, *Reader, GUIDToFuncNameMap);
   if (!ProfileIsValid)
     return false;
+  GUIDToFuncNameMapper Mapper(M, *Reader, GUIDToFuncNameMap);
 
   PSI = _PSI;
-  if (M.getProfileSummary(/* IsCS */ false) == nullptr)
+  if (M.getProfileSummary(/* IsCS */ false) == nullptr) {
     M.setProfileSummary(Reader->getSummary().getMD(M.getContext()),
                         ProfileSummary::PSK_Sample);
-
+    PSI->refresh();
+  }
   // Compute the total number of samples collected in this profile.
   for (const auto &I : Reader->getProfiles())
     TotalCollectedSamples += I.second.getTotalSamples();

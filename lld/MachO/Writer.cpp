@@ -10,6 +10,8 @@
 #include "Config.h"
 #include "InputFiles.h"
 #include "InputSection.h"
+#include "MergedOutputSection.h"
+#include "OutputSection.h"
 #include "OutputSegment.h"
 #include "SymbolTable.h"
 #include "Symbols.h"
@@ -21,6 +23,7 @@
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/Path.h"
 
 using namespace llvm;
 using namespace llvm::MachO;
@@ -37,8 +40,7 @@ public:
   Writer() : buffer(errorHandler().outputBuffer) {}
 
   void scanRelocations();
-  void createHiddenSections();
-  void sortSections();
+  void createOutputSections();
   void createLoadCommands();
   void assignAddresses(OutputSegment *);
   void createSymtabContents();
@@ -53,6 +55,7 @@ public:
   uint64_t fileOff = 0;
   MachHeaderSection *headerSection = nullptr;
   BindingSection *bindingSection = nullptr;
+  LazyBindingSection *lazyBindingSection = nullptr;
   ExportSection *exportSection = nullptr;
   StringTableSection *stringTableSection = nullptr;
   SymtabSection *symtabSection = nullptr;
@@ -61,8 +64,11 @@ public:
 // LC_DYLD_INFO_ONLY stores the offsets of symbol import/export information.
 class LCDyldInfo : public LoadCommand {
 public:
-  LCDyldInfo(BindingSection *bindingSection, ExportSection *exportSection)
-      : bindingSection(bindingSection), exportSection(exportSection) {}
+  LCDyldInfo(BindingSection *bindingSection,
+             LazyBindingSection *lazyBindingSection,
+             ExportSection *exportSection)
+      : bindingSection(bindingSection), lazyBindingSection(lazyBindingSection),
+        exportSection(exportSection) {}
 
   uint32_t getSize() const override { return sizeof(dyld_info_command); }
 
@@ -71,16 +77,21 @@ public:
     c->cmd = LC_DYLD_INFO_ONLY;
     c->cmdsize = getSize();
     if (bindingSection->isNeeded()) {
-      c->bind_off = bindingSection->getFileOffset();
+      c->bind_off = bindingSection->fileOff;
       c->bind_size = bindingSection->getFileSize();
     }
+    if (lazyBindingSection->isNeeded()) {
+      c->lazy_bind_off = lazyBindingSection->fileOff;
+      c->lazy_bind_size = lazyBindingSection->getFileSize();
+    }
     if (exportSection->isNeeded()) {
-      c->export_off = exportSection->getFileOffset();
+      c->export_off = exportSection->fileOff;
       c->export_size = exportSection->getFileSize();
     }
   }
 
   BindingSection *bindingSection;
+  LazyBindingSection *lazyBindingSection;
   ExportSection *exportSection;
 };
 
@@ -101,7 +112,7 @@ public:
 
   uint32_t getSize() const override {
     return sizeof(segment_command_64) +
-           seg->numNonHiddenSections * sizeof(section_64);
+           seg->numNonHiddenSections() * sizeof(section_64);
   }
 
   void writeTo(uint8_t *buf) const override {
@@ -121,14 +132,14 @@ public:
     c->vmaddr = seg->firstSection()->addr;
     c->vmsize =
         seg->lastSection()->addr + seg->lastSection()->getSize() - c->vmaddr;
-    c->nsects = seg->numNonHiddenSections;
+    c->nsects = seg->numNonHiddenSections();
 
     for (auto &p : seg->getSections()) {
       StringRef s = p.first;
-      ArrayRef<InputSection *> sections = p.second;
-      for (InputSection *isec : sections)
-        c->filesize += isec->getFileSize();
-      if (sections[0]->isHidden())
+      OutputSection *section = p.second;
+      c->filesize += section->getFileSize();
+
+      if (section->isHidden())
         continue;
 
       auto *sectHdr = reinterpret_cast<section_64 *>(buf);
@@ -137,16 +148,11 @@ public:
       memcpy(sectHdr->sectname, s.data(), s.size());
       memcpy(sectHdr->segname, name.data(), name.size());
 
-      sectHdr->addr = sections[0]->addr;
-      sectHdr->offset = sections[0]->getFileOffset();
-      sectHdr->align = sections[0]->align;
-      uint32_t maxAlign = 0;
-      for (const InputSection *section : sections)
-        maxAlign = std::max(maxAlign, section->align);
-      sectHdr->align = Log2_32(maxAlign);
-      sectHdr->flags = sections[0]->flags;
-      sectHdr->size = sections.back()->addr + sections.back()->getSize() -
-                      sections[0]->addr;
+      sectHdr->addr = section->addr;
+      sectHdr->offset = section->fileOff;
+      sectHdr->align = Log2_32(section->align);
+      sectHdr->flags = section->flags;
+      sectHdr->size = section->getSize();
     }
   }
 
@@ -162,7 +168,7 @@ class LCMain : public LoadCommand {
     auto *c = reinterpret_cast<entry_point_command *>(buf);
     c->cmd = LC_MAIN;
     c->cmdsize = getSize();
-    c->entryoff = config->entry->getVA() - ImageBase;
+    c->entryoff = config->entry->getFileOffset();
     c->stacksize = 0;
   }
 };
@@ -178,9 +184,9 @@ public:
     auto *c = reinterpret_cast<symtab_command *>(buf);
     c->cmd = LC_SYMTAB;
     c->cmdsize = getSize();
-    c->symoff = symtabSection->getFileOffset();
+    c->symoff = symtabSection->fileOff;
     c->nsyms = symtabSection->getNumSymbols();
-    c->stroff = stringTableSection->getFileOffset();
+    c->stroff = stringTableSection->fileOff;
     c->strsize = stringTableSection->getFileSize();
   }
 
@@ -188,9 +194,13 @@ public:
   StringTableSection *stringTableSection = nullptr;
 };
 
-class LCLoadDylib : public LoadCommand {
+// There are several dylib load commands that share the same structure:
+//   * LC_LOAD_DYLIB
+//   * LC_ID_DYLIB
+//   * LC_REEXPORT_DYLIB
+class LCDylib : public LoadCommand {
 public:
-  LCLoadDylib(StringRef path) : path(path) {}
+  LCDylib(LoadCommandType type, StringRef path) : type(type), path(path) {}
 
   uint32_t getSize() const override {
     return alignTo(sizeof(dylib_command) + path.size() + 1, 8);
@@ -200,7 +210,7 @@ public:
     auto *c = reinterpret_cast<dylib_command *>(buf);
     buf += sizeof(dylib_command);
 
-    c->cmd = LC_LOAD_DYLIB;
+    c->cmd = type;
     c->cmdsize = getSize();
     c->dylib.name = sizeof(dylib_command);
 
@@ -209,31 +219,8 @@ public:
   }
 
 private:
+  LoadCommandType type;
   StringRef path;
-};
-
-class LCIdDylib : public LoadCommand {
-public:
-  LCIdDylib(StringRef name) : name(name) {}
-
-  uint32_t getSize() const override {
-    return alignTo(sizeof(dylib_command) + name.size() + 1, 8);
-  }
-
-  void writeTo(uint8_t *buf) const override {
-    auto *c = reinterpret_cast<dylib_command *>(buf);
-    buf += sizeof(dylib_command);
-
-    c->cmd = LC_ID_DYLIB;
-    c->cmdsize = getSize();
-    c->dylib.name = sizeof(dylib_command);
-
-    memcpy(buf, name.data(), name.size());
-    buf[name.size()] = '\0';
-  }
-
-private:
-  StringRef name;
 };
 
 class LCLoadDylinker : public LoadCommand {
@@ -259,87 +246,25 @@ private:
   // different location.
   const StringRef path = "/usr/lib/dyld";
 };
-
-class SectionComparator {
-public:
-  struct OrderInfo {
-    uint32_t segmentOrder;
-    DenseMap<StringRef, uint32_t> sectionOrdering;
-  };
-
-  SectionComparator() {
-    // This defines the order of segments and the sections within each segment.
-    // Segments that are not mentioned here will end up at defaultPosition;
-    // sections that are not mentioned will end up at the end of the section
-    // list for their given segment.
-    std::vector<std::pair<StringRef, std::vector<StringRef>>> ordering{
-        {segment_names::pageZero, {}},
-        {segment_names::text, {section_names::header}},
-        {defaultPosition, {}},
-        // Make sure __LINKEDIT is the last segment (i.e. all its hidden
-        // sections must be ordered after other sections).
-        {segment_names::linkEdit,
-         {
-             section_names::binding,
-             section_names::export_,
-             section_names::symbolTable,
-             section_names::stringTable,
-         }},
-    };
-
-    for (uint32_t i = 0, n = ordering.size(); i < n; ++i) {
-      auto &p = ordering[i];
-      StringRef segname = p.first;
-      const std::vector<StringRef> &sectOrdering = p.second;
-      OrderInfo &info = orderMap[segname];
-      info.segmentOrder = i;
-      for (uint32_t j = 0, m = sectOrdering.size(); j < m; ++j)
-        info.sectionOrdering[sectOrdering[j]] = j;
-    }
-  }
-
-  // Return a {segmentOrder, sectionOrder} pair. Using this as a key will
-  // ensure that all sections in the same segment are sorted contiguously.
-  std::pair<uint32_t, uint32_t> order(const InputSection *isec) {
-    auto it = orderMap.find(isec->segname);
-    if (it == orderMap.end())
-      return {orderMap[defaultPosition].segmentOrder, 0};
-    OrderInfo &info = it->second;
-    auto sectIt = info.sectionOrdering.find(isec->name);
-    if (sectIt != info.sectionOrdering.end())
-      return {info.segmentOrder, sectIt->second};
-    return {info.segmentOrder, info.sectionOrdering.size()};
-  }
-
-  bool operator()(const InputSection *a, const InputSection *b) {
-    return order(a) < order(b);
-  }
-
-private:
-  const StringRef defaultPosition = StringRef();
-  DenseMap<StringRef, OrderInfo> orderMap;
-};
-
 } // namespace
 
-template <typename SectionType, typename... ArgT>
-SectionType *createInputSection(ArgT &&... args) {
-  auto *section = make<SectionType>(std::forward<ArgT>(args)...);
-  inputSections.push_back(section);
-  return section;
-}
-
 void Writer::scanRelocations() {
-  for (InputSection *sect : inputSections)
-    for (Reloc &r : sect->relocs)
-      if (auto *s = r.target.dyn_cast<Symbol *>())
-        if (auto *dylibSymbol = dyn_cast<DylibSymbol>(s))
-          in.got->addEntry(*dylibSymbol);
+  for (InputSection *isec : inputSections) {
+    for (Reloc &r : isec->relocs) {
+      if (auto *s = r.target.dyn_cast<lld::macho::Symbol *>()) {
+        if (isa<Undefined>(s))
+          error("undefined symbol " + s->getName() + ", referenced from " +
+                sys::path::filename(isec->file->getName()));
+        else
+          target->prepareSymbolRelocation(*s, r.type);
+      }
+    }
+  }
 }
 
 void Writer::createLoadCommands() {
   headerSection->addLoadCommand(
-      make<LCDyldInfo>(bindingSection, exportSection));
+      make<LCDyldInfo>(bindingSection, lazyBindingSection, exportSection));
   headerSection->addLoadCommand(
       make<LCSymtab>(symtabSection, stringTableSection));
   headerSection->addLoadCommand(make<LCDysymtab>());
@@ -350,7 +275,8 @@ void Writer::createLoadCommands() {
     headerSection->addLoadCommand(make<LCLoadDylinker>());
     break;
   case MH_DYLIB:
-    headerSection->addLoadCommand(make<LCIdDylib>(config->installName));
+    headerSection->addLoadCommand(
+        make<LCDylib>(LC_ID_DYLIB, config->installName));
     break;
   default:
     llvm_unreachable("unhandled output file type");
@@ -358,57 +284,125 @@ void Writer::createLoadCommands() {
 
   uint8_t segIndex = 0;
   for (OutputSegment *seg : outputSegments) {
-    if (seg->isNeeded()) {
-      headerSection->addLoadCommand(make<LCSegment>(seg->name, seg));
-      seg->index = segIndex++;
-    }
+    headerSection->addLoadCommand(make<LCSegment>(seg->name, seg));
+    seg->index = segIndex++;
   }
 
   uint64_t dylibOrdinal = 1;
   for (InputFile *file : inputFiles) {
     if (auto *dylibFile = dyn_cast<DylibFile>(file)) {
-      headerSection->addLoadCommand(make<LCLoadDylib>(dylibFile->dylibName));
+      headerSection->addLoadCommand(
+          make<LCDylib>(LC_LOAD_DYLIB, dylibFile->dylibName));
       dylibFile->ordinal = dylibOrdinal++;
+
+      if (dylibFile->reexport)
+        headerSection->addLoadCommand(
+            make<LCDylib>(LC_REEXPORT_DYLIB, dylibFile->dylibName));
     }
   }
-
-  // TODO: dyld requires libSystem to be loaded. libSystem is a universal
-  // binary and we don't have support for that yet, so mock it out here.
-  headerSection->addLoadCommand(
-      make<LCLoadDylib>("/usr/lib/libSystem.B.dylib"));
 }
 
-void Writer::createHiddenSections() {
-  headerSection = createInputSection<MachHeaderSection>();
-  bindingSection = createInputSection<BindingSection>();
-  stringTableSection = createInputSection<StringTableSection>();
-  symtabSection = createInputSection<SymtabSection>(*stringTableSection);
-  exportSection = createInputSection<ExportSection>();
+static size_t getSymbolPriority(const SymbolPriorityEntry &entry,
+                                const InputFile &file) {
+  return std::max(entry.objectFiles.lookup(sys::path::filename(file.getName())),
+                  entry.anyObjectFile);
+}
+
+// Each section gets assigned the priority of the highest-priority symbol it
+// contains.
+static DenseMap<const InputSection *, size_t> buildInputSectionPriorities() {
+  DenseMap<const InputSection *, size_t> sectionPriorities;
+
+  if (config->priorities.empty())
+    return sectionPriorities;
+
+  auto addSym = [&](Defined &sym) {
+    auto it = config->priorities.find(sym.getName());
+    if (it == config->priorities.end())
+      return;
+
+    SymbolPriorityEntry &entry = it->second;
+    size_t &priority = sectionPriorities[sym.isec];
+    priority = std::max(priority, getSymbolPriority(entry, *sym.isec->file));
+  };
+
+  // TODO: Make sure this handles weak symbols correctly.
+  for (InputFile *file : inputFiles)
+    if (isa<ObjFile>(file) || isa<ArchiveFile>(file))
+      for (lld::macho::Symbol *sym : file->symbols)
+        if (auto *d = dyn_cast<Defined>(sym))
+          addSym(*d);
+
+  return sectionPriorities;
+}
+
+// Sorting only can happen once all outputs have been collected. Here we sort
+// segments, output sections within each segment, and input sections within each
+// output segment.
+static void sortSegmentsAndSections() {
+  auto comparator = OutputSegmentComparator();
+  llvm::stable_sort(outputSegments, comparator);
+
+  DenseMap<const InputSection *, size_t> isecPriorities =
+      buildInputSectionPriorities();
+
+  uint32_t sectionIndex = 0;
+  for (OutputSegment *seg : outputSegments) {
+    seg->sortOutputSections(&comparator);
+    for (auto &p : seg->getSections()) {
+      OutputSection *section = p.second;
+      // Now that the output sections are sorted, assign the final
+      // output section indices.
+      if (!section->isHidden())
+        section->index = ++sectionIndex;
+
+      if (!isecPriorities.empty()) {
+        if (auto *merged = dyn_cast<MergedOutputSection>(section)) {
+          llvm::stable_sort(merged->inputs,
+                            [&](InputSection *a, InputSection *b) {
+                              return isecPriorities[a] > isecPriorities[b];
+                            });
+        }
+      }
+    }
+  }
+}
+
+void Writer::createOutputSections() {
+  // First, create hidden sections
+  headerSection = make<MachHeaderSection>();
+  bindingSection = make<BindingSection>();
+  lazyBindingSection = make<LazyBindingSection>();
+  stringTableSection = make<StringTableSection>();
+  symtabSection = make<SymtabSection>(*stringTableSection);
+  exportSection = make<ExportSection>();
 
   switch (config->outputType) {
   case MH_EXECUTE:
-    createInputSection<PageZeroSection>();
+    make<PageZeroSection>();
     break;
   case MH_DYLIB:
     break;
   default:
     llvm_unreachable("unhandled output file type");
   }
-}
 
-void Writer::sortSections() {
-  llvm::stable_sort(inputSections, SectionComparator());
-
-  // TODO This is wrong; input sections ought to be grouped into
-  // output sections, which are then organized like this.
-  uint32_t sectionIndex = 0;
-  // Add input sections to output segments.
+  // Then merge input sections into output sections/segments.
   for (InputSection *isec : inputSections) {
-    if (isec->isNeeded()) {
-      if (!isec->isHidden())
-        isec->sectionIndex = ++sectionIndex;
-      getOrCreateOutputSegment(isec->segname)->addSection(isec);
-    }
+    getOrCreateOutputSegment(isec->segname)
+        ->getOrCreateOutputSection(isec->name)
+        ->mergeInput(isec);
+  }
+
+  // Remove unneeded segments and sections.
+  // TODO: Avoid creating unneeded segments in the first place
+  for (auto it = outputSegments.begin(); it != outputSegments.end();) {
+    OutputSegment *seg = *it;
+    seg->removeUnneededSections();
+    if (!seg->isNeeded())
+      it = outputSegments.erase(it);
+    else
+      ++it;
   }
 }
 
@@ -418,16 +412,15 @@ void Writer::assignAddresses(OutputSegment *seg) {
   seg->fileOff = fileOff;
 
   for (auto &p : seg->getSections()) {
-    ArrayRef<InputSection *> sections = p.second;
-    for (InputSection *isec : sections) {
-      addr = alignTo(addr, isec->align);
-      // We must align the file offsets too to avoid misaligned writes of
-      // structs.
-      fileOff = alignTo(fileOff, isec->align);
-      isec->addr = addr;
-      addr += isec->getSize();
-      fileOff += isec->getFileSize();
-    }
+    OutputSection *section = p.second;
+    addr = alignTo(addr, section->align);
+    fileOff = alignTo(fileOff, section->align);
+    section->addr = addr;
+    section->fileOff = isZeroFill(section->flags) ? 0 : fileOff;
+    section->finalize();
+
+    addr += section->getSize();
+    fileOff += section->getFileSize();
   }
 }
 
@@ -446,26 +439,27 @@ void Writer::openFile() {
 void Writer::writeSections() {
   uint8_t *buf = buffer->getBufferStart();
   for (OutputSegment *seg : outputSegments) {
-    uint64_t fileOff = seg->fileOff;
-    for (auto &sect : seg->getSections()) {
-      for (InputSection *isec : sect.second) {
-        fileOff = alignTo(fileOff, isec->align);
-        isec->writeTo(buf + fileOff);
-        fileOff += isec->getFileSize();
-      }
+    for (auto &p : seg->getSections()) {
+      OutputSection *section = p.second;
+      section->writeTo(buf + section->fileOff);
     }
   }
 }
 
 void Writer::run() {
-  scanRelocations();
-  createHiddenSections();
-  // Sort and assign sections to their respective segments. No more sections can
-  // be created after this method runs.
-  sortSections();
   // dyld requires __LINKEDIT segment to always exist (even if empty).
-  getOrCreateOutputSegment(segment_names::linkEdit);
-  // No more segments can be created after this method runs.
+  OutputSegment *linkEditSegment =
+      getOrCreateOutputSegment(segment_names::linkEdit);
+
+  scanRelocations();
+  if (in.stubHelper->isNeeded())
+    in.stubHelper->setup();
+
+  // Sort and assign sections to their respective segments. No more sections nor
+  // segments may be created after these methods run.
+  createOutputSections();
+  sortSegmentsAndSections();
+
   createLoadCommands();
 
   // Ensure that segments (and the sections they contain) are allocated
@@ -475,17 +469,18 @@ void Writer::run() {
   // determine addresses of other segments/sections before generating its
   // contents.
   for (OutputSegment *seg : outputSegments)
-    assignAddresses(seg);
+    if (seg != linkEditSegment)
+      assignAddresses(seg);
 
   // Fill __LINKEDIT contents.
   bindingSection->finalizeContents();
+  lazyBindingSection->finalizeContents();
   exportSection->finalizeContents();
   symtabSection->finalizeContents();
 
   // Now that __LINKEDIT is filled out, do a proper calculation of its
-  // addresses and offsets. We don't have to recalculate the other segments
-  // since sortSections() ensures that __LINKEDIT is the last segment.
-  assignAddresses(getOutputSegment(segment_names::linkEdit));
+  // addresses and offsets.
+  assignAddresses(linkEditSegment);
 
   openFile();
   if (errorCount())
@@ -500,5 +495,9 @@ void Writer::run() {
 void macho::writeResult() { Writer().run(); }
 
 void macho::createSyntheticSections() {
-  in.got = createInputSection<GotSection>();
+  in.got = make<GotSection>();
+  in.lazyPointers = make<LazyPointerSection>();
+  in.stubs = make<StubsSection>();
+  in.stubHelper = make<StubHelperSection>();
+  in.imageLoaderCache = make<ImageLoaderCacheSection>();
 }

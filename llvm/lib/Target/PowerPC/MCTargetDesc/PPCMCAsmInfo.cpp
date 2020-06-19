@@ -56,6 +56,10 @@ PPCELFMCAsmInfo::PPCELFMCAsmInfo(bool is64Bit, const Triple& T) {
 void PPCXCOFFMCAsmInfo::anchor() {}
 
 PPCXCOFFMCAsmInfo::PPCXCOFFMCAsmInfo(bool Is64Bit, const Triple &T) {
-  assert(!IsLittleEndian && "Little-endian XCOFF not supported.");
+  if (T.getArch() == Triple::ppc64le)
+    report_fatal_error("XCOFF is not supported for little-endian targets");
   CodePointerSize = CalleeSaveStackSlotSize = Is64Bit ? 8 : 4;
+
+  // A size of 8 is only supported by the assembler under 64-bit.
+  Data64bitsDirective = Is64Bit ? "\t.vbyte\t8, " : nullptr;
 }

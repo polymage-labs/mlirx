@@ -1,27 +1,48 @@
-// RUN: not %clang_cc1 -triple x86_64-unknown-unknown -Wno-unused-value -fcxx-exceptions -std=gnu++17 -frecovery-ast -ast-dump %s | FileCheck -strict-whitespace %s
+// RUN: not %clang_cc1 -triple x86_64-unknown-unknown -Wno-unused-value -fcxx-exceptions -std=gnu++17 -frecovery-ast -frecovery-ast-type -ast-dump %s | FileCheck -strict-whitespace %s
 // RUN: not %clang_cc1 -triple x86_64-unknown-unknown -Wno-unused-value -fcxx-exceptions -std=gnu++17 -fno-recovery-ast -ast-dump %s | FileCheck --check-prefix=DISABLED -strict-whitespace %s
 
 int some_func(int *);
 
 // CHECK:     VarDecl {{.*}} invalid_call
-// CHECK-NEXT:`-RecoveryExpr {{.*}} contains-errors
-// CHECK-NEXT:  |-UnresolvedLookupExpr {{.*}} 'some_func'
-// CHECK-NEXT:  `-IntegerLiteral {{.*}} 123
+// CHECK-NEXT: `-ImplicitCastExpr {{.*}} 'int' contains-errors
+// CHECK-NEXT:  `-RecoveryExpr {{.*}} 'int' contains-errors
+// CHECK-NEXT:    |-UnresolvedLookupExpr {{.*}} 'some_func'
+// CHECK-NEXT:    `-IntegerLiteral {{.*}} 123
 // DISABLED-NOT: -RecoveryExpr {{.*}} contains-errors
 int invalid_call = some_func(123);
+void test_invalid_call(int s) {
+  // CHECK:      CallExpr {{.*}} '<dependent type>' contains-errors
+  // CHECK-NEXT: |-UnresolvedLookupExpr {{.*}} 'some_func'
+  // CHECK-NEXT: |-RecoveryExpr {{.*}} <col:13>
+  // CHECK-NEXT: `-BinaryOperator {{.*}}
+  // CHECK-NEXT:   |-RecoveryExpr {{.*}}
+  // CHECK-NEXT:   `-IntegerLiteral {{.*}} <col:28> 'int' 1
+  some_func(undef1, undef2+1);
+
+  // CHECK:      BinaryOperator {{.*}} '<dependent type>' contains-errors '='
+  // CHECK-NEXT: |-DeclRefExpr {{.*}} 's'
+  // CHECK-NEXT: `-CallExpr {{.*}} '<dependent type>' contains-errors
+  // CHECK-NEXT:   |-UnresolvedLookupExpr {{.*}} 'some_func'
+  // CHECK-NEXT:   `-RecoveryExpr {{.*}} contains-errors
+  s = some_func(undef1);
+  // CHECK: `-VarDecl {{.*}} invalid var 'int'
+  // FIXME: preserve the broken call.
+  int var = some_func(undef1);
+}
 
 int ambig_func(double);
 int ambig_func(float);
 
 // CHECK:     VarDecl {{.*}} ambig_call
-// CHECK-NEXT:`-RecoveryExpr {{.*}} contains-errors
-// CHECK-NEXT:  |-UnresolvedLookupExpr {{.*}} 'ambig_func'
-// CHECK-NEXT:  `-IntegerLiteral {{.*}} 123
+// CHECK-NEXT: `-ImplicitCastExpr {{.*}} 'int' contains-errors
+// CHECK-NEXT:  `-RecoveryExpr {{.*}} 'int' contains-errors
+// CHECK-NEXT:    |-UnresolvedLookupExpr {{.*}} 'ambig_func'
+// CHECK-NEXT:    `-IntegerLiteral {{.*}} 123
 // DISABLED-NOT: -RecoveryExpr {{.*}} contains-errors
 int ambig_call = ambig_func(123);
 
 // CHECK:     VarDecl {{.*}} unresolved_call1
-// CHECK-NEXT:`-RecoveryExpr {{.*}} contains-errors
+// CHECK-NEXT:`-RecoveryExpr {{.*}} '<dependent type>' contains-errors
 // CHECK-NEXT:  `-UnresolvedLookupExpr {{.*}} 'bar'
 // DISABLED-NOT: -RecoveryExpr {{.*}} contains-errors
 int unresolved_call1 = bar();
@@ -175,3 +196,18 @@ void InitializerForAuto() {
   // CHECK: `-VarDecl {{.*}} invalid unresolved_typo 'auto'
   auto unresolved_typo = gned.*[] {};
 }
+
+// Verified that the generated call operator is invalid.
+// CHECK: |-CXXMethodDecl {{.*}} invalid operator() 'auto () const -> auto'
+using Escape = decltype([] { return undef(); }());
+
+// CHECK:      VarDecl {{.*}} NoCrashOnInvalidInitList
+// CHECK-NEXT: `-RecoveryExpr {{.*}} '<dependent type>' contains-errors lvalue
+// CHECK-NEXT:   `-InitListExpr
+// CHECK-NEXT:     `-DesignatedInitExpr {{.*}} 'void'
+// CHECK-NEXT:       `-CXXNullPtrLiteralExpr {{.*}} 'nullptr_t'
+struct {
+  int& abc;
+} NoCrashOnInvalidInitList = {
+  .abc = nullptr,
+};

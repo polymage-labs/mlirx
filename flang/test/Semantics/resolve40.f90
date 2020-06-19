@@ -1,4 +1,4 @@
-! RUN: %B/test/Semantics/test_errors.sh %s %flang %t
+! RUN: %S/test_errors.sh %s %t %f18
 subroutine s1
   namelist /nl/x
   block
@@ -69,7 +69,7 @@ subroutine s8
 end
 
 subroutine s9
-  real :: x(4)
+  real :: x(2,2)
   !ERROR: 'i' is already declared in this scoping unit
   data ((x(i,i),i=1,2),i=1,2)/4*0.0/
 end

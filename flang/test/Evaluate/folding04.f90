@@ -1,4 +1,4 @@
-! RUN: %S/test_folding.sh %s %flang %t
+! RUN: %S/test_folding.sh %s %t %f18
 ! Test intrinsic function folding edge case (both expected value and messages)
 ! These tests make assumptions regarding real(4) extrema.
 
@@ -43,4 +43,26 @@ module parentheses
   real(4), parameter :: x_nop = 0.1_4
   real(4), parameter :: x_p = (x_nop)
   logical, parameter :: test_parentheses1 = acos(x_p).EQ.acos(x_nop)
+end module
+
+module specific_extremums
+  ! f18 accepts all type kinds for the arguments of specific extremum intrinsics
+  ! instead of of only default kind (or double precision for DMAX1 and DMIN1).
+  ! This extensions is implemented by using the related generic intrinsic and
+  ! converting the result.
+  ! The tests below are cases where an implementation that converts the arguments to the
+  ! standard required types instead would give different results than the implementation
+  ! specified for f18 (converting the result).
+  integer(8), parameter :: max_i32_8 = 2_8**31-1  
+  integer, parameter :: expected_min0 = int(min(max_i32_8, 2_8*max_i32_8), 4)
+  !WARN: argument types do not match specific intrinsic 'min0' requirements; using 'min' generic instead and converting the result to INTEGER(4) if needed
+  integer, parameter :: result_min0 =  min0(max_i32_8, 2_8*max_i32_8)
+  ! result_min0 would be -2  if arguments were converted to default integer.
+  logical, parameter :: test_min0 = expected_min0 .EQ. result_min0
+
+  real, parameter :: expected_amax0 = real(max(max_i32_8, 2_8*max_i32_8), 4)
+  !WARN: argument types do not match specific intrinsic 'amax0' requirements; using 'max' generic instead and converting the result to REAL(4) if needed
+  real, parameter :: result_amax0 = amax0(max_i32_8, 2_8*max_i32_8)
+  ! result_amax0 would be 2.1474836E+09 if arguments were converted to default integer first.
+  logical, parameter :: test_amax0 = expected_amax0 .EQ. result_amax0
 end module

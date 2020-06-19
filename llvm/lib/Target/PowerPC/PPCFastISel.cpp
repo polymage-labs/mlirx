@@ -1384,7 +1384,7 @@ bool PPCFastISel::processCallArgs(SmallVectorImpl<Value*> &Args,
 
   // Reserve space for the linkage area on the stack.
   unsigned LinkageSize = PPCSubTarget->getFrameLowering()->getLinkageSize();
-  CCInfo.AllocateStack(LinkageSize, 8);
+  CCInfo.AllocateStack(LinkageSize, Align(8));
 
   CCInfo.AnalyzeCallOperands(ArgVTs, ArgFlags, CC_PPC64_ELF_FIS);
 
@@ -1686,9 +1686,6 @@ bool PPCFastISel::fastLowerCall(CallLoweringInfo &CLI) {
 bool PPCFastISel::SelectRet(const Instruction *I) {
 
   if (!FuncInfo.CanLowerReturn)
-    return false;
-
-  if (TLI.supportSplitCSR(FuncInfo.MF))
     return false;
 
   const ReturnInst *Ret = cast<ReturnInst>(I);
@@ -1997,8 +1994,7 @@ unsigned PPCFastISel::PPCMaterializeFP(const ConstantFP *CFP, MVT VT) {
 
   // All FP constants are loaded from the constant pool.
   Align Alignment = DL.getPrefTypeAlign(CFP->getType());
-  unsigned Idx =
-      MCP.getConstantPoolIndex(cast<Constant>(CFP), Alignment.value());
+  unsigned Idx = MCP.getConstantPoolIndex(cast<Constant>(CFP), Alignment);
   const bool HasSPE = PPCSubTarget->hasSPE();
   const TargetRegisterClass *RC;
   if (HasSPE)

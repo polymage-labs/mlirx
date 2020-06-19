@@ -833,7 +833,7 @@ TYPE_PARSER(sourced(first(
     construct<DataStmtConstant>(scalar(Parser<ConstantValue>{})),
     construct<DataStmtConstant>(nullInit),
     construct<DataStmtConstant>(scalar(constantSubobject)) / !"("_tok,
-    construct<DataStmtConstant>(Parser<StructureConstructor>{}),
+    construct<DataStmtConstant>(constant(Parser<StructureConstructor>{})),
     construct<DataStmtConstant>(signedRealLiteralConstant),
     construct<DataStmtConstant>(signedIntLiteralConstant),
     extension<LanguageFeature::SignedComplexLiteral>(
@@ -1184,7 +1184,7 @@ TYPE_PARSER(extension<LanguageFeature::CrayPointer>(construct<BasedPointerStmt>(
 TYPE_PARSER(construct<StructureStmt>("STRUCTURE /" >> name / "/", pure(true),
                 optionalList(entityDecl)) ||
     construct<StructureStmt>(
-        "STRUCTURE" >> name, pure(false), defaulted(cut >> many(entityDecl))))
+        "STRUCTURE" >> name, pure(false), pure<std::list<EntityDecl>>()))
 
 TYPE_PARSER(construct<StructureField>(statement(StructureComponents{})) ||
     construct<StructureField>(indirect(Parser<Union>{})) ||

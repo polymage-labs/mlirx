@@ -9,12 +9,16 @@
 #include "support/Trace.h"
 #include "support/Context.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Chrono.h"
 #include "llvm/Support/FormatProviders.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Threading.h"
 #include <atomic>
+#include <chrono>
+#include <memory>
 #include <mutex>
 
 namespace clang {
@@ -185,6 +189,67 @@ private:
   const llvm::sys::TimePoint<> Start;
 };
 
+// We emit CSV as specified in RFC 4180: https://www.ietf.org/rfc/rfc4180.txt.
+// \r\n line endings are used, cells with \r\n," are quoted, quotes are doubled.
+class CSVMetricTracer : public EventTracer {
+public:
+  CSVMetricTracer(llvm::raw_ostream &Out) : Out(Out) {
+    Start = std::chrono::steady_clock::now();
+
+    Out.SetUnbuffered(); // We write each line atomically.
+    Out << "Kind,Metric,Label,Value,Timestamp\r\n";
+  }
+
+  void record(const Metric &Metric, double Value,
+              llvm::StringRef Label) override {
+    assert(!needsQuote(Metric.Name));
+    std::string QuotedLabel;
+    if (needsQuote(Label))
+      Label = QuotedLabel = quote(Label);
+    uint64_t Micros = std::chrono::duration_cast<std::chrono::microseconds>(
+                          std::chrono::steady_clock::now() - Start)
+                          .count();
+    std::lock_guard<std::mutex> Lock(Mu);
+    Out << llvm::formatv("{0},{1},{2},{3:e},{4}.{5:6}\r\n",
+                         typeName(Metric.Type), Metric.Name, Label, Value,
+                         Micros / 1000000, Micros % 1000000);
+  }
+
+private:
+  llvm::StringRef typeName(Metric::MetricType T) {
+    switch (T) {
+    case Metric::Value:
+      return "v";
+    case Metric::Counter:
+      return "c";
+    case Metric::Distribution:
+      return "d";
+    }
+    llvm_unreachable("Unknown Metric::MetricType enum");
+  }
+
+  static bool needsQuote(llvm::StringRef Text) {
+    // https://www.ietf.org/rfc/rfc4180.txt section 2.6
+    return Text.find_first_of(",\"\r\n") != llvm::StringRef::npos;
+  }
+
+  std::string quote(llvm::StringRef Text) {
+    std::string Result = "\"";
+    for (char C : Text) {
+      Result.push_back(C);
+      if (C == '"')
+        Result.push_back('"');
+    }
+    Result.push_back('"');
+    return Result;
+  }
+
+private:
+  std::mutex Mu;
+  llvm::raw_ostream &Out /*GUARDED_BY(Mu)*/;
+  std::chrono::steady_clock::time_point Start;
+};
+
 Key<std::unique_ptr<JSONTracer::JSONSpan>> JSONTracer::SpanKey;
 
 EventTracer *T = nullptr;
@@ -202,6 +267,10 @@ std::unique_ptr<EventTracer> createJSONTracer(llvm::raw_ostream &OS,
   return std::make_unique<JSONTracer>(OS, Pretty);
 }
 
+std::unique_ptr<EventTracer> createCSVMetricTracer(llvm::raw_ostream &OS) {
+  return std::make_unique<CSVMetricTracer>(OS);
+}
+
 void log(const llvm::Twine &Message) {
   if (!T)
     return;
@@ -209,27 +278,54 @@ void log(const llvm::Twine &Message) {
 }
 
 // Returned context owns Args.
-static Context makeSpanContext(llvm::Twine Name, llvm::json::Object *Args) {
+static Context makeSpanContext(llvm::Twine Name, llvm::json::Object *Args,
+                               const Metric &LatencyMetric) {
   if (!T)
     return Context::current().clone();
   WithContextValue WithArgs{std::unique_ptr<llvm::json::Object>(Args)};
+  llvm::Optional<WithContextValue> WithLatency;
+  using Clock = std::chrono::high_resolution_clock;
+  WithLatency.emplace(llvm::make_scope_exit(
+      [StartTime = Clock::now(), Name = Name.str(), &LatencyMetric] {
+        LatencyMetric.record(
+            std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() -
+                                                                  StartTime)
+                .count(),
+            Name);
+      }));
   return T->beginSpan(Name.isSingleStringRef() ? Name.getSingleStringRef()
                                                : llvm::StringRef(Name.str()),
                       Args);
 }
 
+// Fallback metric that measures latencies for spans without an explicit latency
+// metric. Labels are span names.
+constexpr Metric SpanLatency("span_latency", Metric::Distribution, "span_name");
+
 // Span keeps a non-owning pointer to the args, which is how users access them.
 // The args are owned by the context though. They stick around until the
 // beginSpan() context is destroyed, when the tracing engine will consume them.
-Span::Span(llvm::Twine Name)
+Span::Span(llvm::Twine Name) : Span(Name, SpanLatency) {}
+Span::Span(llvm::Twine Name, const Metric &LatencyMetric)
     : Args(T ? new llvm::json::Object() : nullptr),
-      RestoreCtx(makeSpanContext(Name, Args)) {}
+      RestoreCtx(makeSpanContext(Name, Args, LatencyMetric)) {}
 
 Span::~Span() {
   if (T)
     T->endSpan();
 }
 
+void Metric::record(double Value, llvm::StringRef Label) const {
+  if (!T)
+    return;
+  assert((LabelName.empty() == Label.empty()) &&
+         "recording a measurement with inconsistent labeling");
+  T->record(*this, Value, Label);
+}
+
+Context EventTracer::beginSpan(llvm::StringRef Name, llvm::json::Object *Args) {
+  return Context::current().clone();
+}
 } // namespace trace
 } // namespace clangd
 } // namespace clang

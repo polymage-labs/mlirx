@@ -13,6 +13,7 @@
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/iterator.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <functional>
 #include <vector>
@@ -99,7 +100,7 @@ public:
   void mergeStatisticsInto(OpPassManager &other);
 
 private:
-  OpPassManager(OperationName name, bool disableThreads, bool verifyPasses);
+  OpPassManager(OperationName name, bool verifyPasses);
 
   /// A pointer to an internal implementation instance.
   std::unique_ptr<detail::OpPassManagerImpl> impl;
@@ -138,13 +139,6 @@ public:
   /// Run the passes within this manager on the provided module.
   LLVM_NODISCARD
   LogicalResult run(ModuleOp module);
-
-  /// Disable support for multi-threading within the pass manager.
-  void disableMultithreading(bool disable = true);
-
-  /// Return true if the pass manager is configured with multi-threading
-  /// enabled.
-  bool isMultithreadingEnabled();
 
   /// Enable support for the pass manager to generate a reproducer on the event
   /// of a crash or a pass failure. `outputFile` is a .mlir filename used to
@@ -228,9 +222,12 @@ public:
   ///   potential mutations were made.
   /// * 'out' corresponds to the stream to output the printed IR to.
   void enableIRPrinting(
-      std::function<bool(Pass *, Operation *)> shouldPrintBeforePass,
-      std::function<bool(Pass *, Operation *)> shouldPrintAfterPass,
-      bool printModuleScope, bool printAfterOnlyOnChange, raw_ostream &out);
+      std::function<bool(Pass *, Operation *)> shouldPrintBeforePass =
+          [](Pass *, Operation *) { return true; },
+      std::function<bool(Pass *, Operation *)> shouldPrintAfterPass =
+          [](Pass *, Operation *) { return true; },
+      bool printModuleScope = true, bool printAfterOnlyOnChange = true,
+      raw_ostream &out = llvm::errs());
 
   //===--------------------------------------------------------------------===//
   // Pass Timing

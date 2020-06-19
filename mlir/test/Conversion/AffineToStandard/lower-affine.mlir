@@ -329,7 +329,7 @@ func @if_for() {
 // CHECK-NEXT:     %[[f:.*]] = cmpi "slt", %{{.*}}, %[[e]] : index
 // CHECK-NEXT:     %[[g:.*]] = select %[[f]], %{{.*}}, %[[e]] : index
 // CHECK-NEXT:     %[[c1_0:.*]] = constant 1 : index
-// CHECK-NEXT:     for %{{.*}} = %[[v3]] to %[[v6]] step %[[c1_0]] {
+// CHECK-NEXT:     for %{{.*}} = %[[d]] to %[[g]] step %[[c1_0]] {
 // CHECK-NEXT:       call @body2(%{{.*}}, %{{.*}}) : (index, index) -> ()
 // CHECK-NEXT:     }
 // CHECK-NEXT:   }
@@ -364,7 +364,7 @@ func @loop_min_max(%N : index) {
 // CHECK-NEXT:   %[[c0123456:.+]] = cmpi "slt", %[[r012345]], %{{.*}} : index
 // CHECK-NEXT:   %[[r0123456:.+]] = select %[[c0123456]], %[[r012345]], %{{.*}} : index
 // CHECK-NEXT:   %[[c1:.*]] = constant 1 : index
-// CHECK-NEXT:   for %{{.*}} = %[[c0]] to %[[v11]] step %[[c1]] {
+// CHECK-NEXT:   for %{{.*}} = %[[c0]] to %[[r0123456]] step %[[c1]] {
 // CHECK-NEXT:     call @body(%{{.*}}) : (index) -> ()
 // CHECK-NEXT:   }
 // CHECK-NEXT:   return
@@ -600,7 +600,7 @@ func @affine.execute_region(%I: memref<128xi32>, %M: memref<1024xf32>, %n : inde
       affine.load %rM[%index]: memref<1024xf32>
       return
     }
-  // CHECK:      loop.for %arg3 = %c0 to %c128 step %c1 {
+  // CHECK:      scf.for %arg3 = %c0 to %c128 step %c1 {
   // CHECK-NEXT:   %[[IDX1:.*]] = load %arg0[%arg3] : memref<128xi32>
   // CHECK-NEXT:   %[[IDX2:.*]] = index_cast %[[IDX1]] : i32 to index
   // CHECK-NEXT:   load %arg1[%[[IDX2]]] : memref<1024xf32>
@@ -615,11 +615,11 @@ func @affine.execute_region(%I: memref<128xi32>, %M: memref<1024xf32>, %n : inde
       return
     }
   }
-  // CHECK:      loop.for %arg3 =
+  // CHECK:      scf.for %arg3 =
   // CHECK-NEXT:   %[[UB:.*]] = call @powi(%arg3) : (index) -> index
   // CHECK-NEXT:   %[[LB:.*]] = constant 0 : index
   // CHECK-NEXT:   constant 1 : index
-  // CHECK-NEXT:   loop.for %arg4 = %[[LB]] to %[[UB]] step %c1{{.*}} {
+  // CHECK-NEXT:   scf.for %arg4 = %[[LB]] to %[[UB]] step %c1{{.*}} {
   // CHECK-NEXT:     addi
   // CHECK-NEXT:   }
   // CHECK-NEXT: }

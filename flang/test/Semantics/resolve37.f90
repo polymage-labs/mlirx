@@ -1,4 +1,4 @@
-! RUN: %B/test/Semantics/test_errors.sh %s %flang %t
+! RUN: %S/test_errors.sh %s %t %f18
 ! C701 The type-param-value for a kind type parameter shall be a constant
 ! expression.  This constraint looks like a mistake in the standard.
 integer, parameter :: k = 8
@@ -29,6 +29,11 @@ real, parameter ::  o = o
 integer, parameter ::  p = 0/0
 !ERROR: Must be a constant value
 integer, parameter ::  q = 1+2*(1/0)
+integer not_constant
+!ERROR: Must be a constant value
+integer, parameter :: s1 = not_constant/2
+!ERROR: Must be a constant value
+integer, parameter :: s2 = 3/not_constant
 !ERROR: Must be a constant value
 integer(kind=2/0) r
 integer, parameter :: sok(*)=[1,2]/[1,2]

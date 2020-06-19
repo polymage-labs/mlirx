@@ -857,6 +857,18 @@ private:
   int PragmaMSPointersToMembersState = -1;
   SourceLocation PointersToMembersPragmaLocation;
 
+  /// The pragma float_control state.
+  Optional<unsigned> FpPragmaCurrentValue;
+  SourceLocation FpPragmaCurrentLocation;
+  struct FpPragmaStackEntry {
+    unsigned Value;
+    SourceLocation Location;
+    SourceLocation PushLocation;
+    StringRef SlotLabel;
+  };
+  llvm::SmallVector<FpPragmaStackEntry, 2> FpPragmaStack;
+  llvm::SmallVector<std::string, 2> FpPragmaStrings;
+
   /// The pragma pack state.
   Optional<unsigned> PragmaPackCurrentValue;
   SourceLocation PragmaPackCurrentLocation;
@@ -1355,7 +1367,7 @@ private:
                           unsigned PreviousGeneration = 0);
 
   RecordLocation getLocalBitOffset(uint64_t GlobalOffset);
-  uint64_t getGlobalBitOffset(ModuleFile &M, uint32_t LocalOffset);
+  uint64_t getGlobalBitOffset(ModuleFile &M, uint64_t LocalOffset);
 
   /// Returns the first preprocessed entity ID that begins or ends after
   /// \arg Loc.
@@ -1878,7 +1890,8 @@ public:
   /// ReadBlockAbbrevs - Enter a subblock of the specified BlockID with the
   /// specified cursor.  Read the abbreviations that are at the top of the block
   /// and then leave the cursor pointing into the block.
-  static bool ReadBlockAbbrevs(llvm::BitstreamCursor &Cursor, unsigned BlockID);
+  static bool ReadBlockAbbrevs(llvm::BitstreamCursor &Cursor, unsigned BlockID,
+                               uint64_t *StartOfBlockOffset = nullptr);
 
   /// Finds all the visible declarations with a given name.
   /// The current implementation of this method just loads the entire

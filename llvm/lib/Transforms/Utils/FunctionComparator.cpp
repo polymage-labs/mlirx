@@ -329,8 +329,8 @@ int FunctionComparator::cmpConstants(const Constant *L,
   case Value::ConstantVectorVal: {
     const ConstantVector *LV = cast<ConstantVector>(L);
     const ConstantVector *RV = cast<ConstantVector>(R);
-    unsigned NumElementsL = cast<VectorType>(TyL)->getNumElements();
-    unsigned NumElementsR = cast<VectorType>(TyR)->getNumElements();
+    unsigned NumElementsL = cast<FixedVectorType>(TyL)->getNumElements();
+    unsigned NumElementsR = cast<FixedVectorType>(TyR)->getNumElements();
     if (int Res = cmpNumbers(NumElementsL, NumElementsR))
       return Res;
     for (uint64_t i = 0; i < NumElementsL; ++i) {
@@ -655,6 +655,16 @@ int FunctionComparator::cmpOperations(const Instruction *L,
       return Res;
     return cmpNumbers(RMWI->getSyncScopeID(),
                       cast<AtomicRMWInst>(R)->getSyncScopeID());
+  }
+  if (const ShuffleVectorInst *SVI = dyn_cast<ShuffleVectorInst>(L)) {
+    ArrayRef<int> LMask = SVI->getShuffleMask();
+    ArrayRef<int> RMask = cast<ShuffleVectorInst>(R)->getShuffleMask();
+    if (int Res = cmpNumbers(LMask.size(), RMask.size()))
+      return Res;
+    for (size_t i = 0, e = LMask.size(); i != e; ++i) {
+      if (int Res = cmpNumbers(LMask[i], RMask[i]))
+        return Res;
+    }
   }
   if (const PHINode *PNL = dyn_cast<PHINode>(L)) {
     const PHINode *PNR = cast<PHINode>(R);

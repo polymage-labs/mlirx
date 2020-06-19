@@ -13,6 +13,7 @@
 #include "TestTU.h"
 #include "index/Ref.h"
 #include "refactor/Rename.h"
+#include "support/TestTracer.h"
 #include "clang/Tooling/Core/Replacement.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -24,9 +25,11 @@ namespace clang {
 namespace clangd {
 namespace {
 
+using testing::ElementsAre;
 using testing::Eq;
-using testing::Pair;
 using testing::IsEmpty;
+using testing::Pair;
+using testing::SizeIs;
 using testing::UnorderedElementsAre;
 using testing::UnorderedElementsAreArray;
 
@@ -1016,14 +1019,15 @@ TEST(CrossFileRenameTests, WithUpToDateIndex) {
       },
   };
 
-  for (const auto& T : Cases) {
+  trace::TestTracer Tracer;
+  for (const auto &T : Cases) {
     SCOPED_TRACE(T.FooH);
     Annotations FooH(T.FooH);
     Annotations FooCC(T.FooCC);
     std::string FooHPath = testPath("foo.h");
     std::string FooCCPath = testPath("foo.cc");
 
-    MockFSProvider FS;
+    MockFS FS;
     FS.Files[FooHPath] = std::string(FooH.code());
     FS.Files[FooCCPath] = std::string(FooCC.code());
 
@@ -1038,8 +1042,10 @@ TEST(CrossFileRenameTests, WithUpToDateIndex) {
 
     llvm::StringRef NewName = "NewName";
     for (const auto &RenamePos : FooH.points()) {
+      EXPECT_THAT(Tracer.takeMetric("rename_files"), SizeIs(0));
       auto FileEditsList = llvm::cantFail(runRename(
           Server, FooHPath, RenamePos, NewName, {/*CrossFile=*/true}));
+      EXPECT_THAT(Tracer.takeMetric("rename_files"), ElementsAre(2));
       EXPECT_THAT(
           applyEdits(std::move(FileEditsList)),
           UnorderedElementsAre(
