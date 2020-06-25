@@ -1530,6 +1530,28 @@ void mlir::mapLoopToProcessorIds(scf::ForOp forOp, ArrayRef<Value> processorId,
   forOp.setStep(step);
 }
 
+// Replace affine.for with a 1-d affine.parallel and clone the former's body
+// into the latter while remapping values.
+void mlir::affineParallelize(AffineForOp forOp) {
+  Location loc = forOp.getLoc();
+  OpBuilder outsideBuilder(forOp);
+  // Creating empty 1-D affine.parallel op
+  auto newPloop = outsideBuilder.create<AffineParallelOp>(
+      loc, forOp.getLowerBoundMap(), forOp.getLowerBoundOperands(),
+      forOp.getUpperBoundMap(), forOp.getUpperBoundOperands());
+  auto forOpIV = forOp.getInductionVar();
+  auto parallelIV = newPloop.getIVs()[0];
+  BlockAndValueMapping operandMap;
+  operandMap.map(forOpIV, parallelIV);
+  // Setting insertion point to start of affine parallel op
+  OpBuilder ob = OpBuilder::atBlockBegin(newPloop.getBody());
+  // Remapping arguments from affine.for op to affine.parallel op
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    ob.clone(op, operandMap);
+  }
+  forOp.erase();
+}
+
 /// Given a memref region, determine the lowest depth at which transfers can be
 /// placed for it, and return the corresponding block, start and end positions
 /// in the block for placing incoming (read) and outgoing (write) copies

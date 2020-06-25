@@ -21,6 +21,7 @@
 
 namespace mlir {
 class AffineForOp;
+class AffineParallelOp;
 class FuncOp;
 class LoopLikeOpInterface;
 struct MemRefRegion;
@@ -152,6 +153,11 @@ Loops tile(ArrayRef<scf::ForOp> forOps, ArrayRef<Value> sizes,
 /// in sizes.  Assumes the loop nest is permutable.
 /// Returns the newly created intra-tile loops.
 Loops tilePerfectlyNested(scf::ForOp rootForOp, ArrayRef<Value> sizes);
+
+/// Replaces all affine for ops that can be parallelized with 1-D affine ParallelOp.
+/// mlir::isLoopParallel give the affine forOps which can be parallelized.
+/// No cost model for it to drive this parallelization at the moment.
+void affineParallelize(AffineForOp forOp);
 
 /// Explicit copy / DMA generation options for mlir::affineDataCopyGenerate.
 struct AffineCopyOptions {
