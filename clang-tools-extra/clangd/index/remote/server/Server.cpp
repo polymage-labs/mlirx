@@ -9,16 +9,12 @@
 #include "index/Index.h"
 #include "index/Serialization.h"
 #include "index/remote/marshalling/Marshalling.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/LineEditor/LineEditor.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/FileSystem.h"
-#include "llvm/Support/Path.h"
 #include "llvm/Support/Signals.h"
 
-#include <grpcpp/grpcpp.h>
-#include <grpcpp/health_check_service_interface.h>
+#include <grpc++/grpc++.h>
+#include <grpc++/health_check_service_interface.h>
 
 #include "Index.grpc.pb.h"
 
@@ -27,7 +23,7 @@ namespace clangd {
 namespace remote {
 namespace {
 
-static const std::string Overview = R"(
+static constexpr char Overview[] = R"(
 This is an experimental remote index implementation. The server opens Dex and
 awaits gRPC lookup requests from the client.
 )";

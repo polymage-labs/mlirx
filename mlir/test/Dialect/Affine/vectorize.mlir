@@ -22,8 +22,9 @@ func @inner_loop_simple(%A: memref<2048x2048xf32>) {
 // CHECK-LABEL: func @matvec
 func @matvec(%A: memref<2048x2048xf64>, %X: memref<2048xf64>,
     %Y: memref<2048xf64>) {
-  %M = dim %Y, 0 : memref<2048xf64>
-  %K = dim %X, 0 : memref<2048xf64>
+  %c0 = constant 0 : index
+  %M = dim %Y, %c0 : memref<2048xf64>
+  %K = dim %X, %c0 : memref<2048xf64>
 
   affine.for %i = 0 to %M {
     affine.for %k = 0 to %K {

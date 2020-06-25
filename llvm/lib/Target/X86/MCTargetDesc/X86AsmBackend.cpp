@@ -64,7 +64,7 @@ public:
       else {
         errs() << "invalid argument " << BranchType.str()
                << " to -x86-align-branch=; each element must be one of: fused, "
-                  "jcc, jmp, call, ret, indirect.(plus separated)";
+                  "jcc, jmp, call, ret, indirect.(plus separated)\n";
       }
     }
   }
@@ -1470,7 +1470,7 @@ public:
         //  L0:
         //     .cfi_def_cfa_offset 80
         //
-        StackSize = std::abs(Inst.getOffset()) / StackDivide;
+        StackSize = Inst.getOffset() / StackDivide;
         ++NumDefCFAOffsets;
         break;
       }

@@ -13,7 +13,7 @@
 
 #include "mlir/Dialect/GPU/MemoryPromotion.h"
 #include "mlir/Dialect/GPU/GPUDialect.h"
-#include "mlir/Dialect/LoopOps/EDSC/Builders.h"
+#include "mlir/Dialect/SCF/EDSC/Builders.h"
 #include "mlir/Dialect/StandardOps/EDSC/Intrinsics.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/LoopUtils.h"
@@ -79,7 +79,8 @@ static void insertCopyLoops(OpBuilder &builder, Location loc,
 
   // Produce the loop nest with copies.
   SmallVector<Value, 8> ivs(lbs.size());
-  LoopNestBuilder(ivs, lbs, ubs, steps)([&]() {
+  loopNestBuilder(lbs, ubs, steps, [&](ValueRange loopIvs) {
+    ivs.assign(loopIvs.begin(), loopIvs.end());
     auto activeIvs = llvm::makeArrayRef(ivs).take_back(rank);
     StdIndexedValue fromHandle(from), toHandle(to);
     toHandle(activeIvs) = fromHandle(activeIvs);
@@ -90,7 +91,7 @@ static void insertCopyLoops(OpBuilder &builder, Location loc,
        llvm::enumerate(llvm::reverse(llvm::makeArrayRef(ivs).take_back(
            GPUDialect::getNumWorkgroupDimensions())))) {
     Value v = en.value();
-    auto loop = cast<loop::ForOp>(v.getParentRegion()->getParentOp());
+    auto loop = cast<scf::ForOp>(v.getParentRegion()->getParentOp());
     mapLoopToProcessorIds(loop, {threadIds[en.index()]},
                           {blockDims[en.index()]});
   }
@@ -160,8 +161,12 @@ void mlir::promoteToWorkgroupMemory(GPUFuncOp op, unsigned arg) {
   auto type = value.getType().dyn_cast<MemRefType>();
   assert(type && type.hasStaticShape() && "can only promote memrefs");
 
-  Value attribution =
-      op.addWorkgroupAttribution(type.getShape(), type.getElementType());
+  // Get the type of the buffer in the workgroup memory.
+  int workgroupMemoryAddressSpace = gpu::GPUDialect::getWorkgroupAddressSpace();
+  auto bufferType = MemRefType::get(type.getShape(), type.getElementType(), {},
+                                    workgroupMemoryAddressSpace);
+
+  Value attribution = op.addWorkgroupAttribution(bufferType);
 
   // Replace the uses first since only the original uses are currently present.
   // Then insert the copies.

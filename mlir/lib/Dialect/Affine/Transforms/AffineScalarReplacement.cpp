@@ -17,10 +17,10 @@
 
 #include "PassDetail.h"
 #include "mlir/Analysis/AffineAnalysis.h"
-#include "mlir/Analysis/Dominance.h"
 #include "mlir/Analysis/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/LoopUtils.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -223,7 +223,7 @@ bool AffineScalarReplacement::forwardStoreToLoad(FuncOp f) {
 void AffineScalarReplacement::runOnFunction() {
   // Only supports single block functions at the moment.
   FuncOp f = getFunction();
-  if (f.getBlocks().size() != 1) {
+  if (!llvm::hasSingleElement(f)) {
     markAllAnalysesPreserved();
     return;
   }

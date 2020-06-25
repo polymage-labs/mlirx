@@ -3,30 +3,13 @@ import os
 import tempfile
 import subprocess
 import sys
+import platform
 
 import lit.Test
 import lit.TestRunner
 import lit.util
 from lit.formats.base import TestFormat
 
-def getBuildDir(cmd):
-    found = False
-    for arg in cmd:
-        if found:
-            return arg
-        if arg == '--build-dir':
-            found = True
-    return None
-
-def mkdir_p(path):
-    import errno
-    try:
-        os.makedirs(path)
-    except OSError as e:
-        if e.errno != errno.EEXIST:
-            raise
-    if not os.path.isdir(path):
-        raise OSError(errno.ENOTDIR, "%s is not a directory"%path)
 
 class LLDBTest(TestFormat):
     def __init__(self, dotest_cmd):
@@ -62,36 +45,20 @@ class LLDBTest(TestFormat):
             return (lit.Test.UNSUPPORTED, 'Test is unsupported')
 
         testPath, testFile = os.path.split(test.getSourcePath())
+
+        # The Python used to run lit can be different from the Python LLDB was
+        # build with.
+        executable = test.config.python_executable
+
         # On Windows, the system does not always correctly interpret
         # shebang lines.  To make sure we can execute the tests, add
         # python exe as the first parameter of the command.
-        cmd = [sys.executable] + self.dotest_cmd + [testPath, '-p', testFile]
-
-        builddir = getBuildDir(cmd)
-        mkdir_p(builddir)
-
-        # The macOS system integrity protection (SIP) doesn't allow injecting
-        # libraries into system binaries, but this can be worked around by
-        # copying the binary into a different location.
-        if 'DYLD_INSERT_LIBRARIES' in test.config.environment and \
-                (sys.executable.startswith('/System/') or \
-                sys.executable.startswith('/usr/bin/')):
-            copied_python = os.path.join(builddir, 'copied-system-python')
-            if not os.path.isfile(copied_python):
-                import shutil, subprocess
-                python = subprocess.check_output([
-                    sys.executable,
-                    '-c',
-                    'import sys; print(sys.executable)'
-                ]).decode('utf-8').strip()
-                shutil.copy(python, copied_python)
-            cmd[0] = copied_python
+        cmd = [executable] + self.dotest_cmd + [testPath, '-p', testFile]
 
         if 'lldb-repro-capture' in test.config.available_features or \
            'lldb-repro-replay' in test.config.available_features:
-            reproducer_root = os.path.join(builddir, 'reproducers')
-            mkdir_p(reproducer_root)
-            reproducer_path = os.path.join(reproducer_root, testFile)
+            reproducer_path = os.path.join(
+                test.config.lldb_reproducer_directory, testFile)
             if 'lldb-repro-capture' in test.config.available_features:
                 cmd.extend(['--capture-path', reproducer_path])
             else:
@@ -111,9 +78,14 @@ class LLDBTest(TestFormat):
                 litConfig.maxIndividualTestTime)
 
         if sys.version_info.major == 2:
-            # In Python 2, string objects can contain Unicode characters.
-            out = out.decode('utf-8')
-            err = err.decode('utf-8')
+            # In Python 2, string objects can contain Unicode characters. Use
+            # the non-strict 'replace' decoding mode. We cannot use the strict
+            # mode right now because lldb's StringPrinter facility and the
+            # Python utf8 decoder have different interpretations of which
+            # characters are "printable". This leads to Python utf8 decoding
+            # exceptions even though lldb is behaving as expected.
+            out = out.decode('utf-8', 'replace')
+            err = err.decode('utf-8', 'replace')
 
         output = """Script:\n--\n%s\n--\nExit Code: %d\n""" % (
             ' '.join(cmd), exitCode)

@@ -22,6 +22,12 @@ if(CLANG_BUILT_STANDALONE)
   endif()
 endif()
 
+if (CLANGD_ENABLE_REMOTE)
+  include_directories(${CMAKE_CURRENT_BINARY_DIR}/../index/remote)
+  add_definitions(-DGOOGLE_PROTOBUF_NO_RTTI=1)
+  set(REMOTE_TEST_SOURCES remote/MarshallingTests.cpp)
+endif()
+
 add_custom_target(ClangdUnitTests)
 add_unittest(ClangdUnitTests ClangdTests
   Annotations.cpp
@@ -34,6 +40,7 @@ add_unittest(ClangdUnitTests ClangdTests
   CodeCompletionStringsTests.cpp
   CollectMacrosTests.cpp
   CompileCommandsTests.cpp
+  CompilerTests.cpp
   DexTests.cpp
   DiagnosticsTests.cpp
   DraftStoreTests.cpp
@@ -42,7 +49,6 @@ add_unittest(ClangdUnitTests ClangdTests
   FileIndexTests.cpp
   FindSymbolsTests.cpp
   FindTargetTests.cpp
-  FormattedStringTests.cpp
   FormatTests.cpp
   FSTests.cpp
   FuzzyMatchTests.cpp
@@ -82,8 +88,12 @@ add_unittest(ClangdUnitTests ClangdTests
   support/CancellationTests.cpp
   support/ContextTests.cpp
   support/FunctionTests.cpp
+  support/MarkupTests.cpp
   support/ThreadingTests.cpp
+  support/TestTracer.cpp
   support/TraceTests.cpp
+
+  ${REMOTE_TEST_SOURCES}
 
   $<TARGET_OBJECTS:obj.clangDaemonTweaks>
   )
@@ -110,9 +120,14 @@ target_link_libraries(ClangdTests
   clangDaemon
   clangdSupport
   clangTidy
-  LLVMSupport
   LLVMTestingSupport
   )
+
+if (CLANGD_ENABLE_REMOTE)
+  target_link_libraries(ClangdTests
+    PRIVATE
+    clangdRemoteMarshalling)
+endif()
 
 if (CLANGD_BUILD_XPC)
   add_subdirectory(xpc)

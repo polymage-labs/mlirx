@@ -486,7 +486,8 @@ unsigned DWARFVerifier::verifyDebugInfoAttribute(const DWARFDie &Die,
       DWARFUnit *U = Die.getDwarfUnit();
       for (const auto &Entry : *Loc) {
         DataExtractor Data(toStringRef(Entry.Expr), DCtx.isLittleEndian(), 0);
-        DWARFExpression Expression(Data, U->getAddressByteSize());
+        DWARFExpression Expression(Data, U->getAddressByteSize(),
+                                   U->getFormParams().Format);
         bool Error = any_of(Expression, [](DWARFExpression::Operation &Op) {
           return Op.isError();
         });
@@ -762,7 +763,7 @@ void DWARFVerifier::verifyDebugLineRows() {
                 << "] row[" << RowIndex
                 << "] decreases in address from previous row:\n";
 
-        DWARFDebugLine::Row::dumpTableHeader(OS);
+        DWARFDebugLine::Row::dumpTableHeader(OS, 0);
         if (RowIndex > 0)
           LineTable->Rows[RowIndex - 1].dump(OS);
         Row.dump(OS);
@@ -780,7 +781,7 @@ void DWARFVerifier::verifyDebugLineRows() {
                 << " (valid values are [" << (isDWARF5 ? "0," : "1,")
                 << LineTable->Prologue.FileNames.size()
                 << (isDWARF5 ? ")" : "]") << "):\n";
-        DWARFDebugLine::Row::dumpTableHeader(OS);
+        DWARFDebugLine::Row::dumpTableHeader(OS, 0);
         Row.dump(OS);
         OS << '\n';
       }
@@ -1294,7 +1295,8 @@ static bool isVariableIndexable(const DWARFDie &Die, DWARFContext &DCtx) {
   for (const auto &Entry : *Loc) {
     DataExtractor Data(toStringRef(Entry.Expr), DCtx.isLittleEndian(),
                        U->getAddressByteSize());
-    DWARFExpression Expression(Data, U->getAddressByteSize());
+    DWARFExpression Expression(Data, U->getAddressByteSize(),
+                               U->getFormParams().Format);
     bool IsInteresting = any_of(Expression, [](DWARFExpression::Operation &Op) {
       return !Op.isError() && (Op.getCode() == DW_OP_addr ||
                                Op.getCode() == DW_OP_form_tls_address ||

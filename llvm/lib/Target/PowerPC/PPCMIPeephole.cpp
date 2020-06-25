@@ -57,6 +57,8 @@ STATISTIC(NumRotatesCollapsed,
           "Number of pairs of rotate left, clear left/right collapsed");
 STATISTIC(NumEXTSWAndSLDICombined,
           "Number of pairs of EXTSW and SLDI combined as EXTSWSLI");
+STATISTIC(NumLoadImmZeroFoldedAndRemoved,
+          "Number of LI(8) reg, 0 that are folded to r0 and removed");
 
 static cl::opt<bool>
 FixedPointRegToImm("ppc-reg-to-imm-fixed-point", cl::Hidden, cl::init(true),
@@ -319,7 +321,22 @@ bool PPCMIPeephole::simplifyCode(void) {
 
       default:
         break;
-
+      case PPC::LI:
+      case PPC::LI8: {
+        // If we are materializing a zero, look for any use operands for which
+        // zero means immediate zero. All such operands can be replaced with
+        // PPC::ZERO.
+        if (!MI.getOperand(1).isImm() || MI.getOperand(1).getImm() != 0)
+          break;
+        unsigned MIDestReg = MI.getOperand(0).getReg();
+        for (MachineInstr& UseMI : MRI->use_instructions(MIDestReg))
+          Simplified |= TII->onlyFoldImmediate(UseMI, MI, MIDestReg);
+        if (MRI->use_nodbg_empty(MIDestReg)) {
+          ++NumLoadImmZeroFoldedAndRemoved;
+          ToErase = &MI;
+        }
+        break;
+      }
       case PPC::STD: {
         MachineFrameInfo &MFI = MF->getFrameInfo();
         if (MFI.hasVarSizedObjects() ||
@@ -889,11 +906,6 @@ bool PPCMIPeephole::simplifyCode(void) {
         // while in PowerPC ISA, lowerest bit is at index 63.
         APInt MaskSrc =
             APInt::getBitsSetWithWrap(32, 32 - MESrc - 1, 32 - MBSrc);
-        // Current APInt::getBitsSetWithWrap sets all bits to 0 if loBit is
-        // equal to highBit.
-        // If MBSrc - MESrc == 1, we expect a full set mask instead of Null.
-        if (SrcMaskFull && (MBSrc - MESrc == 1))
-          MaskSrc.setAllBits();
 
         APInt RotatedSrcMask = MaskSrc.rotl(SHMI);
         APInt FinalMask = RotatedSrcMask & MaskMI;
@@ -1547,6 +1559,12 @@ bool PPCMIPeephole::emitRLDICWhenLoweringJumpTables(MachineInstr &MI) {
   LLVM_DEBUG(dbgs() << "To: ");
   LLVM_DEBUG(MI.dump());
   NumRotatesCollapsed++;
+  // If SrcReg has no non-debug use it's safe to delete its def SrcMI.
+  if (MRI->use_nodbg_empty(SrcReg)) {
+    assert(!SrcMI->hasImplicitDef() &&
+           "Not expecting an implicit def with this instr.");
+    SrcMI->eraseFromParent();
+  }
   return true;
 }
 

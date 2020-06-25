@@ -1,4 +1,4 @@
-! RUN: %B/test/Semantics/test_errors.sh %s %flang %t
+! RUN: %S/test_errors.sh %s %t %f18
 ! Test BLOCK DATA subprogram (14.3)
 block data foo
   !ERROR: IMPORT is not allowed in a BLOCK DATA subprogram
@@ -11,9 +11,6 @@ block data foo
   procedure(sin), pointer :: p => cos
   !ERROR: 'p' is already declared as a procedure
   common /block/ pi, p
-  real :: inBlankCommon
-  data inBlankCommon / 1.0 /
-  common inBlankCommon
   !ERROR: An initialized variable in BLOCK DATA must be in a COMMON block
   integer :: inDataButNotCommon
   data inDataButNotCommon /1/

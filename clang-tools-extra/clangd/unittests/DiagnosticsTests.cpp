@@ -50,6 +50,12 @@ WithNote(::testing::Matcher<Note> NoteMatcher) {
   return Field(&Diag::Notes, ElementsAre(NoteMatcher));
 }
 
+::testing::Matcher<const Diag &>
+WithNote(::testing::Matcher<Note> NoteMatcher1,
+         ::testing::Matcher<Note> NoteMatcher2) {
+  return Field(&Diag::Notes, UnorderedElementsAre(NoteMatcher1, NoteMatcher2));
+}
+
 MATCHER_P2(Diag, Range, Message,
            "Diag at " + llvm::to_string(Range) + " = [" + Message + "]") {
   return arg.Range == Range && arg.Message == Message;
@@ -272,6 +278,51 @@ TEST(DiagnosticsTest, ClangTidy) {
                   "use a trailing return type for this function")))));
 }
 
+TEST(DiagnosticTest, TemplatesInHeaders) {
+  // Diagnostics from templates defined in headers are placed at the expansion.
+  Annotations Main(R"cpp(
+    Derived<int> [[y]]; // error-ok
+  )cpp");
+  Annotations Header(R"cpp(
+    template <typename T>
+    struct Derived : [[T]] {};
+  )cpp");
+  TestTU TU = TestTU::withCode(Main.code());
+  TU.HeaderCode = Header.code().str();
+  EXPECT_THAT(
+      TU.build().getDiagnostics(),
+      ElementsAre(AllOf(
+          Diag(Main.range(), "in template: base specifier must name a class"),
+          WithNote(Diag(Header.range(), "error occurred here"),
+                   Diag(Main.range(), "in instantiation of template class "
+                                      "'Derived<int>' requested here")))));
+}
+
+TEST(DiagnosticTest, MakeUnique) {
+  // We usually miss diagnostics from header functions as we don't parse them.
+  // std::make_unique is an exception.
+  Annotations Main(R"cpp(
+    struct S { S(char*); };
+    auto x = std::[[make_unique]]<S>(42); // error-ok
+  )cpp");
+  TestTU TU = TestTU::withCode(Main.code());
+  TU.HeaderCode = R"cpp(
+    namespace std {
+    // These mocks aren't quite right - we omit unique_ptr for simplicity.
+    // forward is included to show its body is not needed to get the diagnostic.
+    template <typename T> T&& forward(T& t) { return static_cast<T&&>(t); }
+    template <typename T, typename... A> T* make_unique(A&&... args) {
+       return new T(std::forward<A>(args)...);
+    }
+    }
+  )cpp";
+  EXPECT_THAT(TU.build().getDiagnostics(),
+              UnorderedElementsAre(
+                  Diag(Main.range(),
+                       "in template: "
+                       "no matching constructor for initialization of 'S'")));
+}
+
 TEST(DiagnosticTest, NoMultipleDiagnosticInFlight) {
   Annotations Main(R"cpp(
     template <typename T> struct Foo {
@@ -374,23 +425,17 @@ n]] = 10; // error-ok
                   Fix(Source.range(), "ident", "change 'ide\\…' to 'ident'"))));
 }
 
-TEST(DiagnosticTest, ClangTidyWarningAsErrorTrumpsSuppressionComment) {
+TEST(DiagnosticTest, ClangTidySuppressionCommentTrumpsWarningAsError) {
   Annotations Main(R"cpp(
     int main() {
       int i = 3;
-      double f = [[8]] / i;  // NOLINT // error-ok
+      double f = [[8]] / i;  // NOLINT
     }
   )cpp");
   TestTU TU = TestTU::withCode(Main.code());
   TU.ClangTidyChecks = "bugprone-integer-division";
   TU.ClangTidyWarningsAsErrors = "bugprone-integer-division";
-  EXPECT_THAT(
-      TU.build().getDiagnostics(),
-      UnorderedElementsAre(::testing::AllOf(
-          Diag(Main.range(), "result of integer division used in a floating "
-                             "point context; possible loss of precision"),
-          DiagSource(Diag::ClangTidy), DiagName("bugprone-integer-division"),
-          DiagSeverity(DiagnosticsEngine::Error))));
+  EXPECT_THAT(TU.build().getDiagnostics(), UnorderedElementsAre());
 }
 
 TEST(DiagnosticsTest, Preprocessor) {
@@ -502,8 +547,8 @@ TEST(DiagnosticsTest, ToLSP) {
       URIForFile::canonicalize(testPath("foo/bar/header.h"), "");
 
   clangd::Diag D;
-  D.ID = clang::diag::err_enum_class_reference;
-  D.Name = "enum_class_reference";
+  D.ID = clang::diag::err_undeclared_var_use;
+  D.Name = "undeclared_var_use";
   D.Source = clangd::Diag::Clang;
   D.Message = "something terrible happened";
   D.Range = {pos(1, 2), pos(3, 4)};
@@ -539,7 +584,7 @@ TEST(DiagnosticsTest, ToLSP) {
   clangd::Diagnostic MainLSP;
   MainLSP.range = D.Range;
   MainLSP.severity = getSeverity(DiagnosticsEngine::Error);
-  MainLSP.code = "enum_class_reference";
+  MainLSP.code = "undeclared_var_use";
   MainLSP.source = "clang";
   MainLSP.message =
       R"(Something terrible happened (fix available)
@@ -570,7 +615,7 @@ main.cpp:2:3: error: something terrible happened)";
       LSPDiags,
       ElementsAre(Pair(EqualToLSPDiag(MainLSP), ElementsAre(EqualToFix(F))),
                   Pair(EqualToLSPDiag(NoteInMainLSP), IsEmpty())));
-  EXPECT_EQ(LSPDiags[0].first.code, "enum_class_reference");
+  EXPECT_EQ(LSPDiags[0].first.code, "undeclared_var_use");
   EXPECT_EQ(LSPDiags[0].first.source, "clang");
   EXPECT_EQ(LSPDiags[1].first.code, "");
   EXPECT_EQ(LSPDiags[1].first.source, "");
@@ -1037,6 +1082,20 @@ TEST(DiagsInHeaders, OnlyErrorOrFatal) {
                   Diag(Main.range(), "in included file: C++ requires "
                                      "a type specifier for all declarations"),
                   WithNote(Diag(Header.range(), "error occurred here")))));
+}
+
+TEST(DiagsInHeaders, OnlyDefaultErrorOrFatal) {
+  Annotations Main(R"cpp(
+    #include [["a.h"]] // get unused "foo" warning when building preamble.
+    )cpp");
+  Annotations Header(R"cpp(
+    namespace { void foo() {} }
+    void func() {foo();} ;)cpp");
+  TestTU TU = TestTU::withCode(Main.code());
+  TU.AdditionalFiles = {{"a.h", std::string(Header.code())}};
+  // promote warnings to errors.
+  TU.ExtraArgs = {"-Werror", "-Wunused"};
+  EXPECT_THAT(TU.build().getDiagnostics(), IsEmpty());
 }
 
 TEST(DiagsInHeaders, FromNonWrittenSources) {

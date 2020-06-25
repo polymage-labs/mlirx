@@ -13,6 +13,7 @@
 #include "llvm/ADT/SmallVector.h"
 
 #include "DWARFAbbreviationDeclaration.h"
+#include "DWARFBaseDIE.h"
 #include "DWARFDebugAbbrev.h"
 #include "DWARFDebugRanges.h"
 #include <map>
@@ -47,10 +48,11 @@ public:
   bool Extract(const lldb_private::DWARFDataExtractor &data,
                const DWARFUnit *cu, lldb::offset_t *offset_ptr);
 
-  size_t GetAttributes(const DWARFUnit *cu,
-                       DWARFAttributes &attrs,
-                       uint32_t curr_depth = 0)
-      const; // "curr_depth" for internal use only, don't set this yourself!!!
+  using Recurse = DWARFBaseDIE::Recurse;
+  size_t GetAttributes(const DWARFUnit *cu, DWARFAttributes &attrs,
+                       Recurse recurse = Recurse::yes) const {
+    return GetAttributes(cu, attrs, recurse, 0 /* curr_depth */);
+  }
 
   dw_offset_t
   GetAttributeValue(const DWARFUnit *cu, const dw_attr_t attr,
@@ -98,15 +100,6 @@ public:
 
   const char *GetQualifiedName(DWARFUnit *cu, const DWARFAttributes &attributes,
                                std::string &storage) const;
-
-  void Dump(const DWARFUnit *cu, lldb_private::Stream &s,
-            uint32_t recurse_depth) const;
-
-  static void
-  DumpAttribute(const DWARFUnit *cu,
-                const lldb_private::DWARFDataExtractor &data,
-                lldb::offset_t *offset_ptr, lldb_private::Stream &s,
-                dw_attr_t attr, DWARFFormValue &form_value);
 
   bool GetDIENamesAndRanges(
       DWARFUnit *cu, const char *&name, const char *&mangled,
@@ -185,6 +178,10 @@ protected:
   /// A copy of the DW_TAG value so we don't have to go through the compile
   /// unit abbrev table
   dw_tag_t m_tag = llvm::dwarf::DW_TAG_null;
+
+private:
+  size_t GetAttributes(const DWARFUnit *cu, DWARFAttributes &attrs,
+                       Recurse recurse, uint32_t curr_depth) const;
 };
 
 #endif // LLDB_SOURCE_PLUGINS_SYMBOLFILE_DWARF_DWARFDEBUGINFOENTRY_H

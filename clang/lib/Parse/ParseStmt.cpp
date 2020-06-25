@@ -354,13 +354,13 @@ Retry:
 
   case tok::annot_pragma_fp_contract:
     ProhibitAttributes(Attrs);
-    Diag(Tok, diag::err_pragma_fp_contract_scope);
+    Diag(Tok, diag::err_pragma_file_or_compound_scope) << "fp_contract";
     ConsumeAnnotationToken();
     return StmtError();
 
   case tok::annot_pragma_fp:
     ProhibitAttributes(Attrs);
-    Diag(Tok, diag::err_pragma_fp_scope);
+    Diag(Tok, diag::err_pragma_file_or_compound_scope) << "clang fp";
     ConsumeAnnotationToken();
     return StmtError();
 
@@ -368,6 +368,12 @@ Retry:
     ProhibitAttributes(Attrs);
     HandlePragmaFEnvAccess();
     return StmtEmpty();
+
+  case tok::annot_pragma_float_control:
+    ProhibitAttributes(Attrs);
+    Diag(Tok, diag::err_pragma_file_or_compound_scope) << "float_control";
+    ConsumeAnnotationToken();
+    return StmtError();
 
   case tok::annot_pragma_opencl_extension:
     ProhibitAttributes(Attrs);
@@ -936,6 +942,9 @@ void Parser::ParseCompoundStatementLeadingPragmas() {
       break;
     case tok::annot_pragma_fenv_access:
       HandlePragmaFEnvAccess();
+      break;
+    case tok::annot_pragma_float_control:
+      HandlePragmaFloatControl();
       break;
     case tok::annot_pragma_ms_pointers_to_members:
       HandlePragmaMSPointersToMembers();
@@ -2163,6 +2172,8 @@ StmtResult Parser::ParsePragmaLoopHint(StmtVector &Stmts,
   // Create temporary attribute list.
   ParsedAttributesWithRange TempAttrs(AttrFactory);
 
+  SourceLocation StartLoc = Tok.getLocation();
+
   // Get loop hints and consume annotated token.
   while (Tok.is(tok::annot_pragma_loop_hint)) {
     LoopHint Hint;
@@ -2183,6 +2194,12 @@ StmtResult Parser::ParsePragmaLoopHint(StmtVector &Stmts,
       Stmts, StmtCtx, TrailingElseLoc, Attrs);
 
   Attrs.takeAllFrom(TempAttrs);
+
+  // Start of attribute range may already be set for some invalid input.
+  // See PR46336.
+  if (Attrs.Range.getBegin().isInvalid())
+    Attrs.Range.setBegin(StartLoc);
+
   return S;
 }
 

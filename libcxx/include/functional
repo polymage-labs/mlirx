@@ -2338,14 +2338,14 @@ class _LIBCPP_TEMPLATE_VIS function<_Rp(_ArgTypes...)>
 
     template <class _Fp, bool = _And<
         _IsNotSame<__uncvref_t<_Fp>, function>,
-        __invokable<_Fp&, _ArgTypes...>
+        __invokable<_Fp, _ArgTypes...>
     >::value>
     struct __callable;
     template <class _Fp>
         struct __callable<_Fp, true>
         {
             static const bool value = is_same<void, _Rp>::value ||
-                is_convertible<typename __invoke_of<_Fp&, _ArgTypes...>::type,
+                is_convertible<typename __invoke_of<_Fp, _ArgTypes...>::type,
                                _Rp>::value;
         };
     template <class _Fp>
@@ -2355,7 +2355,7 @@ class _LIBCPP_TEMPLATE_VIS function<_Rp(_ArgTypes...)>
         };
 
   template <class _Fp>
-  using _EnableIfCallable = typename enable_if<__callable<_Fp>::value>::type;
+  using _EnableIfLValueCallable = typename enable_if<__callable<_Fp&>::value>::type;
 public:
     typedef _Rp result_type;
 
@@ -2366,7 +2366,7 @@ public:
     function(nullptr_t) _NOEXCEPT {}
     function(const function&);
     function(function&&) _NOEXCEPT;
-    template<class _Fp, class = _EnableIfCallable<_Fp>>
+    template<class _Fp, class = _EnableIfLValueCallable<_Fp>>
     function(_Fp);
 
 #if _LIBCPP_STD_VER <= 14
@@ -2380,14 +2380,14 @@ public:
       function(allocator_arg_t, const _Alloc&, const function&);
     template<class _Alloc>
       function(allocator_arg_t, const _Alloc&, function&&);
-    template<class _Fp, class _Alloc, class = _EnableIfCallable<_Fp>>
+    template<class _Fp, class _Alloc, class = _EnableIfLValueCallable<_Fp>>
       function(allocator_arg_t, const _Alloc& __a, _Fp __f);
 #endif
 
     function& operator=(const function&);
     function& operator=(function&&) _NOEXCEPT;
     function& operator=(nullptr_t) _NOEXCEPT;
-    template<class _Fp, class = _EnableIfCallable<_Fp>>
+    template<class _Fp, class = _EnableIfLValueCallable<typename decay<_Fp>::type>>
     function& operator=(_Fp&&);
 
     ~function();
@@ -3050,14 +3050,14 @@ __search(_ForwardIterator1 __first1, _ForwardIterator1 __last1,
          forward_iterator_tag, forward_iterator_tag)
 {
     if (__first2 == __last2)
-        return make_pair(__first1, __first1);  // Everything matches an empty sequence
+        return _VSTD::make_pair(__first1, __first1);  // Everything matches an empty sequence
     while (true)
     {
         // Find first element in sequence 1 that matchs *__first2, with a mininum of loop checks
         while (true)
         {
             if (__first1 == __last1)  // return __last1 if no element matches *__first2
-                return make_pair(__last1, __last1);
+                return _VSTD::make_pair(__last1, __last1);
             if (__pred(*__first1, *__first2))
                 break;
             ++__first1;
@@ -3068,9 +3068,9 @@ __search(_ForwardIterator1 __first1, _ForwardIterator1 __last1,
         while (true)
         {
             if (++__m2 == __last2)  // If pattern exhausted, __first1 is the answer (works for 1 element pattern)
-                return make_pair(__first1, __m1);
+                return _VSTD::make_pair(__first1, __m1);
             if (++__m1 == __last1)  // Otherwise if source exhaused, pattern not found
-                return make_pair(__last1, __last1);
+                return _VSTD::make_pair(__last1, __last1);
             if (!__pred(*__m1, *__m2))  // if there is a mismatch, restart with a new __first1
             {
                 ++__first1;
@@ -3092,10 +3092,10 @@ __search(_RandomAccessIterator1 __first1, _RandomAccessIterator1 __last1,
     // Take advantage of knowing source and pattern lengths.  Stop short when source is smaller than pattern
     const _D2 __len2 = __last2 - __first2;
     if (__len2 == 0)
-        return make_pair(__first1, __first1);
+        return _VSTD::make_pair(__first1, __first1);
     const _D1 __len1 = __last1 - __first1;
     if (__len1 < __len2)
-        return make_pair(__last1, __last1);
+        return _VSTD::make_pair(__last1, __last1);
     const _RandomAccessIterator1 __s = __last1 - (__len2 - 1);  // Start of pattern match can't go beyond here
 
     while (true)
@@ -3103,7 +3103,7 @@ __search(_RandomAccessIterator1 __first1, _RandomAccessIterator1 __last1,
         while (true)
         {
             if (__first1 == __s)
-                return make_pair(__last1, __last1);
+                return _VSTD::make_pair(__last1, __last1);
             if (__pred(*__first1, *__first2))
                 break;
             ++__first1;
@@ -3114,7 +3114,7 @@ __search(_RandomAccessIterator1 __first1, _RandomAccessIterator1 __last1,
          while (true)
          {
              if (++__m2 == __last2)
-                 return make_pair(__first1, __first1 + __len2);
+                 return _VSTD::make_pair(__first1, __first1 + __len2);
              ++__m1;          // no need to check range on __m1 because __s guarantees we have enough source
              if (!__pred(*__m1, *__m2))
              {
@@ -3163,15 +3163,19 @@ using unwrap_ref_decay_t = typename unwrap_ref_decay<_Tp>::type;
 #endif // > C++17
 
 template <class _Container, class _Predicate>
-inline void __libcpp_erase_if_container( _Container& __c, _Predicate __pred)
-{
-	for (typename _Container::iterator __iter = __c.begin(), __last = __c.end(); __iter != __last;)
-	{
-		if (__pred(*__iter))
-			__iter = __c.erase(__iter);
-		else
-			++__iter;
-	}
+inline typename _Container::size_type
+__libcpp_erase_if_container(_Container& __c, _Predicate __pred) {
+  typename _Container::size_type __old_size = __c.size();
+
+  const typename _Container::iterator __last = __c.end();
+  for (typename _Container::iterator __iter = __c.begin(); __iter != __last;) {
+    if (__pred(*__iter))
+      __iter = __c.erase(__iter);
+    else
+      ++__iter;
+  }
+
+  return __old_size - __c.size();
 }
 
 _LIBCPP_END_NAMESPACE_STD

@@ -11,9 +11,9 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/DebugInfo/DWARF/DWARFDataExtractor.h"
+#include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/WithColor.h"
 #include <cstdint>
 
 namespace llvm {
@@ -44,7 +44,7 @@ class DWARFDebugMacro {
     /// opcode_operands_table_flag:
     ///   If the opcode_operands_table_flag is one, the opcode_operands_table
     ///   field (see below) is present. If zero, that field is omitted.
-    uint8_t Flags;
+    uint8_t Flags = 0;
 
     /// debug_line_offset
     ///   An offset in the .debug_line section of the beginning of the line
@@ -58,6 +58,12 @@ class DWARFDebugMacro {
 
     /// Parse the debug_macro header.
     Error parseMacroHeader(DWARFDataExtractor Data, uint64_t *Offset);
+
+    /// Get the DWARF format according to the flags.
+    dwarf::DwarfFormat getDwarfFormat() const;
+
+    /// Get the size of a reference according to the DWARF format.
+    uint8_t getOffsetByteSize() const;
   };
 
   /// A single macro entry within a macro list.
@@ -101,13 +107,25 @@ public:
   /// Print the macro list found within the debug_macinfo/debug_macro section.
   void dump(raw_ostream &OS) const;
 
-  /// Parse the debug_macinfo/debug_macro section accessible via the 'Data'
-  /// parameter.
-  Error parse(DataExtractor StringExtractor, DWARFDataExtractor Data,
-              bool IsMacro);
+  Error parseMacro(DWARFUnitVector::iterator_range Units,
+                   DataExtractor StringExtractor,
+                   DWARFDataExtractor MacroData) {
+    return parseImpl(Units, StringExtractor, MacroData, /*IsMacro=*/true);
+  }
+
+  Error parseMacinfo(DWARFDataExtractor MacroData) {
+    return parseImpl(None, None, MacroData, /*IsMacro=*/false);
+  }
 
   /// Return whether the section has any entries.
   bool empty() const { return MacroLists.empty(); }
+
+private:
+  /// Parse the debug_macinfo/debug_macro section accessible via the 'MacroData'
+  /// parameter.
+  Error parseImpl(Optional<DWARFUnitVector::iterator_range> Units,
+                  Optional<DataExtractor> StringExtractor,
+                  DWARFDataExtractor Data, bool IsMacro);
 };
 
 } // end namespace llvm

@@ -82,8 +82,10 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeX86Target() {
   initializeX86AvoidSFBPassPass(PR);
   initializeX86AvoidTrailingCallPassPass(PR);
   initializeX86SpeculativeLoadHardeningPassPass(PR);
+  initializeX86SpeculativeExecutionSideEffectSuppressionPass(PR);
   initializeX86FlagsCopyLoweringPassPass(PR);
   initializeX86CondBrFoldingPassPass(PR);
+  initializeX86LoadValueInjectionLoadHardeningPassPass(PR);
   initializeX86LoadValueInjectionRetHardeningPassPass(PR);
   initializeX86OptimizeLEAPassPass(PR);
   initializeX86PartialReductionPass(PR);
@@ -312,14 +314,6 @@ X86TargetMachine::getSubtargetImpl(const Function &F) const {
 }
 
 //===----------------------------------------------------------------------===//
-// Command line options for x86
-//===----------------------------------------------------------------------===//
-static cl::opt<bool>
-UseVZeroUpper("x86-use-vzeroupper", cl::Hidden,
-  cl::desc("Minimize AVX to SSE transition penalty"),
-  cl::init(true));
-
-//===----------------------------------------------------------------------===//
 // X86 TTI query.
 //===----------------------------------------------------------------------===//
 
@@ -495,6 +489,10 @@ void X86PassConfig::addMachineSSAOptimization() {
 
 void X86PassConfig::addPostRegAlloc() {
   addPass(createX86FloatingPointStackifierPass());
+  if (getOptLevel() != CodeGenOpt::None)
+    addPass(createX86LoadValueInjectionLoadHardeningPass());
+  else
+    addPass(createX86LoadValueInjectionLoadHardeningUnoptimizedPass());
 }
 
 void X86PassConfig::addPreSched2() { addPass(createX86ExpandPseudoPass()); }
@@ -507,15 +505,14 @@ void X86PassConfig::addPreEmitPass() {
 
   addPass(createX86IndirectBranchTrackingPass());
 
-  if (UseVZeroUpper)
-    addPass(createX86IssueVZeroUpperPass());
+  addPass(createX86IssueVZeroUpperPass());
 
   if (getOptLevel() != CodeGenOpt::None) {
     addPass(createX86FixupBWInsts());
     addPass(createX86PadShortFunctions());
     addPass(createX86FixupLEAs());
-    addPass(createX86EvexToVexInsts());
   }
+  addPass(createX86EvexToVexInsts());
   addPass(createX86DiscriminateMemOpsPass());
   addPass(createX86InsertPrefetchPass());
   addPass(createX86InsertX87waitPass());
@@ -525,6 +522,16 @@ void X86PassConfig::addPreEmitPass2() {
   const Triple &TT = TM->getTargetTriple();
   const MCAsmInfo *MAI = TM->getMCAsmInfo();
 
+  // The X86 Speculative Execution Pass must run after all control
+  // flow graph modifying passes. As a result it was listed to run right before
+  // the X86 Retpoline Thunks pass. The reason it must run after control flow
+  // graph modifications is that the model of LFENCE in LLVM has to be updated
+  // (FIXME: https://bugs.llvm.org/show_bug.cgi?id=45167). Currently the
+  // placement of this pass was hand checked to ensure that the subsequent
+  // passes don't move the code around the LFENCEs in a way that will hurt the
+  // correctness of this pass. This placement has been shown to work based on
+  // hand inspection of the codegen output.
+  addPass(createX86SpeculativeExecutionSideEffectSuppression());
   addPass(createX86IndirectThunksPass());
 
   // Insert extra int3 instructions after trailing call instructions to avoid

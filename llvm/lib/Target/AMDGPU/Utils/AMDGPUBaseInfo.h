@@ -197,6 +197,7 @@ struct MIMGBaseOpcodeInfo {
 
   uint8_t NumExtraArgs;
   bool Gradients;
+  bool G16;
   bool Coordinates;
   bool LodOrClampOrMip;
   bool HasD16;
@@ -233,11 +234,19 @@ struct MIMGMIPMappingInfo {
   MIMGBaseOpcode NONMIP;
 };
 
+struct MIMGG16MappingInfo {
+  MIMGBaseOpcode G;
+  MIMGBaseOpcode G16;
+};
+
 LLVM_READONLY
 const MIMGLZMappingInfo *getMIMGLZMappingInfo(unsigned L);
 
 LLVM_READONLY
-const MIMGMIPMappingInfo *getMIMGMIPMappingInfo(unsigned L);
+const MIMGMIPMappingInfo *getMIMGMIPMappingInfo(unsigned MIP);
+
+LLVM_READONLY
+const MIMGG16MappingInfo *getMIMGG16MappingInfo(unsigned G);
 
 LLVM_READONLY
 int getMIMGOpcode(unsigned BaseOpcode, unsigned MIMGEncoding,
@@ -292,6 +301,9 @@ bool getMUBUFHasSrsrc(unsigned Opc);
 
 LLVM_READONLY
 bool getMUBUFHasSoffset(unsigned Opc);
+
+LLVM_READONLY
+bool getSMEMIsBuffer(unsigned Opc);
 
 LLVM_READONLY
 const GcnBufferFormatInfo *getGcnBufferFormatInfo(uint8_t BitsPerComp,
@@ -538,6 +550,7 @@ bool hasXNACK(const MCSubtargetInfo &STI);
 bool hasSRAMECC(const MCSubtargetInfo &STI);
 bool hasMIMG_R128(const MCSubtargetInfo &STI);
 bool hasGFX10A16(const MCSubtargetInfo &STI);
+bool hasG16(const MCSubtargetInfo &STI);
 bool hasPackedD16(const MCSubtargetInfo &STI);
 
 bool isSI(const MCSubtargetInfo &STI);
@@ -545,6 +558,9 @@ bool isCI(const MCSubtargetInfo &STI);
 bool isVI(const MCSubtargetInfo &STI);
 bool isGFX9(const MCSubtargetInfo &STI);
 bool isGFX10(const MCSubtargetInfo &STI);
+bool isGCN3Encoding(const MCSubtargetInfo &STI);
+bool isGFX10_BEncoding(const MCSubtargetInfo &STI);
+bool hasGFX10_3Insts(const MCSubtargetInfo &STI);
 
 /// Is Reg - scalar register
 bool isSGPR(unsigned Reg, const MCRegisterInfo* TRI);
@@ -620,6 +636,13 @@ inline unsigned getOperandSize(const MCInstrDesc &Desc, unsigned OpNo) {
   return getOperandSize(Desc.OpInfo[OpNo]);
 }
 
+/// Is this literal inlinable, and not one of the values intended for floating
+/// point values.
+LLVM_READNONE
+inline bool isInlinableIntLiteral(int64_t Literal) {
+  return Literal >= -16 && Literal <= 64;
+}
+
 /// Is this literal inlinable
 LLVM_READNONE
 bool isInlinableLiteral64(int64_t Literal, bool HasInv2Pi);
@@ -633,7 +656,19 @@ bool isInlinableLiteral16(int16_t Literal, bool HasInv2Pi);
 LLVM_READNONE
 bool isInlinableLiteralV216(int32_t Literal, bool HasInv2Pi);
 
+LLVM_READNONE
+bool isInlinableIntLiteralV216(int32_t Literal);
+
 bool isArgPassedInSGPR(const Argument *Arg);
+
+LLVM_READONLY
+bool isLegalSMRDEncodedUnsignedOffset(const MCSubtargetInfo &ST,
+                                      int64_t EncodedOffset);
+
+LLVM_READONLY
+bool isLegalSMRDEncodedSignedOffset(const MCSubtargetInfo &ST,
+                                    int64_t EncodedOffset,
+                                    bool IsBuffer);
 
 /// Convert \p ByteOffset to dwords if the subtarget uses dword SMRD immediate
 /// offsets.

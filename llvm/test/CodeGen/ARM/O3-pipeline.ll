@@ -10,11 +10,12 @@
 ; CHECK-NEXT:      Dominator Tree Construction
 ; CHECK-NEXT:      Natural Loop Information
 ; CHECK-NEXT:      MVE gather/scatter lowering
-; CHECK-NEXT:      Basic Alias Analysis (stateless AA impl)
 ; CHECK-NEXT:      Module Verifier
+; CHECK-NEXT:      Basic Alias Analysis (stateless AA impl)
 ; CHECK-NEXT:      Canonicalize natural loops
 ; CHECK-NEXT:      Scalar Evolution Analysis
 ; CHECK-NEXT:      Loop Pass Manager
+; CHECK-NEXT:        Canonicalize Freeze Instructions in Loops
 ; CHECK-NEXT:        Induction Variable Users
 ; CHECK-NEXT:        Loop Strength Reduction
 ; CHECK-NEXT:      Basic Alias Analysis (stateless AA impl)
@@ -128,9 +129,8 @@
 ; CHECK-NEXT:      Machine Loop Invariant Code Motion
 ; CHECK-NEXT:      Fixup Statepoint Caller Saved
 ; CHECK-NEXT:      PostRA Machine Sink
-; CHECK-NEXT:      MachineDominator Tree Construction
-; CHECK-NEXT:      Machine Natural Loop Construction
 ; CHECK-NEXT:      Machine Block Frequency Analysis
+; CHECK-NEXT:      MachineDominator Tree Construction
 ; CHECK-NEXT:      MachinePostDominator Tree Construction
 ; CHECK-NEXT:      Lazy Machine Block Frequency Analysis
 ; CHECK-NEXT:      Machine Optimization Remark Emitter

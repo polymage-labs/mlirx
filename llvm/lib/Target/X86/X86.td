@@ -444,6 +444,13 @@ def FeatureLVIControlFlowIntegrity
           "LFENCE instruction to serialize control flow. Also decompose RET "
           "instructions into a POP+LFENCE+JMP sequence.">;
 
+// Mitigate LVI attacks against data loads
+def FeatureLVILoadHardening
+    : SubtargetFeature<
+          "lvi-load-hardening", "UseLVILoadHardening", "true",
+          "Insert LFENCE instructions to prevent data speculatively injected "
+          "into loads from being used maliciously.">;
+
 // Direct Move instructions.
 def FeatureMOVDIRI  : SubtargetFeature<"movdiri", "HasMOVDIRI", "true",
                                        "Support movdiri instruction">;
@@ -782,15 +789,13 @@ def ProcessorFeatures {
     !listconcat(GLPInheritableFeatures, GLPSpecificFeatures);
 
   // Tremont
-  list<SubtargetFeature> TRMAdditionalFeatures = [FeatureCLDEMOTE,
-                                                  FeatureGFNI,
-                                                  FeatureMOVDIRI,
-                                                  FeatureMOVDIR64B,
-                                                  FeatureWAITPKG];
+  list<SubtargetFeature> TRMAdditionalFeatures = [FeatureCLWB,
+                                                  FeatureGFNI];
   list<SubtargetFeature> TRMSpecificFeatures = [FeatureUseGLMDivSqrtCosts];
+  list<SubtargetFeature> TRMInheritableFeatures =
+    !listconcat(GLPInheritableFeatures, TRMAdditionalFeatures);
   list<SubtargetFeature> TRMFeatures =
-    !listconcat(GLPInheritableFeatures, TRMAdditionalFeatures,
-                TRMSpecificFeatures);
+    !listconcat(TRMInheritableFeatures, TRMSpecificFeatures);
 
   // Knights Landing
   list<SubtargetFeature> KNLFeatures = [FeatureX87,

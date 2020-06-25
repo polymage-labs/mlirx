@@ -124,7 +124,7 @@ static cl::opt<bool> ClGenerateTagsWithCalls(
     cl::init(false));
 
 static cl::opt<bool> ClGlobals("hwasan-globals", cl::desc("Instrument globals"),
-                               cl::Hidden, cl::init(false));
+                               cl::Hidden, cl::init(false), cl::ZeroOrMore);
 
 static cl::opt<int> ClMatchAllTag(
     "hwasan-match-all-tag",
@@ -305,7 +305,10 @@ public:
 
   explicit HWAddressSanitizerLegacyPass(bool CompileKernel = false,
                                         bool Recover = false)
-      : FunctionPass(ID), CompileKernel(CompileKernel), Recover(Recover) {}
+      : FunctionPass(ID), CompileKernel(CompileKernel), Recover(Recover) {
+    initializeHWAddressSanitizerLegacyPassPass(
+        *PassRegistry::getPassRegistry());
+  }
 
   StringRef getPassName() const override { return "HWAddressSanitizer"; }
 
@@ -1118,19 +1121,22 @@ bool HWAddressSanitizer::sanitizeFunction(Function &F) {
 
   initializeCallbacks(*F.getParent());
 
+  bool Changed = false;
+
   if (!LandingPadVec.empty())
-    instrumentLandingPads(LandingPadVec);
+    Changed |= instrumentLandingPads(LandingPadVec);
 
   if (AllocasToInstrument.empty() && F.hasPersonalityFn() &&
       F.getPersonalityFn()->getName() == kHwasanPersonalityThunkName) {
     // __hwasan_personality_thunk is a no-op for functions without an
     // instrumented stack, so we can drop it.
     F.setPersonalityFn(nullptr);
+    Changed = true;
   }
 
   if (AllocasToInstrument.empty() && OperandsToInstrument.empty() &&
       IntrinToInstrument.empty())
-    return false;
+    return Changed;
 
   assert(!LocalDynamicShadow);
 
@@ -1140,14 +1146,11 @@ bool HWAddressSanitizer::sanitizeFunction(Function &F) {
                /*WithFrameRecord*/ ClRecordStackHistory &&
                    !AllocasToInstrument.empty());
 
-  bool Changed = false;
   if (!AllocasToInstrument.empty()) {
     Value *StackTag =
         ClGenerateTagsWithCalls ? nullptr : getStackBaseTag(EntryIRB);
-    Changed |= instrumentStack(AllocasToInstrument, AllocaDbgMap, RetVec,
-                               StackTag);
+    instrumentStack(AllocasToInstrument, AllocaDbgMap, RetVec, StackTag);
   }
-
   // Pad and align each of the allocas that we instrumented to stop small
   // uninteresting allocas from hiding in instrumented alloca's padding and so
   // that we have enough space to store real tags for short granules.
@@ -1156,7 +1159,7 @@ bool HWAddressSanitizer::sanitizeFunction(Function &F) {
     uint64_t Size = getAllocaSizeInBytes(*AI);
     uint64_t AlignedSize = alignTo(Size, Mapping.getObjectAlignment());
     AI->setAlignment(
-        MaybeAlign(std::max(AI->getAlignment(), Mapping.getObjectAlignment())));
+        Align(std::max(AI->getAlignment(), Mapping.getObjectAlignment())));
     if (Size != AlignedSize) {
       Type *AllocatedType = AI->getAllocatedType();
       if (AI->isArrayAllocation()) {
@@ -1169,7 +1172,7 @@ bool HWAddressSanitizer::sanitizeFunction(Function &F) {
       auto *NewAI = new AllocaInst(
           TypeWithPadding, AI->getType()->getAddressSpace(), nullptr, "", AI);
       NewAI->takeName(AI);
-      NewAI->setAlignment(MaybeAlign(AI->getAlignment()));
+      NewAI->setAlignment(AI->getAlign());
       NewAI->setUsedWithInAlloca(AI->isUsedWithInAlloca());
       NewAI->setSwiftError(AI->isSwiftError());
       NewAI->copyMetadata(*AI);
@@ -1208,18 +1211,17 @@ bool HWAddressSanitizer::sanitizeFunction(Function &F) {
   }
 
   for (auto &Operand : OperandsToInstrument)
-    Changed |= instrumentMemAccess(Operand);
+    instrumentMemAccess(Operand);
 
   if (ClInstrumentMemIntrinsics && !IntrinToInstrument.empty()) {
     for (auto Inst : IntrinToInstrument)
       instrumentMemIntrinsic(cast<MemIntrinsic>(Inst));
-    Changed = true;
   }
 
   LocalDynamicShadow = nullptr;
   StackBaseTag = nullptr;
 
-  return Changed;
+  return true;
 }
 
 void HWAddressSanitizer::instrumentGlobal(GlobalVariable *GV, uint8_t Tag) {

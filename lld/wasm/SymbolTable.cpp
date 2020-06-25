@@ -113,6 +113,7 @@ std::pair<Symbol *, bool> SymbolTable::insertName(StringRef name) {
   sym->isUsedInRegularObj = false;
   sym->canInline = true;
   sym->traced = trace;
+  sym->forceExport = false;
   symVector.emplace_back(sym);
   return {sym, true};
 }
@@ -326,7 +327,7 @@ Symbol *SymbolTable::addDefinedFunction(StringRef name, uint32_t flags,
 
 Symbol *SymbolTable::addDefinedData(StringRef name, uint32_t flags,
                                     InputFile *file, InputSegment *segment,
-                                    uint32_t address, uint32_t size) {
+                                    uint64_t address, uint64_t size) {
   LLVM_DEBUG(dbgs() << "addDefinedData:" << name << " addr:" << address
                     << "\n");
   Symbol *s;
@@ -598,6 +599,11 @@ bool SymbolTable::getFunctionVariant(Symbol* sym, const WasmSignature *sig,
     // Create a new variant;
     LLVM_DEBUG(dbgs() << "added new variant\n");
     variant = reinterpret_cast<Symbol *>(make<SymbolUnion>());
+    variant->isUsedInRegularObj =
+        !file || file->kind() == InputFile::ObjectKind;
+    variant->canInline = true;
+    variant->traced = false;
+    variant->forceExport = false;
     variants.push_back(variant);
   } else {
     LLVM_DEBUG(dbgs() << "variant already exists: " << toString(*variant) << "\n");

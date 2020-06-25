@@ -27,6 +27,7 @@
 #include "flang/Common/unsigned-const-division.h"
 #include "flang/Decimal/binary-floating-point.h"
 #include "flang/Decimal/decimal.h"
+#include "llvm/Support/raw_ostream.h"
 #include <cinttypes>
 #include <limits>
 #include <type_traits>
@@ -111,6 +112,8 @@ public:
   void Minimize(
       BigRadixFloatingPointNumber &&less, BigRadixFloatingPointNumber &&more);
 
+  llvm::raw_ostream &Dump(llvm::raw_ostream &) const;
+
 private:
   BigRadixFloatingPointNumber(const BigRadixFloatingPointNumber &that)
       : digits_{that.digits_}, exponent_{that.exponent_},
@@ -176,7 +179,13 @@ private:
       if (remove >= digits_) {
         digits_ = 0;
       } else if (remove > 0) {
+#if defined __GNUC__ && __GNUC__ < 8
+        // (&& j + remove < maxDigits) was added to avoid GCC < 8 build failure
+        // on -Werror=array-bounds. This can be removed if -Werror is disable.
+        for (int j{0}; j + remove < digits_ && (j + remove < maxDigits); ++j) {
+#else
         for (int j{0}; j + remove < digits_; ++j) {
+#endif
           digit_[j] = digit_[j + remove];
         }
         digits_ -= remove;
@@ -280,14 +289,6 @@ private:
       }
     } else {
       return 0;
-    }
-  }
-
-  template <int N> void MultiplyByRounded() {
-    if (int carry{MultiplyBy<N>()}) {
-      LoseLeastSignificantDigit();
-      digit_[digits_ - 1] += carry;
-      exponent_ += log10Radix;
     }
   }
 

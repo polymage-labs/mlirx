@@ -102,7 +102,9 @@ if ("${LIBCXX_CXX_ABI_LIBNAME}" STREQUAL "libstdc++" OR
     "${_LIBSUPCXX_LIBNAME}" "${_LIBSUPCXX_LIBNAME}" "${_LIBSUPCXX_INCLUDE_FILES}" "bits"
     )
 elseif ("${LIBCXX_CXX_ABI_LIBNAME}" STREQUAL "libcxxabi")
-  set(LIBCXX_CXX_ABI_INCLUDE_PATHS "${LIBCXX_SOURCE_DIR}/../libcxxabi/include")
+  if(NOT LIBCXX_CXX_ABI_INCLUDE_PATHS)
+    set(LIBCXX_CXX_ABI_INCLUDE_PATHS "${LIBCXX_SOURCE_DIR}/../libcxxabi/include")
+  endif()
 
   if(LIBCXX_STANDALONE_BUILD AND NOT (LIBCXX_CXX_ABI_INTREE OR HAVE_LIBCXXABI))
     set(shared c++abi)
@@ -116,17 +118,19 @@ elseif ("${LIBCXX_CXX_ABI_LIBNAME}" STREQUAL "libcxxabi")
     "-DLIBCXX_BUILDING_LIBCXXABI"
     "${shared}" "${static}" "cxxabi.h;__cxxabi_config.h" "")
 elseif ("${LIBCXX_CXX_ABI_LIBNAME}" STREQUAL "libcxxrt")
-  set(LIBCXX_CXX_ABI_INCLUDE_PATHS "/usr/include/c++/v1")
+  if(NOT LIBCXX_CXX_ABI_INCLUDE_PATHS)
+    set(LIBCXX_CXX_ABI_INCLUDE_PATHS "/usr/include/c++/v1")
+  endif()
   setup_abi_lib(
     "-DLIBCXXRT"
     "cxxrt" "cxxrt" "cxxabi.h;unwind.h;unwind-arm.h;unwind-itanium.h" ""
     )
 elseif ("${LIBCXX_CXX_ABI_LIBNAME}" STREQUAL "vcruntime")
- # Nothing TODO
+ # Nothing to do
 elseif ("${LIBCXX_CXX_ABI_LIBNAME}" STREQUAL "none")
   list(APPEND LIBCXX_COMPILE_FLAGS "-D_LIBCPP_BUILDING_HAS_NO_ABI_LIBRARY")
 elseif ("${LIBCXX_CXX_ABI_LIBNAME}" STREQUAL "default")
-  # Nothing TODO
+  # Nothing to do
 else()
   message(FATAL_ERROR
     "Unsupported c++ abi: '${LIBCXX_CXX_ABI_LIBNAME}'. \

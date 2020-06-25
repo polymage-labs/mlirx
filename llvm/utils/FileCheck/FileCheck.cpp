@@ -44,6 +44,14 @@ static cl::alias CheckPrefixesAlias(
     cl::desc(
         "Alias for -check-prefix permitting multiple comma separated values"));
 
+static cl::list<std::string> CommentPrefixes(
+    "comment-prefixes", cl::CommaSeparated, cl::Hidden,
+    cl::desc("Comma-separated list of comment prefixes to use from check file\n"
+             "(defaults to 'COM,RUN'). Please avoid using this feature in\n"
+             "LLVM's LIT-based test suites, which should be easier to\n"
+             "maintain if they all follow a consistent comment style. This\n"
+             "feature is meant for non-LIT test suites using FileCheck."));
+
 static cl::opt<bool> NoCanonicalizeWhiteSpace(
     "strict-whitespace",
     cl::desc("Do not treat all horizontal whitespace as equivalent"));
@@ -98,15 +106,6 @@ static cl::opt<bool> VerboseVerbose(
     cl::desc("Print information helpful in diagnosing internal FileCheck\n"
              "issues, or add it to the input dump if enabled.  Implies\n"
              "-v.\n"));
-static const char * DumpInputEnv = "FILECHECK_DUMP_INPUT_ON_FAILURE";
-
-static cl::opt<bool> DumpInputOnFailure(
-    "dump-input-on-failure",
-    cl::init(std::getenv(DumpInputEnv) && *std::getenv(DumpInputEnv)),
-    cl::desc("Dump original input to stderr before failing.\n"
-             "The value can be also controlled using\n"
-             "FILECHECK_DUMP_INPUT_ON_FAILURE environment variable.\n"
-             "This option is deprecated in favor of -dump-input=fail.\n"));
 
 // The order of DumpInputValue members affects their precedence, as documented
 // for -dump-input below.
@@ -279,6 +278,8 @@ std::string GetCheckTypeAbbreviation(Check::FileCheckType Ty) {
     return "label";
   case Check::CheckEmpty:
     return "empty";
+  case Check::CheckComment:
+    return "com";
   case Check::CheckEOF:
     return "eof";
   case Check::CheckBadNot:
@@ -565,6 +566,9 @@ int main(int argc, char **argv) {
   for (StringRef Prefix : CheckPrefixes)
     Req.CheckPrefixes.push_back(Prefix);
 
+  for (StringRef Prefix : CommentPrefixes)
+    Req.CommentPrefixes.push_back(Prefix);
+
   for (StringRef CheckNot : ImplicitCheckNot)
     Req.ImplicitCheckNot.push_back(CheckNot);
 
@@ -601,12 +605,8 @@ int main(int argc, char **argv) {
     Req.Verbose = true;
 
   FileCheck FC(Req);
-  if (!FC.ValidateCheckPrefixes()) {
-    errs() << "Supplied check-prefix is invalid! Prefixes must be unique and "
-              "start with a letter and contain only alphanumeric characters, "
-              "hyphens and underscores\n";
+  if (!FC.ValidateCheckPrefixes())
     return 2;
-  }
 
   Regex PrefixRE = FC.buildCheckPrefixRegex();
   std::string REError;
@@ -669,7 +669,7 @@ int main(int argc, char **argv) {
                         SMLoc());
 
   if (DumpInput == DumpInputDefault)
-    DumpInput = DumpInputOnFailure ? DumpInputFail : DumpInputNever;
+    DumpInput = DumpInputFail;
 
   std::vector<FileCheckDiag> Diags;
   int ExitCode = FC.checkInput(SM, InputFileText,

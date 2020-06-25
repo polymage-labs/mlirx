@@ -107,6 +107,14 @@ inline bool isPrint(char C) {
   return (0x20 <= UC) && (UC <= 0x7E);
 }
 
+/// Checks whether character \p C is whitespace in the "C" locale.
+///
+/// Locale-independent version of the C standard library isspace.
+inline bool isSpace(char C) {
+  return C == ' ' || C == '\f' || C == '\n' || C == '\r' || C == '\t' ||
+         C == '\v';
+}
+
 /// Returns the corresponding lowercase character if \p x is uppercase.
 inline char toLower(char x) {
   if (x >= 'A' && x <= 'Z')
@@ -237,7 +245,7 @@ inline std::string utostr(uint64_t X, bool isNeg = false) {
 
 inline std::string itostr(int64_t X) {
   if (X < 0)
-    return utostr(static_cast<uint64_t>(-X), true);
+    return utostr(-static_cast<uint64_t>(X), true);
   else
     return utostr(static_cast<uint64_t>(X));
 }

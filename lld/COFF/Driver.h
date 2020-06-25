@@ -41,6 +41,10 @@ public:
   COFFOptTable();
 };
 
+// Constructing the option table is expensive. Use a global table to avoid doing
+// it more than once.
+extern COFFOptTable optTable;
+
 // The result of parsing the .drective section. The /export: and /include:
 // options are handled separately because they reference symbols, and the number
 // of symbols can be quite large. The LLVM Option library will perform at least
@@ -70,8 +74,6 @@ private:
   void addLINK(SmallVector<const char *, 256> &argv);
 
   std::vector<const char *> tokenize(StringRef s);
-
-  COFFOptTable table;
 };
 
 class LinkerDriver {
@@ -84,6 +86,8 @@ public:
   // Used by ArchiveFile to enqueue members.
   void enqueueArchiveMember(const Archive::Child &c, const Archive::Symbol &sym,
                             StringRef parentName);
+
+  void enqueuePDB(StringRef Path) { enqueuePath(Path, false, false); }
 
   MemoryBufferRef takeBuffer(std::unique_ptr<MemoryBuffer> mb);
 

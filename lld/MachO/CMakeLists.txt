@@ -8,6 +8,8 @@ add_lld_library(lldMachO2
   ExportTrie.cpp
   InputFiles.cpp
   InputSection.cpp
+  MergedOutputSection.cpp
+  OutputSection.cpp
   OutputSegment.cpp
   SymbolTable.cpp
   Symbols.cpp
@@ -22,6 +24,7 @@ add_lld_library(lldMachO2
   Object
   Option
   Support
+  TextAPI
 
   LINK_LIBS
   lldCommon

@@ -289,12 +289,10 @@ void DeclPrinter::ProcessDeclGroup(SmallVectorImpl<Decl*>& Decls) {
 }
 
 void DeclPrinter::Print(AccessSpecifier AS) {
-  switch(AS) {
-  case AS_none:      llvm_unreachable("No access specifier!");
-  case AS_public:    Out << "public"; break;
-  case AS_protected: Out << "protected"; break;
-  case AS_private:   Out << "private"; break;
-  }
+  const auto AccessSpelling = getAccessSpelling(AS);
+  if (AccessSpelling.empty())
+    llvm_unreachable("No access specifier!");
+  Out << AccessSpelling;
 }
 
 void DeclPrinter::PrintConstructorInitializers(CXXConstructorDecl *CDecl,
@@ -532,7 +530,7 @@ void DeclPrinter::VisitEnumDecl(EnumDecl *D) {
 
   Out << ' ' << *D;
 
-  if (D->isFixed() && D->getASTContext().getLangOpts().CPlusPlus11)
+  if (D->isFixed())
     Out << " : " << D->getIntegerType().stream(Policy);
 
   if (D->isCompleteDefinition()) {

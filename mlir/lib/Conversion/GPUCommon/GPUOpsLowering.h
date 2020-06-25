@@ -13,6 +13,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/Builders.h"
+#include "llvm/Support/FormatVariadic.h"
 
 namespace mlir {
 
@@ -144,8 +145,9 @@ struct GPUFuncOpLowering : ConvertToLLVMPattern {
     // Move the region to the new function, update the entry block signature.
     rewriter.inlineRegionBefore(gpuFuncOp.getBody(), llvmFuncOp.getBody(),
                                 llvmFuncOp.end());
-    rewriter.applySignatureConversion(&llvmFuncOp.getBody(),
-                                      signatureConversion);
+    if (failed(rewriter.convertRegionTypes(&llvmFuncOp.getBody(), typeConverter,
+                                           &signatureConversion)))
+      return failure();
 
     rewriter.eraseOp(gpuFuncOp);
     return success();
