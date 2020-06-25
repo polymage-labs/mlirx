@@ -46,7 +46,8 @@ public:
       : builder(builder), dimValues(dimValues), symbolValues(symbolValues),
         loc(loc) {}
 
-  template <typename OpTy> Value buildBinaryExpr(AffineBinaryOpExpr expr) {
+  template <typename OpTy>
+  Value buildBinaryExpr(AffineBinaryOpExpr expr) {
     auto lhs = visit(expr.getLHS());
     auto rhs = visit(expr.getRHS());
     if (!lhs || !rhs)
@@ -359,6 +360,35 @@ public:
   }
 };
 
+/// Convert an "affine.parallel" (loop nest) operation into a "scf.parallel"
+/// operation. 
+class AffineParallelLowering : public OpRewritePattern<AffineParallelOp> {
+public:
+  using OpRewritePattern<AffineParallelOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(AffineParallelOp op,
+                                PatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    ValueRange upperBound =
+        *expandAffineMap(rewriter, loc, op.upperBoundsMap(),
+                         op.getUpperBoundsOperands());
+    ValueRange lowerBound =
+        *expandAffineMap(rewriter, loc, op.lowerBoundsMap(),
+                         op.getLowerBoundsOperands());
+    SmallVector<Value, 4> steps;
+    for (unsigned i = 0, e = op.steps().size(); i < e; ++i){
+      steps.push_back(rewriter.create<ConstantIndexOp>(
+                   loc, op.steps()[i].cast<IntegerAttr>().getInt()));
+    }
+    auto parallelOp =
+        rewriter.create<loop::ParallelOp>(loc, lowerBound, upperBound, steps);
+    parallelOp.region().getBlocks().clear();
+    rewriter.inlineRegionBefore(op.region(), parallelOp.region(), parallelOp.region().end());
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 class AffineExecuteRegionOpLowering
     : public OpRewritePattern<AffineExecuteRegionOp> {
 public:
@@ -662,6 +692,7 @@ void mlir::populateAffineToStdConversionPatterns(
       AffineExecuteRegionOpLowering,
       AffineStoreLowering,
       AffineForLowering,
+      AffineParallelLowering,
       AffineIfLowering,
       AffineTerminatorLowering>(ctx);
   // clang-format on
