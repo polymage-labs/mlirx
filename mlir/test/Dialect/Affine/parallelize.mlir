@@ -95,7 +95,7 @@ func @loop_nest_3d_outer_two_parallel(%N : index) {
 }
 
 // CHECK:      affine.parallel (%[[arg1:.*]]) = (0) to (symbol(%arg0)) {
-// CHECK:        affine.parallel (%[[arg2:.*]]) = (0) to (symbol(%arg0)) {
+// CHECK-NEXT:        affine.parallel (%[[arg2:.*]]) = (0) to (symbol(%arg0)) {
 // CHECK:          affine.for %[[arg3:.*]] = 0 to %arg0 {
 
 // CHECK-LABEL: unknown_op_conservative
