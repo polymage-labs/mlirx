@@ -31,7 +31,7 @@ namespace {
 struct AffineParallelize : public AffineParallelizeBase<AffineParallelize> {
   void runOnFunction() override;
 };
-} // namespace
+} /// namespace
 
 void AffineParallelize::runOnFunction() {
   FuncOp f = getFunction();
