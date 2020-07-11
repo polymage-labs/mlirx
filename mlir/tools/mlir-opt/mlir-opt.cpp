@@ -60,7 +60,6 @@ void registerTestMatchers();
 void registerTestMemRefDependenceCheck();
 void registerTestMemRefStrideCalculation();
 void registerTestOpaqueLoc();
-void registerTestParallelismDetection();
 void registerTestPreparationPassWithAllowedMemrefResults();
 void registerTestGpuParallelLoopMappingPass();
 void registerTestSCFUtilsPass();
@@ -132,8 +131,7 @@ void registerTestPasses() {
   registerTestMatchers();
   registerTestMemRefDependenceCheck();
   registerTestMemRefStrideCalculation();
-  registerTestOpaqueLoc();
-  registerTestParallelismDetection();
+  registerTestOpaqueLoc(); 
   registerTestPreparationPassWithAllowedMemrefResults();
   registerTestGpuParallelLoopMappingPass();
   registerTestSCFUtilsPass();
