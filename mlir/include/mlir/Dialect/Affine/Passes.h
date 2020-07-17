@@ -31,9 +31,9 @@ template <typename T> class OperationPass;
 /// layout map.
 std::unique_ptr<OperationPass<FuncOp>> createSimplifyAffineStructuresPass();
 
-// TODO:
-// normalizes memrefs to have the trivial (identity) layout map interprocedural
-std::unique_ptr<OperationPass<ModuleOp>> createMyNormalizeMemRefPass();
+// Creates a pass to normalize interprocedural memrefs to have the trivial 
+// (identity) layout map
+std::unique_ptr<OperationPass<ModuleOp>> createModuleNormalizeMemRefPass();
 
 /// Creates a loop invariant code motion pass that hoists loop invariant
 /// operations out of affine loops.
