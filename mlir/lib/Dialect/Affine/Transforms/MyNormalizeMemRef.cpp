@@ -50,37 +50,40 @@ std::unique_ptr<OperationPass<ModuleOp>> mlir::createMyNormalizeMemRefPass() {
 void MyNormalizeMemRef::runOnOperation() {
   auto func = getOperation();
 
-  llvm::dbgs()<<" ** Before entering the walk ** \n";
   func.walk([&](FuncOp funcOp){
+    OpBuilder b(funcOp);
+
+    FunctionType ft = funcOp.getType();
     SmallVector<Type, 8> inputs;
     SmallVector<Type, 4> results;
-    llvm::dbgs()<<funcOp.getType()<<" *-*-\n";
-    OpBuilder b(funcOp);
-    llvm::dbgs()<<(int)funcOp.getNumArguments()<<":\n";
+
+    for (auto retIndex : llvm::seq<unsigned>(0, funcOp.getNumResults())) {
+      results.push_back(ft.getResult(retIndex));
+    }
+
     for (auto argIndex : llvm::seq<unsigned>(0, funcOp.getNumArguments())) {
 
       if(funcOp.getArgument(argIndex).getType().getKind() == StandardTypes::MemRef) {
-        llvm::dbgs()<<argIndex<<" is a MemRef\n";
-        llvm::dbgs()<<"argument type = "<<funcOp.getArgument(argIndex).getType();
         // funcOp.getArgument(argIndex).setType(UnrankedTensorType);
         MemRefType memrefType = funcOp.getArgument(argIndex).getType().cast<MemRefType>();
         unsigned rank = memrefType.getRank();
-        llvm::dbgs()<<", Rank = "<<rank<<"\n";
         // if (rank == 0)
         //   return success();
         auto layoutMaps = memrefType.getAffineMaps();
         // OpBuilder b(allocOp);
-        if (layoutMaps.size() != 1)
+        if (layoutMaps.size() != 1) {
           // return failure();
+          inputs.push_back(funcOp.getArgument(argIndex).getType());
           continue;
+        }
 
         AffineMap layoutMap = layoutMaps.front();
-        llvm::dbgs()<<", AffineMap = "<<layoutMap;
-        llvm::dbgs()<<", b.getMultiDimIdentityMap(rank) = "<<b.getMultiDimIdentityMap(rank);
         
-        if (layoutMap == b.getMultiDimIdentityMap(rank))
+        if (layoutMap == b.getMultiDimIdentityMap(rank)) {
           // return success();
+          inputs.push_back(funcOp.getArgument(argIndex).getType());
           continue;
+        }
 
         if (memrefType.getNumDynamicDims() > 0)
           // return failure();
@@ -121,11 +124,44 @@ void MyNormalizeMemRef::runOnOperation() {
         MemRefType::Builder(memrefType)
           .setShape(newShape)
           .setAffineMaps(b.getMultiDimIdentityMap(newRank));
-        // funcOp.getArgument(argIndex).setType(newMemRefType);
-        llvm::dbgs()<<"Output should be of type: "<<static_cast<Type>(newMemRefType)<<"\n";
-        funcOp.getArgument(argIndex).setType(static_cast<Type>(newMemRefType));
+
+        auto oldMemRef = new Value(funcOp.getArgument(argIndex));
+        // SmallVector<Value, 4> symbolOperands(funcOp.getSymbolicOperands());
+
+        // funcOp.getArgument(argIndex).setType(static_cast<Type>(newMemRefType));
+        funcOp.front().insertArgument(argIndex,static_cast<Type>(newMemRefType));
+        auto newMemRef = funcOp.getArgument(argIndex);
+        if (failed(replaceAllMemRefUsesWith(*oldMemRef, /*newMemRef=*/newMemRef,
+                                            /*extraIndices=*/{},
+                                            /*indexRemap=*/layoutMap,
+                                            /*extraOperands=*/{},
+                                            /*symbolOperands=*/{}))) {
+          // If it failed (due to escapes for example), bail out.
+          // newAlloc.erase();
+          // return failure();
+          funcOp.front().eraseArgument(argIndex);
+          continue;
+        }
+
+        for (auto retIndex : llvm::seq<unsigned>(0, funcOp.getNumResults())) {
+          if(results[retIndex] == (oldMemRef->getType())) {
+            results[retIndex] = newMemRef.getType();
+          }
+        }
+        funcOp.front().eraseArgument(argIndex+1);
+        // oldMemRef.replaceAllUsesWith(newMemRef);
+        inputs.push_back(static_cast<Type>(newMemRefType));
+        // break;
+      } else {
+        inputs.push_back(funcOp.getArgument(argIndex).getType());
       }
     }
+    
+    ArrayRef<Type> inp = makeArrayRef(inputs);
+    ArrayRef<Type> res = makeArrayRef(results);
+    FunctionType newFT = FunctionType::get(inp,res,&getContext());
+    funcOp.setType(newFT);
+    // SmallVector<Type, 8> inputs = (funcOp.cast<FunctionType>).getInputs();;
     // function.dump();
   });
 }
