@@ -322,26 +322,26 @@ protected:
 
     unsigned : NumExprBits;
 
-    /// The kind of result that is trail-allocated.
+    /// The kind of result that is tail-allocated.
     unsigned ResultKind : 2;
 
-    /// Kind of Result as defined by APValue::Kind
+    /// The kind of Result as defined by APValue::Kind.
     unsigned APValueKind : 4;
 
-    /// When ResultKind == RSK_Int64. whether the trail-allocated integer is
-    /// signed.
+    /// When ResultKind == RSK_Int64, true if the tail-allocated integer is
+    /// unsigned.
     unsigned IsUnsigned : 1;
 
-    /// When ResultKind == RSK_Int64. the BitWidth of the trail-allocated
-    /// integer. 7 bits because it is the minimal number of bit to represent a
-    /// value from 0 to 64 (the size of the trail-allocated number).
+    /// When ResultKind == RSK_Int64. the BitWidth of the tail-allocated
+    /// integer. 7 bits because it is the minimal number of bits to represent a
+    /// value from 0 to 64 (the size of the tail-allocated integer).
     unsigned BitWidth : 7;
 
-    /// When ResultKind == RSK_APValue. Wether the ASTContext will cleanup the
-    /// destructor on the trail-allocated APValue.
+    /// When ResultKind == RSK_APValue, true if the ASTContext will cleanup the
+    /// tail-allocated APValue.
     unsigned HasCleanup : 1;
 
-    /// Whether this ConstantExpr was created for immediate invocation.
+    /// True if this ConstantExpr was created for immediate invocation.
     unsigned IsImmediateInvocation : 1;
   };
 
@@ -614,9 +614,6 @@ protected:
     /// The kind of this overloaded operator. One of the enumerator
     /// value of OverloadedOperatorKind.
     unsigned OperatorKind : 6;
-
-    // Only meaningful for floating point types.
-    unsigned FPFeatures : 14;
   };
 
   class CXXRewrittenBinaryOperatorBitfields {
@@ -1169,9 +1166,7 @@ public:
   /// Dumps the specified AST fragment and all subtrees to
   /// \c llvm::errs().
   void dump() const;
-  void dump(SourceManager &SM) const;
-  void dump(raw_ostream &OS, SourceManager &SM) const;
-  void dump(raw_ostream &OS) const;
+  void dump(raw_ostream &OS, const ASTContext &Context) const;
 
   /// \return Unique reproducible object identifier
   int64_t getID(const ASTContext &Context) const;
@@ -2282,6 +2277,8 @@ class WhileStmt final : public Stmt,
   enum { VarOffset = 0, BodyOffsetFromCond = 1 };
   enum { NumMandatoryStmtPtr = 2 };
 
+  SourceLocation LParenLoc, RParenLoc;
+
   unsigned varOffset() const { return VarOffset; }
   unsigned condOffset() const { return VarOffset + hasVarStorage(); }
   unsigned bodyOffset() const { return condOffset() + BodyOffsetFromCond; }
@@ -2292,7 +2289,8 @@ class WhileStmt final : public Stmt,
 
   /// Build a while statement.
   WhileStmt(const ASTContext &Ctx, VarDecl *Var, Expr *Cond, Stmt *Body,
-            SourceLocation WL);
+            SourceLocation WL, SourceLocation LParenLoc,
+            SourceLocation RParenLoc);
 
   /// Build an empty while statement.
   explicit WhileStmt(EmptyShell Empty, bool HasVar);
@@ -2300,7 +2298,8 @@ class WhileStmt final : public Stmt,
 public:
   /// Create a while statement.
   static WhileStmt *Create(const ASTContext &Ctx, VarDecl *Var, Expr *Cond,
-                           Stmt *Body, SourceLocation WL);
+                           Stmt *Body, SourceLocation WL,
+                           SourceLocation LParenLoc, SourceLocation RParenLoc);
 
   /// Create an empty while statement optionally with storage for
   /// a condition variable.
@@ -2363,6 +2362,11 @@ public:
 
   SourceLocation getWhileLoc() const { return WhileStmtBits.WhileLoc; }
   void setWhileLoc(SourceLocation L) { WhileStmtBits.WhileLoc = L; }
+
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+  void setLParenLoc(SourceLocation L) { LParenLoc = L; }
+  SourceLocation getRParenLoc() const { return RParenLoc; }
+  void setRParenLoc(SourceLocation L) { RParenLoc = L; }
 
   SourceLocation getBeginLoc() const { return getWhileLoc(); }
   SourceLocation getEndLoc() const LLVM_READONLY {

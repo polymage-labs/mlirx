@@ -37,19 +37,14 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
 include(AddFlang)
 
-if (MSVC)
-  set(_FLANG_ENABLE_WERROR_DEFAULT OFF)
-else ()
-  set(_FLANG_ENABLE_WERROR_DEFAULT ON)
-endif()
-option(FLANG_ENABLE_WERROR "Fail and stop building flang if a warning is triggered."
-       "${_FLANG_ENABLE_WERROR_DEFAULT}")
+option(FLANG_ENABLE_WERROR "Fail and stop building flang if a warning is triggered." OFF)
 
 # Check for a standalone build and configure as appropriate from
 # there.
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   message("Building Flang as a standalone project.")
   project(Flang)
+  set(FLANG_STANDALONE_BUILD ON)
 
   set(FLANG_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
   if (NOT MSVC_IDE)
@@ -179,6 +174,7 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   endif()
 
 else()
+  set(FLANG_STANDALONE_BUILD OFF)
   option(FLANG_INCLUDE_TESTS
          "Generate build targets for the Flang unit tests."
          ${LLVM_INCLUDE_TESTS})
@@ -303,9 +299,6 @@ if (FLANG_ENABLE_WERROR)
     append("-Werror" CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
     append("-Wno-error" CMAKE_REQUIRED_FLAGS)
   endif( LLVM_COMPILER_IS_GCC_COMPATIBLE )
-  if (NOT LLVM_ENABLE_WERROR)
-      message(WARNING "FLANG_ENABLE_WERROR setting is different from LLVM_ENABLE_WERROR.")
-  endif()
 endif()
 
 # Builtin check_cxx_compiler_flag doesn't seem to work correctly

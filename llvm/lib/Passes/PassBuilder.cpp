@@ -35,6 +35,7 @@
 #include "llvm/Analysis/IVUsers.h"
 #include "llvm/Analysis/InlineAdvisor.h"
 #include "llvm/Analysis/InlineFeaturesAnalysis.h"
+#include "llvm/Analysis/InlineSizeEstimatorAnalysis.h"
 #include "llvm/Analysis/LazyCallGraph.h"
 #include "llvm/Analysis/LazyValueInfo.h"
 #include "llvm/Analysis/LoopAccessAnalysis.h"
@@ -57,9 +58,6 @@
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/TypeBasedAliasAnalysis.h"
-#include "llvm/CodeGen/MachineModuleInfo.h"
-#include "llvm/CodeGen/PreISelIntrinsicLowering.h"
-#include "llvm/CodeGen/UnreachableBlockElim.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/PassManager.h"
@@ -251,10 +249,6 @@ static cl::opt<bool>
     EnableCHR("enable-chr-npm", cl::init(true), cl::Hidden,
               cl::desc("Enable control height reduction optimization (CHR)"));
 
-static cl::opt<bool> EnableCallGraphProfile(
-    "enable-npm-call-graph-profile", cl::init(true), cl::Hidden,
-    cl::desc("Enable call graph profile pass for the new PM (default = on)"));
-
 /// Flag to enable inline deferral during PGO.
 static cl::opt<bool>
     EnablePGOInlineDeferral("enable-npm-pgo-inline-deferral", cl::init(true),
@@ -270,7 +264,7 @@ PipelineTuningOptions::PipelineTuningOptions() {
   Coroutines = false;
   LicmMssaOptCap = SetLicmMssaOptCap;
   LicmMssaNoAccForPromotionCap = SetLicmMssaNoAccForPromotionCap;
-  CallGraphProfile = EnableCallGraphProfile;
+  CallGraphProfile = true;
 }
 
 extern cl::opt<bool> EnableHotColdSplit;
@@ -302,11 +296,16 @@ const PassBuilder::OptimizationLevel PassBuilder::OptimizationLevel::Oz = {
 
 namespace {
 
+// The following passes/analyses have custom names, otherwise their name will
+// include `(anonymous namespace)`. These are special since they are only for
+// testing purposes and don't live in a header file.
+
 /// No-op module pass which does nothing.
-struct NoOpModulePass {
+struct NoOpModulePass : PassInfoMixin<NoOpModulePass> {
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
     return PreservedAnalyses::all();
   }
+
   static StringRef name() { return "NoOpModulePass"; }
 };
 
@@ -322,7 +321,7 @@ public:
 };
 
 /// No-op CGSCC pass which does nothing.
-struct NoOpCGSCCPass {
+struct NoOpCGSCCPass : PassInfoMixin<NoOpCGSCCPass> {
   PreservedAnalyses run(LazyCallGraph::SCC &C, CGSCCAnalysisManager &,
                         LazyCallGraph &, CGSCCUpdateResult &UR) {
     return PreservedAnalyses::all();
@@ -344,7 +343,7 @@ public:
 };
 
 /// No-op function pass which does nothing.
-struct NoOpFunctionPass {
+struct NoOpFunctionPass : PassInfoMixin<NoOpFunctionPass> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
     return PreservedAnalyses::all();
   }
@@ -363,7 +362,7 @@ public:
 };
 
 /// No-op loop pass which does nothing.
-struct NoOpLoopPass {
+struct NoOpLoopPass : PassInfoMixin<NoOpLoopPass> {
   PreservedAnalyses run(Loop &L, LoopAnalysisManager &,
                         LoopStandardAnalysisResults &, LPMUpdater &) {
     return PreservedAnalyses::all();
@@ -389,7 +388,7 @@ AnalysisKey NoOpCGSCCAnalysis::Key;
 AnalysisKey NoOpFunctionAnalysis::Key;
 AnalysisKey NoOpLoopAnalysis::Key;
 
-} // End anonymous namespace.
+} // namespace
 
 void PassBuilder::invokePeepholeEPCallbacks(
     FunctionPassManager &FPM, PassBuilder::OptimizationLevel Level) {
@@ -511,8 +510,7 @@ FunctionPassManager PassBuilder::buildO1FunctionSimplificationPipeline(
       std::move(LPM1), EnableMSSALoopDependency, DebugLogging));
   FPM.addPass(SimplifyCFGPass());
   FPM.addPass(InstCombinePass());
-  // The loop passes in LPM2 (IndVarSimplifyPass, LoopIdiomRecognizePass,
-  // LoopDeletionPass and LoopFullUnrollPass) do not preserve MemorySSA.
+  // The loop passes in LPM2 (LoopFullUnrollPass) do not preserve MemorySSA.
   // *All* loop passes must preserve it, in order to be able to use it.
   FPM.addPass(createFunctionToLoopPassAdaptor(
       std::move(LPM2), /*UseMemorySSA=*/false, DebugLogging));
@@ -588,7 +586,7 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
   }
 
   // Speculative execution if the target has divergent branches; otherwise nop.
-  FPM.addPass(SpeculativeExecutionPass());
+  FPM.addPass(SpeculativeExecutionPass(/* OnlyIfDivergentTarget =*/true));
 
   // Optimize based on known information about branches, and cleanup afterward.
   FPM.addPass(JumpThreadingPass());
@@ -972,6 +970,12 @@ ModulePassManager PassBuilder::buildModuleSimplificationPipeline(
 
   if (AttributorRun & AttributorRunOption::MODULE)
     MPM.addPass(AttributorPass());
+
+  // Lower type metadata and the type.test intrinsic in the ThinLTO
+  // post link pipeline after ICP. This is to enable usage of the type
+  // tests in ICP sequences.
+  if (Phase == ThinLTOPhase::PostLink)
+    MPM.addPass(LowerTypeTestsPass(nullptr, nullptr, true));
 
   // Interprocedural constant propagation now that basic cleanup has occurred
   // and prior to optimizing globals.
@@ -1357,6 +1361,9 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level, bool DebugLogging,
     // metadata and intrinsics.
     MPM.addPass(WholeProgramDevirtPass(ExportSummary, nullptr));
     MPM.addPass(LowerTypeTestsPass(ExportSummary, nullptr));
+    // Run a second time to clean up any type tests left behind by WPD for use
+    // in ICP.
+    MPM.addPass(LowerTypeTestsPass(nullptr, nullptr, true));
     return MPM;
   }
 
@@ -1423,6 +1430,10 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level, bool DebugLogging,
     // The LowerTypeTestsPass needs to run to lower type metadata and the
     // type.test intrinsics. The pass does nothing if CFI is disabled.
     MPM.addPass(LowerTypeTestsPass(ExportSummary, nullptr));
+    // Run a second time to clean up any type tests left behind by WPD for use
+    // in ICP (which is performed earlier than this in the regular LTO
+    // pipeline).
+    MPM.addPass(LowerTypeTestsPass(nullptr, nullptr, true));
     return MPM;
   }
 
@@ -1550,6 +1561,9 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level, bool DebugLogging,
   // to be run at link time if CFI is enabled. This pass does nothing if
   // CFI is disabled.
   MPM.addPass(LowerTypeTestsPass(ExportSummary, nullptr));
+  // Run a second time to clean up any type tests left behind by WPD for use
+  // in ICP (which is performed earlier than this in the regular LTO pipeline).
+  MPM.addPass(LowerTypeTestsPass(nullptr, nullptr, true));
 
   // Enable splitting late in the FullLTO post-link pipeline. This is done in
   // the same stage in the old pass manager (\ref addLateLTOOptimizationPasses).
@@ -2659,4 +2673,29 @@ Error PassBuilder::parseAAPipeline(AAManager &AA, StringRef PipelineText) {
   }
 
   return Error::success();
+}
+
+bool PassBuilder::isAAPassName(StringRef PassName) {
+#define FUNCTION_ALIAS_ANALYSIS(NAME, CREATE_PASS)                             \
+  if (PassName == NAME)                                                        \
+    return true;
+#include "PassRegistry.def"
+  return false;
+}
+
+bool PassBuilder::isAnalysisPassName(StringRef PassName) {
+#define MODULE_ANALYSIS(NAME, CREATE_PASS)                                     \
+  if (PassName == NAME)                                                        \
+    return true;
+#define FUNCTION_ANALYSIS(NAME, CREATE_PASS)                                   \
+  if (PassName == NAME)                                                        \
+    return true;
+#define LOOP_ANALYSIS(NAME, CREATE_PASS)                                       \
+  if (PassName == NAME)                                                        \
+    return true;
+#define CGSSC_ANALYSIS(NAME, CREATE_PASS)                                      \
+  if (PassName == NAME)                                                        \
+    return true;
+#include "PassRegistry.def"
+  return false;
 }

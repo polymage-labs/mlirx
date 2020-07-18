@@ -157,9 +157,11 @@ public:
     return static_cast<ExprDependence>(ExprBits.Dependent);
   }
 
-  /// isValueDependent - Determines whether this expression is
-  /// value-dependent (C++ [temp.dep.constexpr]). For example, the
-  /// array bound of "Chars" in the following example is
+  /// Determines whether the value of this expression depends on
+  ///   - a template parameter (C++ [temp.dep.constexpr])
+  ///   - or an error, whose resolution is unknown
+  ///
+  /// For example, the array bound of "Chars" in the following example is
   /// value-dependent.
   /// @code
   /// template<int Size, char (&Chars)[Size]> struct meta_string;
@@ -168,10 +170,12 @@ public:
     return static_cast<bool>(getDependence() & ExprDependence::Value);
   }
 
-  /// isTypeDependent - Determines whether this expression is
-  /// type-dependent (C++ [temp.dep.expr]), which means that its type
-  /// could change from one template instantiation to the next. For
-  /// example, the expressions "x" and "x + y" are type-dependent in
+  /// Determines whether the type of this expression depends on
+  ///   - a template paramter (C++ [temp.dep.expr], which means that its type
+  ///     could change from one template instantiation to the next)
+  ///   - or an error
+  ///
+  /// For example, the expressions "x" and "x + y" are type-dependent in
   /// the following code, but "y" is not type-dependent:
   /// @code
   /// template<typename T>
@@ -184,8 +188,10 @@ public:
   }
 
   /// Whether this expression is instantiation-dependent, meaning that
-  /// it depends in some way on a template parameter, even if neither its type
-  /// nor (constant) value can change due to the template instantiation.
+  /// it depends in some way on
+  ///    - a template parameter (even if neither its type nor (constant) value
+  ///      can change due to the template instantiation)
+  ///    - or an error
   ///
   /// In the following example, the expression \c sizeof(sizeof(T() + T())) is
   /// instantiation-dependent (since it involves a template parameter \c T), but
@@ -200,6 +206,12 @@ public:
   /// }
   /// \endcode
   ///
+  /// \code
+  /// void func(int) {
+  ///   func(); // the expression is instantiation-dependent, because it depends
+  ///           // on an error.
+  /// }
+  /// \endcode
   bool isInstantiationDependent() const {
     return static_cast<bool>(getDependence() & ExprDependence::Instantiation);
   }
@@ -988,11 +1000,14 @@ class ConstantExpr final
     : public FullExpr,
       private llvm::TrailingObjects<ConstantExpr, APValue, uint64_t> {
   static_assert(std::is_same<uint64_t, llvm::APInt::WordType>::value,
-                "this class assumes llvm::APInt::WordType is uint64_t for "
-                "trail-allocated storage");
+                "ConstantExpr assumes that llvm::APInt::WordType is uint64_t "
+                "for tail-allocated storage");
+  friend TrailingObjects;
+  friend class ASTStmtReader;
+  friend class ASTStmtWriter;
 
 public:
-  /// Describes the kind of result that can be trail-allocated.
+  /// Describes the kind of result that can be tail-allocated.
   enum ResultStorageKind { RSK_None, RSK_Int64, RSK_APValue };
 
 private:
@@ -1003,7 +1018,6 @@ private:
     return ConstantExprBits.ResultKind == ConstantExpr::RSK_Int64;
   }
 
-  void DefaultInit(ResultStorageKind StorageKind);
   uint64_t &Int64Result() {
     assert(ConstantExprBits.ResultKind == ConstantExpr::RSK_Int64 &&
            "invalid accessor");
@@ -1021,21 +1035,18 @@ private:
     return const_cast<ConstantExpr *>(this)->APValueResult();
   }
 
-  ConstantExpr(Expr *subexpr, ResultStorageKind StorageKind);
-  ConstantExpr(ResultStorageKind StorageKind, EmptyShell Empty);
+  ConstantExpr(Expr *SubExpr, ResultStorageKind StorageKind,
+               bool IsImmediateInvocation);
+  ConstantExpr(EmptyShell Empty, ResultStorageKind StorageKind);
 
 public:
-  friend TrailingObjects;
-  friend class ASTStmtReader;
-  friend class ASTStmtWriter;
   static ConstantExpr *Create(const ASTContext &Context, Expr *E,
                               const APValue &Result);
   static ConstantExpr *Create(const ASTContext &Context, Expr *E,
                               ResultStorageKind Storage = RSK_None,
                               bool IsImmediateInvocation = false);
   static ConstantExpr *CreateEmpty(const ASTContext &Context,
-                                   ResultStorageKind StorageKind,
-                                   EmptyShell Empty);
+                                   ResultStorageKind StorageKind);
 
   static ResultStorageKind getStorageKind(const APValue &Value);
   static ResultStorageKind getStorageKind(const Type *T,
@@ -2119,21 +2130,21 @@ public:
 ///
 class UnaryOperator final
     : public Expr,
-      private llvm::TrailingObjects<UnaryOperator, FPOptions> {
+      private llvm::TrailingObjects<UnaryOperator, FPOptionsOverride> {
   Stmt *Val;
 
-  size_t numTrailingObjects(OverloadToken<FPOptions>) const {
+  size_t numTrailingObjects(OverloadToken<FPOptionsOverride>) const {
     return UnaryOperatorBits.HasFPFeatures ? 1 : 0;
   }
 
-  FPOptions &getTrailingFPFeatures() {
+  FPOptionsOverride &getTrailingFPFeatures() {
     assert(UnaryOperatorBits.HasFPFeatures);
-    return *getTrailingObjects<FPOptions>();
+    return *getTrailingObjects<FPOptionsOverride>();
   }
 
-  const FPOptions &getTrailingFPFeatures() const {
+  const FPOptionsOverride &getTrailingFPFeatures() const {
     assert(UnaryOperatorBits.HasFPFeatures);
-    return *getTrailingObjects<FPOptions>();
+    return *getTrailingObjects<FPOptionsOverride>();
   }
 
 public:
@@ -2142,7 +2153,7 @@ public:
 protected:
   UnaryOperator(const ASTContext &Ctx, Expr *input, Opcode opc, QualType type,
                 ExprValueKind VK, ExprObjectKind OK, SourceLocation l,
-                bool CanOverflow, FPOptions FPFeatures);
+                bool CanOverflow, FPOptionsOverride FPFeatures);
 
   /// Build an empty unary operator.
   explicit UnaryOperator(bool HasFPFeatures, EmptyShell Empty)
@@ -2157,7 +2168,7 @@ public:
   static UnaryOperator *Create(const ASTContext &C, Expr *input, Opcode opc,
                                QualType type, ExprValueKind VK,
                                ExprObjectKind OK, SourceLocation l,
-                               bool CanOverflow, FPOptions FPFeatures);
+                               bool CanOverflow, FPOptionsOverride FPFeatures);
 
   Opcode getOpcode() const {
     return static_cast<Opcode>(UnaryOperatorBits.Opc);
@@ -2183,13 +2194,13 @@ public:
   // Get the FP contractability status of this operator. Only meaningful for
   // operations on floating point types.
   bool isFPContractableWithinStatement(const LangOptions &LO) const {
-    return getFPFeatures(LO).allowFPContractWithinStatement();
+    return getFPFeaturesInEffect(LO).allowFPContractWithinStatement();
   }
 
   // Get the FENV_ACCESS status of this operator. Only meaningful for
   // operations on floating point types.
   bool isFEnvAccessOn(const LangOptions &LO) const {
-    return getFPFeatures(LO).allowFEnvAccess();
+    return getFPFeaturesInEffect(LO).getAllowFEnvAccess();
   }
 
   /// isPostfix - Return true if this is a postfix operation, like x++.
@@ -2264,18 +2275,25 @@ public:
 
 protected:
   /// Get FPFeatures from trailing storage
-  FPOptions getStoredFPFeatures() const { return getTrailingFPFeatures(); }
+  FPOptionsOverride getStoredFPFeatures() const {
+    return getTrailingFPFeatures();
+  }
 
   /// Set FPFeatures in trailing storage, used only by Serialization
-  void setStoredFPFeatures(FPOptions F) { getTrailingFPFeatures() = F; }
+  void setStoredFPFeatures(FPOptionsOverride F) { getTrailingFPFeatures() = F; }
 
 public:
   // Get the FP features status of this operator. Only meaningful for
   // operations on floating point types.
-  FPOptions getFPFeatures(const LangOptions &LO) const {
+  FPOptions getFPFeaturesInEffect(const LangOptions &LO) const {
+    if (UnaryOperatorBits.HasFPFeatures)
+      return getStoredFPFeatures().applyOverrides(LO);
+    return FPOptions::defaultWithoutTrailingStorage(LO);
+  }
+  FPOptionsOverride getFPOptionsOverride() const {
     if (UnaryOperatorBits.HasFPFeatures)
       return getStoredFPFeatures();
-    return FPOptions::defaultWithoutTrailingStorage(LO);
+    return FPOptionsOverride();
   }
 
   friend TrailingObjects;
@@ -3634,14 +3652,14 @@ protected:
   size_t offsetOfTrailingStorage() const;
 
   /// Return a pointer to the trailing FPOptions
-  FPOptions *getTrailingFPFeatures() {
+  FPOptionsOverride *getTrailingFPFeatures() {
     assert(BinaryOperatorBits.HasFPFeatures);
-    return reinterpret_cast<FPOptions *>(reinterpret_cast<char *>(this) +
-                                         offsetOfTrailingStorage());
+    return reinterpret_cast<FPOptionsOverride *>(
+        reinterpret_cast<char *>(this) + offsetOfTrailingStorage());
   }
-  const FPOptions *getTrailingFPFeatures() const {
+  const FPOptionsOverride *getTrailingFPFeatures() const {
     assert(BinaryOperatorBits.HasFPFeatures);
-    return reinterpret_cast<const FPOptions *>(
+    return reinterpret_cast<const FPOptionsOverride *>(
         reinterpret_cast<const char *>(this) + offsetOfTrailingStorage());
   }
 
@@ -3649,7 +3667,7 @@ protected:
   /// allocated for the trailing objects when needed.
   BinaryOperator(const ASTContext &Ctx, Expr *lhs, Expr *rhs, Opcode opc,
                  QualType ResTy, ExprValueKind VK, ExprObjectKind OK,
-                 SourceLocation opLoc, FPOptions FPFeatures);
+                 SourceLocation opLoc, FPOptionsOverride FPFeatures);
 
   /// Construct an empty binary operator.
   explicit BinaryOperator(EmptyShell Empty) : Expr(BinaryOperatorClass, Empty) {
@@ -3662,7 +3680,7 @@ public:
   static BinaryOperator *Create(const ASTContext &C, Expr *lhs, Expr *rhs,
                                 Opcode opc, QualType ResTy, ExprValueKind VK,
                                 ExprObjectKind OK, SourceLocation opLoc,
-                                FPOptions FPFeatures);
+                                FPOptionsOverride FPFeatures);
   SourceLocation getExprLoc() const { return getOperatorLoc(); }
   SourceLocation getOperatorLoc() const { return BinaryOperatorBits.OpLoc; }
   void setOperatorLoc(SourceLocation L) { BinaryOperatorBits.OpLoc = L; }
@@ -3809,40 +3827,48 @@ public:
   bool hasStoredFPFeatures() const { return BinaryOperatorBits.HasFPFeatures; }
 
   /// Get FPFeatures from trailing storage
-  FPOptions getStoredFPFeatures() const {
+  FPOptionsOverride getStoredFPFeatures() const {
     assert(hasStoredFPFeatures());
     return *getTrailingFPFeatures();
   }
   /// Set FPFeatures in trailing storage, used only by Serialization
-  void setStoredFPFeatures(FPOptions F) {
+  void setStoredFPFeatures(FPOptionsOverride F) {
     assert(BinaryOperatorBits.HasFPFeatures);
     *getTrailingFPFeatures() = F;
   }
 
   // Get the FP features status of this operator. Only meaningful for
   // operations on floating point types.
-  FPOptions getFPFeatures(const LangOptions &LO) const {
+  FPOptions getFPFeaturesInEffect(const LangOptions &LO) const {
+    if (BinaryOperatorBits.HasFPFeatures)
+      return getStoredFPFeatures().applyOverrides(LO);
+    return FPOptions::defaultWithoutTrailingStorage(LO);
+  }
+
+  // This is used in ASTImporter
+  FPOptionsOverride getFPFeatures(const LangOptions &LO) const {
     if (BinaryOperatorBits.HasFPFeatures)
       return getStoredFPFeatures();
-    return FPOptions::defaultWithoutTrailingStorage(LO);
+    return FPOptionsOverride();
   }
 
   // Get the FP contractability status of this operator. Only meaningful for
   // operations on floating point types.
   bool isFPContractableWithinStatement(const LangOptions &LO) const {
-    return getFPFeatures(LO).allowFPContractWithinStatement();
+    return getFPFeaturesInEffect(LO).allowFPContractWithinStatement();
   }
 
   // Get the FENV_ACCESS status of this operator. Only meaningful for
   // operations on floating point types.
   bool isFEnvAccessOn(const LangOptions &LO) const {
-    return getFPFeatures(LO).allowFEnvAccess();
+    return getFPFeaturesInEffect(LO).getAllowFEnvAccess();
   }
 
 protected:
   BinaryOperator(const ASTContext &Ctx, Expr *lhs, Expr *rhs, Opcode opc,
                  QualType ResTy, ExprValueKind VK, ExprObjectKind OK,
-                 SourceLocation opLoc, FPOptions FPFeatures, bool dead2);
+                 SourceLocation opLoc, FPOptionsOverride FPFeatures,
+                 bool dead2);
 
   /// Construct an empty BinaryOperator, SC is CompoundAssignOperator.
   BinaryOperator(StmtClass SC, EmptyShell Empty) : Expr(SC, Empty) {
@@ -3852,7 +3878,7 @@ protected:
   /// Return the size in bytes needed for the trailing objects.
   /// Used to allocate the right amount of storage.
   static unsigned sizeOfTrailingObjects(bool HasFPFeatures) {
-    return HasFPFeatures * sizeof(FPOptions);
+    return HasFPFeatures * sizeof(FPOptionsOverride);
   }
 };
 
@@ -3874,7 +3900,7 @@ class CompoundAssignOperator : public BinaryOperator {
 protected:
   CompoundAssignOperator(const ASTContext &C, Expr *lhs, Expr *rhs, Opcode opc,
                          QualType ResType, ExprValueKind VK, ExprObjectKind OK,
-                         SourceLocation OpLoc, FPOptions FPFeatures,
+                         SourceLocation OpLoc, FPOptionsOverride FPFeatures,
                          QualType CompLHSType, QualType CompResultType)
       : BinaryOperator(C, lhs, rhs, opc, ResType, VK, OK, OpLoc, FPFeatures,
                        true),
@@ -3890,7 +3916,7 @@ public:
   static CompoundAssignOperator *
   Create(const ASTContext &C, Expr *lhs, Expr *rhs, Opcode opc, QualType ResTy,
          ExprValueKind VK, ExprObjectKind OK, SourceLocation opLoc,
-         FPOptions FPFeatures, QualType CompLHSType = QualType(),
+         FPOptionsOverride FPFeatures, QualType CompLHSType = QualType(),
          QualType CompResultType = QualType());
 
   // The two computation types are the type the LHS is converted
@@ -6198,19 +6224,25 @@ public:
 /// subexpressions of some expression that we could not construct and source
 /// range covered by the expression.
 ///
-/// By default, RecoveryExpr is type-, value- and instantiation-dependent to
-/// take advantage of existing machinery to deal with dependent code in C++,
-/// e.g. RecoveryExpr is preserved in `decltype(<broken-expr>)` as part of the
-/// `DependentDecltypeType`. In addition to that, clang does not report most
-/// errors on dependent expressions, so we get rid of bogus errors for free.
-/// However, note that unlike other dependent expressions, RecoveryExpr can be
-/// produced in non-template contexts.
-/// In addition, we will preserve the type in RecoveryExpr when the type is
-/// known, e.g. preserving the return type for a broken non-overloaded function
-/// call, a overloaded call where all candidates have the same return type.
+/// By default, RecoveryExpr uses dependence-bits to take advantage of existing
+/// machinery to deal with dependent code in C++, e.g. RecoveryExpr is preserved
+/// in `decltype(<broken-expr>)` as part of the `DependentDecltypeType`. In
+/// addition to that, clang does not report most errors on dependent
+/// expressions, so we get rid of bogus errors for free. However, note that
+/// unlike other dependent expressions, RecoveryExpr can be produced in
+/// non-template contexts.
+///
+/// We will preserve the type in RecoveryExpr when the type is known, e.g.
+/// preserving the return type for a broken non-overloaded function call, a
+/// overloaded call where all candidates have the same return type. In this
+/// case, the expression is not type-dependent (unless the known type is itself
+/// dependent)
 ///
 /// One can also reliably suppress all bogus errors on expressions containing
 /// recovery expressions by examining results of Expr::containsErrors().
+///
+/// FIXME: RecoveryExpr is currently generated by default in C++ mode only, as
+/// dependence isn't handled properly on several C-only codepaths.
 class RecoveryExpr final : public Expr,
                            private llvm::TrailingObjects<RecoveryExpr, Expr *> {
 public:

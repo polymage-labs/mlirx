@@ -179,7 +179,7 @@ static cl::opt<bool> ClEventCallbacks(
 static StringRef GetGlobalTypeString(const GlobalValue &G) {
   // Types of GlobalVariables are always pointer types.
   Type *GType = G.getValueType();
-  // For now we support blacklisting struct types only.
+  // For now we support excluding struct types only.
   if (StructType *SGType = dyn_cast<StructType>(GType)) {
     if (!SGType->isLiteral())
       return SGType->getName();
@@ -1369,15 +1369,9 @@ void DFSanVisitor::visitLoadInst(LoadInst &LI) {
     return;
   }
 
-  uint64_t Align;
-  if (ClPreserveAlignment) {
-    Align = LI.getAlignment();
-    if (Align == 0)
-      Align = DL.getABITypeAlignment(LI.getType());
-  } else {
-    Align = 1;
-  }
-  Value *Shadow = DFSF.loadShadow(LI.getPointerOperand(), Size, Align, &LI);
+  Align Alignment = ClPreserveAlignment ? LI.getAlign() : Align(1);
+  Value *Shadow =
+      DFSF.loadShadow(LI.getPointerOperand(), Size, Alignment.value(), &LI);
   if (ClCombinePointerLabelsOnLoad) {
     Value *PtrShadow = DFSF.getShadow(LI.getPointerOperand());
     Shadow = DFSF.combineShadows(Shadow, PtrShadow, &LI);

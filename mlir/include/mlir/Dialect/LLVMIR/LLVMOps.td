@@ -215,19 +215,36 @@ def LLVM_FDivOp : LLVM_ArithmeticOp<"fdiv", "CreateFDiv">;
 def LLVM_FRemOp : LLVM_ArithmeticOp<"frem", "CreateFRem">;
 def LLVM_FNegOp : LLVM_UnaryArithmeticOp<"fneg", "CreateFNeg">;
 
-// Memory-related operations.
-def LLVM_AllocaOp :
-    LLVM_OneResultOp<"alloca">,
-    Arguments<(ins LLVM_Type:$arraySize, OptionalAttr<I64Attr>:$alignment)> {
-  string llvmBuilder = [{
-    auto *alloca = builder.CreateAlloca(
-      $_resultType->getPointerElementType(), $arraySize);
+// Common code definition that is used to verify and set the alignment attribute
+// of LLVM ops that accept such an attribute.
+class MemoryOpWithAlignmentBase {
+  code alignmentVerifierCode = [{
+    if (alignment().hasValue()) {
+      auto align = alignment().getValue().getSExtValue();
+      if (align < 0)
+        return emitOpError("expected positive alignment");
+    }
+    return success();
+  }];
+  code setAlignmentCode = [{
     if ($alignment.hasValue()) {
       auto align = $alignment.getValue().getZExtValue();
       if (align != 0)
-        alloca->setAlignment(llvm::Align(align));
+        inst->setAlignment(llvm::Align(align));
     }
-    $res = alloca;
+  }];
+}
+
+// Memory-related operations.
+def LLVM_AllocaOp :
+    MemoryOpWithAlignmentBase,
+    LLVM_OneResultOp<"alloca">,
+    Arguments<(ins LLVM_Type:$arraySize, OptionalAttr<I64Attr>:$alignment)> {
+  string llvmBuilder = [{
+    auto *inst = builder.CreateAlloca(
+      $_resultType->getPointerElementType(), $arraySize);
+    }] # setAlignmentCode # [{
+    $res = inst;
   }];
   let builders = [OpBuilder<
     "OpBuilder &b, OperationState &result, Type resultType, Value arraySize, "
@@ -239,14 +256,7 @@ def LLVM_AllocaOp :
   }]>];
   let parser = [{ return parseAllocaOp(parser, result); }];
   let printer = [{ printAllocaOp(p, *this); }];
-  let verifier = [{
-    if (alignment().hasValue()) {
-      auto align = alignment().getValue().getSExtValue();
-      if (align < 0)
-        return emitOpError("expected positive alignment");
-    }
-    return success();
-  }];
+  let verifier = alignmentVerifierCode;
 }
 def LLVM_GEPOp : LLVM_OneResultOp<"getelementptr", [NoSideEffect]>,
                  Arguments<(ins LLVM_Type:$base, Variadic<LLVM_Type>:$indices)>,
@@ -255,22 +265,56 @@ def LLVM_GEPOp : LLVM_OneResultOp<"getelementptr", [NoSideEffect]>,
     $base `[` $indices `]` attr-dict `:` functional-type(operands, results)
   }];
 }
-def LLVM_LoadOp : LLVM_OneResultOp<"load">, Arguments<(ins LLVM_Type:$addr)>,
-                  LLVM_Builder<"$res = builder.CreateLoad($addr);"> {
+def LLVM_LoadOp :
+    MemoryOpWithAlignmentBase,
+    LLVM_OneResultOp<"load">,
+    Arguments<(ins LLVM_Type:$addr, OptionalAttr<I64Attr>:$alignment)> {
+  string llvmBuilder = [{
+    auto *inst = builder.CreateLoad($addr);
+  }] # setAlignmentCode # [{
+    $res = inst;
+  }];
   let builders = [OpBuilder<
-    "OpBuilder &b, OperationState &result, Value addr",
+    "OpBuilder &b, OperationState &result, Value addr, unsigned alignment = 0",
     [{
       auto type = addr.getType().cast<LLVM::LLVMType>().getPointerElementTy();
-      build(b, result, type, addr);
+      build(b, result, type, addr, alignment);
+    }]>,
+    OpBuilder<
+    "OpBuilder &b, OperationState &result, Type t, Value addr, "
+    "unsigned alignment = 0",
+    [{
+      if (alignment == 0)
+        return build(b, result, t, addr, IntegerAttr());
+      build(b, result, t, addr, b.getI64IntegerAttr(alignment));
     }]>];
   let parser = [{ return parseLoadOp(parser, result); }];
   let printer = [{ printLoadOp(p, *this); }];
+  let verifier = alignmentVerifierCode;
 }
-def LLVM_StoreOp : LLVM_ZeroResultOp<"store">,
-                   Arguments<(ins LLVM_Type:$value, LLVM_Type:$addr)>,
-                   LLVM_Builder<"builder.CreateStore($value, $addr);"> {
+def LLVM_StoreOp :
+    MemoryOpWithAlignmentBase,
+    LLVM_ZeroResultOp<"store">,
+    Arguments<(ins LLVM_Type:$value,
+                   LLVM_Type:$addr,
+                   OptionalAttr<I64Attr>:$alignment)> {
+  string llvmBuilder = [{
+    auto *inst = builder.CreateStore($value, $addr);
+  }] # setAlignmentCode;
+  let builders = [
+    OpBuilder<
+    "OpBuilder &b, OperationState &result, Value value, Value addr, "
+    "unsigned alignment = 0",
+    [{
+      if (alignment == 0)
+        return build(b, result, ArrayRef<Type>{}, value, addr, IntegerAttr());
+      build(b, result, ArrayRef<Type>{}, value, addr, 
+            b.getI64IntegerAttr(alignment));
+    }]
+  >];
   let parser = [{ return parseStoreOp(parser, result); }];
   let printer = [{ printStoreOp(p, *this); }];
+  let verifier = alignmentVerifierCode;
 }
 
 // Casts.
@@ -575,6 +619,8 @@ def Linkage : LLVM_EnumAttr<
 def LLVM_AddressOfOp
     : LLVM_OneResultOp<"mlir.addressof">,
       Arguments<(ins FlatSymbolRefAttr:$global_name)> {
+  let summary = "Creates a pointer pointing to a global or a function";
+
   let builders = [
     OpBuilder<"OpBuilder &builder, OperationState &result, LLVMType resType, "
               "StringRef name, ArrayRef<NamedAttribute> attrs = {}", [{
@@ -586,13 +632,21 @@ def LLVM_AddressOfOp
               "ArrayRef<NamedAttribute> attrs = {}", [{
       build(builder, result,
             global.getType().getPointerTo(global.addr_space().getZExtValue()),
-            global.sym_name(), attrs);}]>
+            global.sym_name(), attrs);}]>,
+
+    OpBuilder<"OpBuilder &builder, OperationState &result, LLVMFuncOp func, "
+              "ArrayRef<NamedAttribute> attrs = {}", [{
+      build(builder, result,
+            func.getType().getPointerTo(), func.getName(), attrs);}]>
   ];
 
   let extraClassDeclaration = [{
     /// Return the llvm.mlir.global operation that defined the value referenced
     /// here.
     GlobalOp getGlobal();
+
+    /// Return the llvm.func operation that is referenced here.
+    LLVMFuncOp getFunction();
   }];
 
   let assemblyFormat = "$global_name attr-dict `:` type($res)";
@@ -733,6 +787,7 @@ def LLVM_ConstantOp
       LLVM_Builder<"$res = getLLVMConstant($_resultType, $value, $_location);">
 {
   let assemblyFormat = "`(` $value `)` attr-dict `:` type($res)";
+  let verifier = [{ return ::verify(*this); }];
 }
 
 def LLVM_DialectCastOp : LLVM_Op<"mlir.cast", [NoSideEffect]>,
@@ -791,6 +846,15 @@ def LLVM_Prefetch : LLVM_ZeroResultIntrOp<"prefetch", [0]>,
 def LLVM_SinOp : LLVM_UnaryIntrinsicOp<"sin">;
 def LLVM_SqrtOp : LLVM_UnaryIntrinsicOp<"sqrt">;
 def LLVM_PowOp : LLVM_BinarySameArgsIntrinsicOp<"pow">;
+def LLVM_BitReverseOp : LLVM_UnaryIntrinsicOp<"bitreverse">;
+def LLVM_CtPopOp : LLVM_UnaryIntrinsicOp<"ctpop">;
+
+def LLVM_MemcpyOp : LLVM_ZeroResultIntrOp<"memcpy", [0, 1, 2]>,
+                    Arguments<(ins LLVM_Type:$dst, LLVM_Type:$src,
+                               LLVM_Type:$len, LLVM_Type:$isVolatile)>;
+def LLVM_MemcpyInlineOp : LLVM_ZeroResultIntrOp<"memcpy.inline", [0, 1, 2]>,
+                          Arguments<(ins LLVM_Type:$dst, LLVM_Type:$src,
+                                     LLVM_Type:$len, LLVM_Type:$isVolatile)>;
 
 //
 // Vector Reductions.

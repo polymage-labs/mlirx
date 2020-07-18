@@ -2015,6 +2015,10 @@ bool ARMBaseInstrInfo::isSchedulingBoundary(const MachineInstr &MI,
   if (MI.isTerminator() || MI.isPosition())
     return true;
 
+  // INLINEASM_BR can jump to another block
+  if (MI.getOpcode() == TargetOpcode::INLINEASM_BR)
+    return true;
+
   // Treat the start of the IT block as a scheduling boundary, but schedule
   // t2IT along with all instructions following it.
   // FIXME: This is a big hammer. But the alternative is to add all potential
@@ -5912,8 +5916,8 @@ ARMBaseInstrInfo::getOutliningType(MachineBasicBlock::iterator &MIT,
   if (MI.isCall()) {
     // If we don't know anything about the callee, assume it depends on the
     // stack layout of the caller. In that case, it's only legal to outline
-    // as a tail-call.  Whitelist the call instructions we know about so we
-    // don't get unexpected results with call pseudo-instructions.
+    // as a tail-call. Explicitly list the call instructions we know about so
+    // we don't get unexpected results with call pseudo-instructions.
     auto UnknownCallOutlineType = outliner::InstrType::Illegal;
     if (Opc == ARM::BL || Opc == ARM::tBL || Opc == ARM::BLX ||
         Opc == ARM::tBLXr || Opc == ARM::tBLXi)

@@ -70,15 +70,19 @@ BEGIN {
   if ($generate_serialization_test == 1) {
     gsub(" imported", "{{( imported)?}}", s)
     gsub(" <undeserialized declarations>", "{{( <undeserialized declarations>)?}}", s)
+    gsub("line:[0-9]+:[0-9]+", "line:{{.*}}", s)
+    gsub("line:[0-9]+", "line:{{.*}}", s)
+    gsub("col:[0-9]+", "col:{{.*}}", s)
+    gsub(":[0-9]+:[0-9]+", "{{.*}}", s)
   }
 }
 
 matched_last_line == 0 {
-  print "// ${prefix}: " s
+  print "// ${prefix}:" s
 }
 
 matched_last_line == 1 {
-  print "// ${prefix}-NEXT: " s
+  print "// ${prefix}-NEXT:" s
 }
 
 {

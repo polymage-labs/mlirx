@@ -18,7 +18,9 @@
 #include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <sstream>
@@ -82,7 +84,8 @@ private:
 
 } // namespace
 
-std::unique_ptr<InlineAdvice> DefaultInlineAdvisor::getAdvice(CallBase &CB) {
+llvm::Optional<llvm::InlineCost> static getDefaultInlineAdvice(
+    CallBase &CB, FunctionAnalysisManager &FAM, const InlineParams &Params) {
   Function &Caller = *CB.getCaller();
   ProfileSummaryInfo *PSI =
       FAM.getResult<ModuleAnalysisManagerFunctionProxy>(Caller)
@@ -109,10 +112,16 @@ std::unique_ptr<InlineAdvice> DefaultInlineAdvisor::getAdvice(CallBase &CB) {
     return getInlineCost(CB, Params, CalleeTTI, GetAssumptionCache, GetTLI,
                          GetBFI, PSI, RemarksEnabled ? &ORE : nullptr);
   };
-  auto OIC = llvm::shouldInline(CB, GetInlineCost, ORE,
-                                Params.EnableDeferral.hasValue() &&
-                                    Params.EnableDeferral.getValue());
-  return std::make_unique<DefaultInlineAdvice>(this, CB, OIC, ORE);
+  return llvm::shouldInline(CB, GetInlineCost, ORE,
+                            Params.EnableDeferral.hasValue() &&
+                                Params.EnableDeferral.getValue());
+}
+
+std::unique_ptr<InlineAdvice> DefaultInlineAdvisor::getAdvice(CallBase &CB) {
+  auto OIC = getDefaultInlineAdvice(CB, FAM, Params);
+  return std::make_unique<DefaultInlineAdvice>(
+      this, CB, OIC,
+      FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()));
 }
 
 InlineAdvice::InlineAdvice(InlineAdvisor *Advisor, CallBase &CB,
@@ -153,7 +162,9 @@ bool InlineAdvisorAnalysis::Result::tryCreate(InlineParams Params,
     // To be added subsequently under conditional compilation.
     break;
   case InliningAdvisorMode::Release:
-    // To be added subsequently under conditional compilation.
+#ifdef LLVM_HAVE_TF_AOT
+    Advisor = llvm::getReleaseModeAdvisor(M, MAM);
+#endif
     break;
   }
   return !!Advisor;
@@ -354,14 +365,43 @@ llvm::shouldInline(CallBase &CB,
   return IC;
 }
 
+void llvm::addLocationToRemarks(OptimizationRemark &Remark, DebugLoc DLoc) {
+  if (!DLoc.get())
+    return;
+
+  bool First = true;
+  Remark << " at callsite ";
+  for (DILocation *DIL = DLoc.get(); DIL; DIL = DIL->getInlinedAt()) {
+    if (!First)
+      Remark << " @ ";
+    unsigned int Offset = DIL->getLine();
+    Offset -= DIL->getScope()->getSubprogram()->getLine();
+    unsigned int Discriminator = DIL->getBaseDiscriminator();
+    StringRef Name = DIL->getScope()->getSubprogram()->getLinkageName();
+    if (Name.empty())
+      Name = DIL->getScope()->getSubprogram()->getName();
+    Remark << Name << ":" << ore::NV("Line", Offset);
+    if (Discriminator)
+      Remark << "." << ore::NV("Disc", Discriminator);
+    First = false;
+  }
+}
+
 void llvm::emitInlinedInto(OptimizationRemarkEmitter &ORE, DebugLoc DLoc,
                            const BasicBlock *Block, const Function &Callee,
-                           const Function &Caller, const InlineCost &IC) {
+                           const Function &Caller, const InlineCost &IC,
+                           bool ForProfileContext, const char *PassName) {
   ORE.emit([&]() {
     bool AlwaysInline = IC.isAlways();
     StringRef RemarkName = AlwaysInline ? "AlwaysInline" : "Inlined";
-    return OptimizationRemark(DEBUG_TYPE, RemarkName, DLoc, Block)
-           << ore::NV("Callee", &Callee) << " inlined into "
-           << ore::NV("Caller", &Caller) << " with " << IC;
+    OptimizationRemark Remark(PassName ? PassName : DEBUG_TYPE, RemarkName,
+                              DLoc, Block);
+    Remark << ore::NV("Callee", &Callee) << " inlined into ";
+    Remark << ore::NV("Caller", &Caller);
+    if (ForProfileContext)
+      Remark << " to match profiling context";
+    Remark << " with " << IC;
+    addLocationToRemarks(Remark, DLoc);
+    return Remark;
   });
 }

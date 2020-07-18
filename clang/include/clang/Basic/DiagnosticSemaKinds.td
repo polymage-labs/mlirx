@@ -259,6 +259,9 @@ def err_invalid_vector_float_decl_spec : Error<
 def err_invalid_vector_double_decl_spec : Error <
   "use of 'double' with '__vector' requires VSX support to be enabled "
   "(available on POWER7 or later)">;
+def err_invalid_vector_bool_int128_decl_spec : Error <
+  "use of '__int128' with '__vector bool' requires VSX support enabled (on "
+  "POWER10 or later)">;
 def err_invalid_vector_long_long_decl_spec : Error <
   "use of 'long long' with '__vector bool' requires VSX support (available on "
   "POWER7 or later) or extended Altivec support (available on POWER8 or later) "
@@ -827,8 +830,8 @@ def err_opencl_half_load_store : Error<
 def err_opencl_cast_to_half : Error<"casting to type %0 is not allowed">;
 def err_opencl_half_declaration : Error<
   "declaring variable of type %0 is not allowed">;
-def err_opencl_half_param : Error<
-  "declaring function parameter of type %0 is not allowed; did you forget * ?">;
+def err_opencl_invalid_param : Error<
+  "declaring function parameter of type %0 is not allowed%select{; did you forget * ?|}1">;
 def err_opencl_invalid_return : Error<
   "declaring function return value of type %0 is not allowed %select{; did you forget * ?|}1">;
 def warn_enum_value_overflow : Warning<"overflow in enumeration value">;
@@ -1375,8 +1378,14 @@ def warn_multiple_selectors: Warning<
   "several methods with selector %0 of mismatched types are found "
   "for the @selector expression">,
   InGroup<SelectorTypeMismatch>, DefaultIgnore;
-def err_direct_selector_expression: Error<
+def err_direct_selector_expression : Error<
   "@selector expression formed with direct selector %0">;
+def warn_potentially_direct_selector_expression : Warning<
+  "@selector expression formed with potentially direct selector %0">,
+  InGroup<ObjCPotentiallyDirectSelector>;
+def warn_strict_potentially_direct_selector_expression : Warning<
+  warn_potentially_direct_selector_expression.Text>,
+  InGroup<ObjCStrictPotentiallyDirectSelector>, DefaultIgnore;
 
 def err_objc_kindof_nonobject : Error<
   "'__kindof' specifier cannot be applied to non-object type %0">;
@@ -1411,7 +1420,8 @@ def warn_cxx14_compat_inline_variable : Warning<
   DefaultIgnore, InGroup<CXXPre17Compat>;
 
 def warn_inline_namespace_reopened_noninline : Warning<
-  "inline namespace reopened as a non-inline namespace">;
+  "inline namespace reopened as a non-inline namespace">,
+  InGroup<InlineNamespaceReopenedNoninline>;
 def err_inline_namespace_mismatch : Error<
   "non-inline namespace cannot be reopened as inline">;
 
@@ -2357,12 +2367,22 @@ def override_keyword_hides_virtual_member_function : Error<
   "%select{function|functions}1">;
 def err_function_marked_override_not_overriding : Error<
   "%0 marked 'override' but does not override any member functions">;
-def warn_destructor_marked_not_override_overriding : Warning <
-  "%0 overrides a destructor but is not marked 'override'">,
-  InGroup<CXX11WarnOverrideDestructor>, DefaultIgnore;
-def warn_function_marked_not_override_overriding : Warning <
-  "%0 overrides a member function but is not marked 'override'">,
-  InGroup<CXX11WarnOverrideMethod>;
+def warn_destructor_marked_not_override_overriding : TextSubstitution <
+  "%0 overrides a destructor but is not marked 'override'">;
+def warn_function_marked_not_override_overriding : TextSubstitution <
+  "%0 overrides a member function but is not marked 'override'">;
+def warn_inconsistent_destructor_marked_not_override_overriding : Warning <
+  "%sub{warn_destructor_marked_not_override_overriding}0">,
+  InGroup<CXX11WarnInconsistentOverrideDestructor>, DefaultIgnore;
+def warn_inconsistent_function_marked_not_override_overriding : Warning <
+  "%sub{warn_function_marked_not_override_overriding}0">,
+  InGroup<CXX11WarnInconsistentOverrideMethod>;
+def warn_suggest_destructor_marked_not_override_overriding : Warning <
+  "%sub{warn_destructor_marked_not_override_overriding}0">,
+  InGroup<CXX11WarnSuggestOverrideDestructor>, DefaultIgnore;
+def warn_suggest_function_marked_not_override_overriding : Warning <
+  "%sub{warn_function_marked_not_override_overriding}0">,
+  InGroup<CXX11WarnSuggestOverride>, DefaultIgnore;
 def err_class_marked_final_used_as_base : Error<
   "base %0 is marked '%select{final|sealed}1'">;
 def warn_abstract_final_class : Warning<
@@ -2790,6 +2810,13 @@ def err_attribute_invalid_vector_type : Error<"invalid vector element type %0">;
 def err_attribute_invalid_matrix_type : Error<"invalid matrix element type %0">;
 def err_attribute_bad_neon_vector_size : Error<
   "Neon vector size must be 64 or 128 bits">;
+def err_attribute_invalid_sve_type : Error<
+  "%0 attribute applied to non-SVE type %1">;
+def err_attribute_bad_sve_vector_size : Error<
+  "invalid SVE vector size '%0', must match value set by "
+  "'-msve-vector-bits' ('%1')">;
+def err_attribute_arm_feature_sve_bits_unsupported : Error<
+  "%0 is not supported when '-msve-vector-bits=<bits>' is not specified">;
 def err_attribute_requires_positive_integer : Error<
   "%0 attribute requires a %select{positive|non-negative}1 "
   "integral compile time constant expression">;
@@ -5385,9 +5412,6 @@ def ext_typecheck_zero_array_size : Extension<
   "zero size arrays are an extension">, InGroup<ZeroLengthArray>;
 def err_typecheck_zero_array_size : Error<
   "zero-length arrays are not permitted in C++">;
-def warn_typecheck_zero_static_array_size : Warning<
-  "'static' has no effect on zero-length arrays">,
-  InGroup<ArrayBounds>;
 def err_array_size_non_int : Error<"size of array has non-integer type %0">;
 def err_init_element_not_constant : Error<
   "initializer element is not a compile-time constant">;
@@ -6446,6 +6470,12 @@ def err_typecheck_ordered_comparison_of_pointer_and_zero : Error<
   "ordered comparison between pointer and zero (%0 and %1)">;
 def err_typecheck_three_way_comparison_of_pointer_and_zero : Error<
   "three-way comparison between pointer and zero">;
+def ext_typecheck_compare_complete_incomplete_pointers : Extension<
+  "pointer comparisons before C11 "
+  "need to be between two complete or two incomplete types; "
+  "%0 is %select{|in}2complete and "
+  "%1 is %select{|in}3complete">,
+  InGroup<C11>;
 def ext_typecheck_ordered_comparison_of_function_pointers : ExtWarn<
   "ordered comparison of function pointers (%0 and %1)">,
   InGroup<DiagGroup<"ordered-compare-function-pointers">>;
@@ -7916,6 +7946,8 @@ def err_atomic_builtin_pointer_size : Error<
 def err_atomic_exclusive_builtin_pointer_size : Error<
   "address argument to load or store exclusive builtin must be a pointer to"
   " 1,2,4 or 8 byte type (%0 invalid)">;
+def err_atomic_builtin_ext_int_size : Error<
+  "Atomic memory operand must have a power-of-two size">;
 def err_atomic_op_needs_atomic : Error<
   "address argument to atomic operation must be a pointer to _Atomic "
   "type (%0 invalid)">;
@@ -7983,6 +8015,10 @@ def err_ref_bad_target : Error<
 def err_ref_bad_target_global_initializer : Error<
   "reference to %select{__device__|__global__|__host__|__host__ __device__}0 "
   "function %1 in global initializer">;
+def err_capture_bad_target : Error<
+  "capture host variable %0 by reference in device or host device lambda function">;
+def err_capture_bad_target_this_ptr : Error<
+  "capture host side class data member by this pointer in device or host device lambda function">;
 def warn_kern_is_method : Extension<
   "kernel function %0 is a member function; this may not be accepted by nvcc">,
   InGroup<CudaCompat>;
@@ -9332,6 +9368,8 @@ def err_x86_builtin_invalid_rounding : Error<
   "invalid rounding argument">;
 def err_x86_builtin_invalid_scale : Error<
   "scale argument must be 1, 2, 4, or 8">;
+def err_x86_builtin_tile_arg_duplicate : Error<
+  "tile arguments must refer to different tiles">;
 
 def err_builtin_target_unsupported : Error<
   "builtin is not supported on this target">;
@@ -10042,6 +10080,8 @@ def err_omp_section_not_subset_of_array : Error<
   "array section must be a subset of the original array">;
 def err_omp_section_length_negative : Error<
   "section length is evaluated to a negative value %0">;
+def err_omp_section_stride_non_positive : Error<
+  "section stride is evaluated to a non-positive value %0">;
 def err_omp_section_length_undefined : Error<
   "section length is unspecified and cannot be inferred because subscripted value is %select{not an array|an array of unknown bound}0">;
 def err_omp_wrong_linear_modifier : Error<
@@ -10517,7 +10557,16 @@ def err_await_suspend_invalid_return_type : Error<
 def note_await_ready_no_bool_conversion : Note<
   "return type of 'await_ready' is required to be contextually convertible to 'bool'"
 >;
-}
+def warn_coroutine_handle_address_invalid_return_type : Warning <
+  "return type of 'coroutine_handle<>::address should be 'void*' (have %0) in order to get capability with existing async C API.">,
+  InGroup<Coroutine>;
+def err_coroutine_promise_final_suspend_requires_nothrow : Error<
+  "the expression 'co_await __promise.final_suspend()' is required to be non-throwing"
+>;
+def note_coroutine_function_declare_noexcept : Note<
+  "must be declared with 'noexcept'"
+>;
+} // end of coroutines issue category
 
 let CategoryName = "Documentation Issue" in {
 def warn_not_a_doxygen_trailing_member_comment : Warning<
@@ -10774,6 +10823,19 @@ def err_matrix_separate_incomplete_index: Error<
   "matrix row and column subscripts cannot be separated by any expression">;
 def err_matrix_subscript_comma: Error<
   "comma expressions are not allowed as indices in matrix subscript expressions">;
+def err_builtin_matrix_arg: Error<"1st argument must be a matrix">;
+def err_builtin_matrix_scalar_unsigned_arg: Error<
+  "%0 argument must be a constant unsigned integer expression">;
+def err_builtin_matrix_pointer_arg: Error<
+  "%ordinal0 argument must be a pointer to a valid matrix element type">;
+def err_builtin_matrix_pointer_arg_mismatch: Error<
+  "the pointee of the 2nd argument must match the element type of the 1st argument (%0 != %1)">;
+def err_builtin_matrix_store_to_const: Error<
+  "cannot store matrix to read-only pointer">;
+def err_builtin_matrix_stride_too_small: Error<
+  "stride must be greater or equal to the number of rows">;
+def err_builtin_matrix_invalid_dimension: Error<
+  "%0 dimension is outside the allowed range [1, %1]">;
 
 def warn_mismatched_import : Warning<
   "import %select{module|name}0 (%1) does not match the import %select{module|name}0 (%2) of the "
@@ -10782,26 +10844,6 @@ def warn_mismatched_import : Warning<
 def warn_import_on_definition : Warning<
   "import %select{module|name}0 cannot be applied to a function with a definition">,
   InGroup<IgnoredAttributes>;
-
-def err_builtin_matrix_arg: Error<"first argument must be a matrix">;
-
-def err_builtin_matrix_scalar_unsigned_arg: Error<
-  "%0 argument must be a constant unsigned integer expression">;
-
-def err_builtin_matrix_pointer_arg: Error<
-  "%0 argument must be a pointer to a valid matrix element type">;
-
-def err_builtin_matrix_pointer_arg_mismatch: Error<
-  "the pointee of the second argument must match the element type of the first argument (%0 != %1)">;
-
-def err_builtin_matrix_store_to_const: Error<
-  "cannot store matrix to read-only pointer">;
-
-def err_builtin_matrix_stride_too_small: Error<
-  "stride must be greater or equal to the number of rows">;
-
-def err_builtin_matrix_invalid_dimension: Error<
-  "%0 dimension is outside the allowed range [1, %1]">;
 
 def err_preserve_field_info_not_field : Error<
   "__builtin_preserve_field_info argument %0 not a field access">;
@@ -10833,4 +10875,12 @@ def err_ext_int_bad_size : Error<"%select{signed|unsigned}0 _ExtInt must "
                                  "have a bit size of at least %select{2|1}0">;
 def err_ext_int_max_size : Error<"%select{signed|unsigned}0 _ExtInt of bit "
                                  "sizes greater than %1 not supported">;
+
+// errors of expect.with.probability
+def err_probability_not_constant_float : Error<
+   "probability argument to __builtin_expect_with_probability must be constant "
+   "floating-point expression">;
+def err_probability_out_of_range : Error<
+   "probability argument to __builtin_expect_with_probability is outside the "
+   "range [0.0, 1.0]">;
 } // end of sema component.

@@ -1,3 +1,36 @@
+set(CommonMLSources MLInlineAdvisor.cpp)
+set(ReleaseModeMLSources ReleaseModeModelRunner.cpp)
+set(DevelopmentModeMLSources TFUtils.cpp)
+
+if (DEFINED LLVM_HAVE_TF_AOT OR DEFINED LLVM_HAVE_TF_API)
+  set(MLPolicySources ${CommonMLSources})
+  if (DEFINED LLVM_HAVE_TF_AOT)
+    include(TensorFlowCompile)
+    tfcompile(models/inliner serve action InlinerSizeModel llvm::InlinerSizeModel)
+    list(APPEND ReleaseModeMLSources
+      $<TARGET_OBJECTS:tf_xla_runtime_objects>
+      ${GENERATED_OBJS}
+    )
+    LIST(APPEND MLPolicySources ${ReleaseModeMLSources})
+  else()
+    LIST(APPEND LLVM_OPTIONAL_SOURCES ${ReleaseModeMLSources})
+  endif()
+
+  if (DEFINED LLVM_HAVE_TF_API)
+    LIST(APPEND MLPolicySources ${DevelopmentModeMLSources})
+    LIST(APPEND MLLinkDeps ${tensorflow_c_api})
+  else()
+    LIST(APPEND LLVM_OPTIONAL_SOURCES ${DevelopmentModeMLSources})
+  endif()
+else()
+  LIST(APPEND LLVM_OPTIONAL_SOURCES 
+    ${CommonMLSources}
+    ${DevelopmentModeMLSources}
+    ${ReleaseModeMLSources}
+    )
+endif()
+  
+
 add_llvm_component_library(LLVMAnalysis
   AliasAnalysis.cpp
   AliasAnalysisEvaluator.cpp
@@ -42,6 +75,7 @@ add_llvm_component_library(LLVMAnalysis
   InlineCost.cpp
   InlineAdvisor.cpp
   InlineFeaturesAnalysis.cpp
+  InlineSizeEstimatorAnalysis.cpp
   InstCount.cpp
   InstructionPrecedenceTracking.cpp
   InstructionSimplify.cpp
@@ -75,7 +109,6 @@ add_llvm_component_library(LLVMAnalysis
   ObjCARCAnalysisUtils.cpp
   ObjCARCInstKind.cpp
   OptimizationRemarkEmitter.cpp
-  OrderedInstructions.cpp
   PHITransAddr.cpp
   PhiValues.cpp
   PostDominators.cpp
@@ -86,6 +119,7 @@ add_llvm_component_library(LLVMAnalysis
   RegionPrinter.cpp
   ScalarEvolution.cpp
   ScalarEvolutionAliasAnalysis.cpp
+  ScalarEvolutionDivision.cpp
   ScalarEvolutionNormalization.cpp
   StackLifetime.cpp
   StackSafetyAnalysis.cpp
@@ -102,10 +136,14 @@ add_llvm_component_library(LLVMAnalysis
   ValueTracking.cpp
   VectorUtils.cpp
   VFABIDemangling.cpp
+  ${MLPolicySources}
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Analysis
 
   DEPENDS
   intrinsics_gen
+
+  LINK_LIBS
+  ${MLLinkDeps}
   )

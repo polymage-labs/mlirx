@@ -23,6 +23,22 @@ namespace {
 #include "ShapeToStandardPatterns.inc"
 
 /// Conversion patterns.
+class AnyOpConversion : public OpConversionPattern<AnyOp> {
+public:
+  using OpConversionPattern<AnyOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(AnyOp op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override {
+    AnyOp::Adaptor transformed(operands);
+
+    // Replace `any` with its first operand.
+    // Any operand would be a valid substitution.
+    rewriter.replaceOp(op, {transformed.inputs().front()});
+    return success();
+  }
+};
+
 template <typename SrcOpTy, typename DstOpTy>
 class BinaryOpConversion : public OpConversionPattern<SrcOpTy> {
 public:
@@ -90,6 +106,43 @@ public:
   }
 };
 
+class GetExtentOpConverter : public OpConversionPattern<GetExtentOp> {
+  using OpConversionPattern<GetExtentOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(GetExtentOp op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override {
+    GetExtentOp::Adaptor transformed(operands);
+
+    // Derive shape extent directly from shape origin if possible.
+    // This circumvents the necessity to materialize the shape in memory.
+    if (auto shapeOfOp = op.shape().getDefiningOp<ShapeOfOp>()) {
+      rewriter.replaceOpWithNewOp<DimOp>(op, shapeOfOp.arg(),
+                                         transformed.dim());
+      return success();
+    }
+
+    rewriter.replaceOpWithNewOp<ExtractElementOp>(
+        op, rewriter.getIndexType(), transformed.shape(),
+        ValueRange{transformed.dim()});
+    return success();
+  }
+};
+
+class RankOpConverter : public OpConversionPattern<shape::RankOp> {
+public:
+  using OpConversionPattern<shape::RankOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(shape::RankOp op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override {
+    shape::RankOp::Adaptor transformed(operands);
+    rewriter.replaceOpWithNewOp<DimOp>(op.getOperation(), transformed.shape(),
+                                       0);
+    return success();
+  }
+};
+
 /// Type conversions.
 class ShapeTypeConverter : public TypeConverter {
 public:
@@ -144,9 +197,12 @@ void mlir::populateShapeToStandardConversionPatterns(
   populateWithGenerated(ctx, &patterns);
   // clang-format off
   patterns.insert<
+      AnyOpConversion,
       BinaryOpConversion<AddOp, AddIOp>,
       BinaryOpConversion<MulOp, MulIOp>,
       ConstSizeOpConverter,
+      GetExtentOpConverter,
+      RankOpConverter,
       ShapeOfOpConversion>(ctx);
   // clang-format on
 }

@@ -784,6 +784,23 @@ void decodeHwreg(unsigned Val, unsigned &Id, unsigned &Offset, unsigned &Width) 
 } // namespace Hwreg
 
 //===----------------------------------------------------------------------===//
+// MTBUF Format
+//===----------------------------------------------------------------------===//
+
+namespace MTBUFFormat {
+
+int64_t encodeDfmtNfmt(unsigned Dfmt, unsigned Nfmt) {
+  return (Dfmt << DFMT_SHIFT) | (Nfmt << NFMT_SHIFT);
+}
+
+void decodeDfmtNfmt(unsigned Format, unsigned &Dfmt, unsigned &Nfmt) {
+  Dfmt = (Format >> DFMT_SHIFT) & DFMT_MASK;
+  Nfmt = (Format >> NFMT_SHIFT) & NFMT_MASK;
+}
+
+} // namespace MTBUFFormat
+
+//===----------------------------------------------------------------------===//
 // SendMsg
 //===----------------------------------------------------------------------===//
 
@@ -1377,8 +1394,8 @@ Optional<int64_t> getSMRDEncodedLiteralOffset32(const MCSubtargetInfo &ST,
 // aligned if they are aligned to begin with. It also ensures that additional
 // offsets within the given alignment can be added to the resulting ImmOffset.
 bool splitMUBUFOffset(uint32_t Imm, uint32_t &SOffset, uint32_t &ImmOffset,
-                      const GCNSubtarget *Subtarget, uint32_t Align) {
-  const uint32_t MaxImm = alignDown(4095, Align);
+                      const GCNSubtarget *Subtarget, Align Alignment) {
+  const uint32_t MaxImm = alignDown(4095, Alignment.value());
   uint32_t Overflow = 0;
 
   if (Imm > MaxImm) {
@@ -1396,10 +1413,10 @@ bool splitMUBUFOffset(uint32_t Imm, uint32_t &SOffset, uint32_t &ImmOffset,
       //
       // Atomic operations fail to work correctly when individual address
       // components are unaligned, even if their sum is aligned.
-      uint32_t High = (Imm + Align) & ~4095;
-      uint32_t Low = (Imm + Align) & 4095;
+      uint32_t High = (Imm + Alignment.value()) & ~4095;
+      uint32_t Low = (Imm + Alignment.value()) & 4095;
       Imm = Low;
-      Overflow = High - Align;
+      Overflow = High - Alignment.value();
     }
   }
 

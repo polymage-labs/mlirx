@@ -9,7 +9,7 @@
 #ifndef LLVM_LIBC_UTILS_FPUTIL_LONG_DOUBLE_BITS_X86_H
 #define LLVM_LIBC_UTILS_FPUTIL_LONG_DOUBLE_BITS_X86_H
 
-#include "utils/FPUtil/FPBits.h"
+#include "FPBits.h"
 
 #include <stdint.h>
 
@@ -62,9 +62,18 @@ template <> struct __attribute__((packed)) FPBits<long double> {
     return exponent == maxExponent && mantissa == 0 && implicitBit == 1;
   }
 
-  bool isNaN() const { return exponent == maxExponent && mantissa != 0; }
+  bool isNaN() const {
+    if (exponent == maxExponent) {
+      return (implicitBit == 0) || mantissa != 0;
+    } else if (exponent != 0) {
+      return implicitBit == 0;
+    }
+    return false;
+  }
 
-  bool isInfOrNaN() const { return exponent == maxExponent; }
+  bool isInfOrNaN() const {
+    return (exponent == maxExponent) || (exponent != 0 && implicitBit == 0);
+  }
 
   // Methods below this are used by tests.
 

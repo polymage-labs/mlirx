@@ -20,6 +20,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/IR/AbstractCallSite.h"
 #include "llvm/IR/Argument.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
@@ -120,12 +121,33 @@ bool Argument::hasPreallocatedAttr() const {
   return hasAttribute(Attribute::Preallocated);
 }
 
-bool Argument::hasPassPointeeByValueAttr() const {
+bool Argument::hasPassPointeeByValueCopyAttr() const {
   if (!getType()->isPointerTy()) return false;
   AttributeList Attrs = getParent()->getAttributes();
   return Attrs.hasParamAttribute(getArgNo(), Attribute::ByVal) ||
          Attrs.hasParamAttribute(getArgNo(), Attribute::InAlloca) ||
          Attrs.hasParamAttribute(getArgNo(), Attribute::Preallocated);
+}
+
+uint64_t Argument::getPassPointeeByValueCopySize(const DataLayout &DL) const {
+  AttributeSet ParamAttrs
+    = getParent()->getAttributes().getParamAttributes(getArgNo());
+
+  // FIXME: All the type carrying attributes are mutually exclusive, so there
+  // should be a single query to get the stored type that handles any of them.
+  if (Type *ByValTy = ParamAttrs.getByValType())
+    return DL.getTypeAllocSize(ByValTy);
+  if (Type *PreAllocTy = ParamAttrs.getPreallocatedType())
+    return DL.getTypeAllocSize(PreAllocTy);
+
+  // FIXME: inalloca always depends on pointee element type. It's also possible
+  // for byval to miss it.
+  if (ParamAttrs.hasAttribute(Attribute::InAlloca) ||
+      ParamAttrs.hasAttribute(Attribute::ByVal) ||
+      ParamAttrs.hasAttribute(Attribute::Preallocated))
+    return DL.getTypeAllocSize(cast<PointerType>(getType())->getElementType());
+
+  return 0;
 }
 
 unsigned Argument::getParamAlignment() const {
@@ -1424,42 +1446,60 @@ Intrinsic::matchIntrinsicVarArg(bool isVarArg,
   return true;
 }
 
-Optional<Function*> Intrinsic::remangleIntrinsicFunction(Function *F) {
+bool Intrinsic::getIntrinsicSignature(Function *F,
+                                      SmallVectorImpl<Type *> &ArgTys) {
   Intrinsic::ID ID = F->getIntrinsicID();
   if (!ID)
+    return false;
+
+  SmallVector<Intrinsic::IITDescriptor, 8> Table;
+  getIntrinsicInfoTableEntries(ID, Table);
+  ArrayRef<Intrinsic::IITDescriptor> TableRef = Table;
+
+  if (Intrinsic::matchIntrinsicSignature(F->getFunctionType(), TableRef,
+                                         ArgTys) !=
+      Intrinsic::MatchIntrinsicTypesResult::MatchIntrinsicTypes_Match) {
+    return false;
+  }
+  if (Intrinsic::matchIntrinsicVarArg(F->getFunctionType()->isVarArg(),
+                                      TableRef))
+    return false;
+  return true;
+}
+
+Optional<Function *> Intrinsic::remangleIntrinsicFunction(Function *F) {
+  SmallVector<Type *, 4> ArgTys;
+  if (!getIntrinsicSignature(F, ArgTys))
     return None;
 
-  FunctionType *FTy = F->getFunctionType();
-  // Accumulate an array of overloaded types for the given intrinsic
-  SmallVector<Type *, 4> ArgTys;
-  {
-    SmallVector<Intrinsic::IITDescriptor, 8> Table;
-    getIntrinsicInfoTableEntries(ID, Table);
-    ArrayRef<Intrinsic::IITDescriptor> TableRef = Table;
-
-    if (Intrinsic::matchIntrinsicSignature(FTy, TableRef, ArgTys))
-      return None;
-    if (Intrinsic::matchIntrinsicVarArg(FTy->isVarArg(), TableRef))
-      return None;
-  }
-
+  Intrinsic::ID ID = F->getIntrinsicID();
   StringRef Name = F->getName();
   if (Name == Intrinsic::getName(ID, ArgTys))
     return None;
 
   auto NewDecl = Intrinsic::getDeclaration(F->getParent(), ID, ArgTys);
   NewDecl->setCallingConv(F->getCallingConv());
-  assert(NewDecl->getFunctionType() == FTy && "Shouldn't change the signature");
+  assert(NewDecl->getFunctionType() == F->getFunctionType() &&
+         "Shouldn't change the signature");
   return NewDecl;
 }
 
 /// hasAddressTaken - returns true if there are any uses of this function
-/// other than direct calls or invokes to it.
-bool Function::hasAddressTaken(const User* *PutOffender) const {
+/// other than direct calls or invokes to it. Optionally ignores callback
+/// uses.
+bool Function::hasAddressTaken(const User **PutOffender,
+                               bool IgnoreCallbackUses) const {
   for (const Use &U : uses()) {
     const User *FU = U.getUser();
     if (isa<BlockAddress>(FU))
       continue;
+
+    if (IgnoreCallbackUses) {
+      AbstractCallSite ACS(&U);
+      if (ACS && ACS.isCallbackCall())
+        continue;
+    }
+
     const auto *Call = dyn_cast<CallBase>(FU);
     if (!Call) {
       if (PutOffender)

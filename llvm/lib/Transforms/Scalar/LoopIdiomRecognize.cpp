@@ -1010,6 +1010,7 @@ bool LoopIdiomRecognize::processLoopStridedStore(
   return true;
 }
 
+namespace {
 class ExpandedValuesCleaner {
   SCEVExpander &Expander;
   TargetLibraryInfo *TLI;
@@ -1032,6 +1033,7 @@ public:
     }
   }
 };
+} // namespace
 
 /// If the stored value is a strided load in the same loop with the same stride
 /// this may be transformable into a memcpy.  This kicks in for stuff like
@@ -1553,9 +1555,9 @@ bool LoopIdiomRecognize::recognizeAndInsertFFS() {
   //  %inc = add nsw %i.0, 1
   //  br i1 %tobool
 
-  Value *Args[] =
-      {InitX, ZeroCheck ? ConstantInt::getTrue(InitX->getContext())
-                        : ConstantInt::getFalse(InitX->getContext())};
+  const Value *Args[] = {
+      InitX, ZeroCheck ? ConstantInt::getTrue(InitX->getContext())
+                       : ConstantInt::getFalse(InitX->getContext())};
 
   // @llvm.dbg doesn't count as they have no semantic effect.
   auto InstWithoutDebugIt = CurLoop->getHeader()->instructionsWithoutDebug();

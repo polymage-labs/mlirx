@@ -1328,8 +1328,9 @@ Sema::DiagnoseAssignmentEnum(QualType DstType, QualType SrcType,
     }
 }
 
-StmtResult Sema::ActOnWhileStmt(SourceLocation WhileLoc, ConditionResult Cond,
-                                Stmt *Body) {
+StmtResult Sema::ActOnWhileStmt(SourceLocation WhileLoc,
+                                SourceLocation LParenLoc, ConditionResult Cond,
+                                SourceLocation RParenLoc, Stmt *Body) {
   if (Cond.isInvalid())
     return StmtError();
 
@@ -1344,7 +1345,7 @@ StmtResult Sema::ActOnWhileStmt(SourceLocation WhileLoc, ConditionResult Cond,
     getCurCompoundScope().setHasEmptyLoopBodies();
 
   return WhileStmt::Create(Context, CondVal.first, CondVal.second, Body,
-                           WhileLoc);
+                           WhileLoc, LParenLoc, RParenLoc);
 }
 
 StmtResult
@@ -1402,10 +1403,9 @@ namespace {
       Simple = false;
     }
 
-    // Any Stmt not whitelisted will cause the condition to be marked complex.
-    void VisitStmt(Stmt *S) {
-      Simple = false;
-    }
+    // Any Stmt not explicitly listed will cause the condition to be marked
+    // complex.
+    void VisitStmt(Stmt *S) { Simple = false; }
 
     void VisitBinaryOperator(BinaryOperator *E) {
       Visit(E->getLHS());

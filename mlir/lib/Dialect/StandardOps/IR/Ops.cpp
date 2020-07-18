@@ -440,6 +440,31 @@ OpFoldResult AndOp::fold(ArrayRef<Attribute> operands) {
 }
 
 //===----------------------------------------------------------------------===//
+// AssertOp
+//===----------------------------------------------------------------------===//
+
+namespace {
+struct EraseRedundantAssertions : public OpRewritePattern<AssertOp> {
+  using OpRewritePattern<AssertOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(AssertOp op,
+                                PatternRewriter &rewriter) const override {
+    // Erase assertion if argument is constant true.
+    if (matchPattern(op.arg(), m_One())) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+    return failure();
+  }
+};
+} // namespace
+
+void AssertOp::getCanonicalizationPatterns(OwningRewritePatternList &patterns,
+                                           MLIRContext *context) {
+  patterns.insert<EraseRedundantAssertions>(context);
+}
+
+//===----------------------------------------------------------------------===//
 // AssumeAlignmentOp
 //===----------------------------------------------------------------------===//
 
@@ -500,22 +525,21 @@ void GenericAtomicRMWOp::build(OpBuilder &builder, OperationState &result,
 
     Region *bodyRegion = result.addRegion();
     bodyRegion->push_back(new Block());
-    bodyRegion->front().addArgument(elementType);
+    bodyRegion->addArgument(elementType);
   }
 }
 
 static LogicalResult verify(GenericAtomicRMWOp op) {
-  auto &block = op.body().front();
-  if (block.getNumArguments() != 1)
+  auto &body = op.body();
+  if (body.getNumArguments() != 1)
     return op.emitOpError("expected single number of entry block arguments");
 
-  if (op.getResult().getType() != block.getArgument(0).getType())
+  if (op.getResult().getType() != body.getArgument(0).getType())
     return op.emitOpError(
         "expected block argument of the same type result type");
 
   bool hasSideEffects =
-      op.body()
-          .walk([&](Operation *nestedOp) {
+      body.walk([&](Operation *nestedOp) {
             if (MemoryEffectOpInterface::hasNoEffect(nestedOp))
               return WalkResult::advance();
             nestedOp->emitError("body of 'generic_atomic_rmw' should contain "
@@ -896,7 +920,7 @@ OpFoldResult CmpFOp::fold(ArrayRef<Attribute> operands) {
   auto lhs = operands.front().dyn_cast_or_null<FloatAttr>();
   auto rhs = operands.back().dyn_cast_or_null<FloatAttr>();
 
-  // TODO(gcmn) We could actually do some intelligent things if we know only one
+  // TODO: We could actually do some intelligent things if we know only one
   // of the operands, but it's inf or nan.
   if (!lhs || !rhs)
     return {};
@@ -1120,7 +1144,8 @@ static LogicalResult verify(ConstantOp &op) {
     auto fn =
         op.getParentOfType<ModuleOp>().lookupSymbol<FuncOp>(fnAttr.getValue());
     if (!fn)
-      return op.emitOpError("reference to undefined function 'bar'");
+      return op.emitOpError()
+             << "reference to undefined function '" << fnAttr.getValue() << "'";
 
     // Check that the referenced function has the correct type.
     if (fn.getType() != type)
@@ -1175,8 +1200,7 @@ bool ConstantOp::isBuildableWith(Attribute value, Type type) {
   if (value.getType() != type)
     return false;
   // Finally, check that the attribute kind is handled.
-  return value.isa<IntegerAttr>() || value.isa<FloatAttr>() ||
-         value.isa<ElementsAttr>() || value.isa<UnitAttr>();
+  return value.isa<IntegerAttr, FloatAttr, ElementsAttr, UnitAttr>();
 }
 
 void ConstantFloatOp::build(OpBuilder &builder, OperationState &result,
@@ -1273,8 +1297,13 @@ void DimOp::build(OpBuilder &builder, OperationState &result,
                   Value memrefOrTensor, int64_t index) {
   auto loc = result.location;
   Value indexValue = builder.create<ConstantIndexOp>(loc, index);
+  build(builder, result, memrefOrTensor, indexValue);
+}
+
+void DimOp::build(OpBuilder &builder, OperationState &result,
+                  Value memrefOrTensor, Value index) {
   auto indexTy = builder.getIndexType();
-  build(builder, result, indexTy, memrefOrTensor, indexValue);
+  build(builder, result, indexTy, memrefOrTensor, index);
 }
 
 Optional<int64_t> DimOp::getConstantIndex() {
@@ -1862,6 +1891,8 @@ OpFoldResult LoadOp::fold(ArrayRef<Attribute> cstOperands) {
 // MemRefCastOp
 //===----------------------------------------------------------------------===//
 
+Value MemRefCastOp::getViewSource() { return source(); }
+
 bool MemRefCastOp::areCastCompatible(Type a, Type b) {
   auto aT = a.dyn_cast<MemRefType>();
   auto bT = b.dyn_cast<MemRefType>();
@@ -2218,7 +2249,7 @@ static LogicalResult verify(SelectOp op) {
   // If the result type is a vector or tensor, the type can be a mask with the
   // same elements.
   Type resultType = op.getType();
-  if (!resultType.isa<TensorType>() && !resultType.isa<VectorType>())
+  if (!resultType.isa<TensorType, VectorType>())
     return op.emitOpError()
            << "expected condition to be a signless i1, but got "
            << conditionType;
@@ -2337,8 +2368,7 @@ OpFoldResult SplatOp::fold(ArrayRef<Attribute> operands) {
   assert(operands.size() == 1 && "splat takes one operand");
 
   auto constOperand = operands.front();
-  if (!constOperand ||
-      (!constOperand.isa<IntegerAttr>() && !constOperand.isa<FloatAttr>()))
+  if (!constOperand || !constOperand.isa<IntegerAttr, FloatAttr>())
     return {};
 
   auto shapedType = getType().cast<ShapedType>();

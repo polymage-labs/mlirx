@@ -205,16 +205,18 @@ public:
     if (getHeader()->e_phnum && getHeader()->e_phentsize != sizeof(Elf_Phdr))
       return createError("invalid e_phentsize: " +
                          Twine(getHeader()->e_phentsize));
-    if (getHeader()->e_phoff +
-            (getHeader()->e_phnum * getHeader()->e_phentsize) >
-        getBufSize())
+
+    uint64_t HeadersSize =
+        (uint64_t)getHeader()->e_phnum * getHeader()->e_phentsize;
+    uint64_t PhOff = getHeader()->e_phoff;
+    if (PhOff + HeadersSize < PhOff || PhOff + HeadersSize > getBufSize())
       return createError("program headers are longer than binary of size " +
                          Twine(getBufSize()) + ": e_phoff = 0x" +
                          Twine::utohexstr(getHeader()->e_phoff) +
                          ", e_phnum = " + Twine(getHeader()->e_phnum) +
                          ", e_phentsize = " + Twine(getHeader()->e_phentsize));
-    auto *Begin =
-        reinterpret_cast<const Elf_Phdr *>(base() + getHeader()->e_phoff);
+
+    auto *Begin = reinterpret_cast<const Elf_Phdr *>(base() + PhOff);
     return makeArrayRef(Begin, Begin + getHeader()->e_phnum);
   }
 
@@ -516,8 +518,17 @@ Expected<StringRef>
 ELFFile<ELFT>::getSectionStringTable(Elf_Shdr_Range Sections,
                                      WarningHandler WarnHandler) const {
   uint32_t Index = getHeader()->e_shstrndx;
-  if (Index == ELF::SHN_XINDEX)
+  if (Index == ELF::SHN_XINDEX) {
+    // If the section name string table section index is greater than
+    // or equal to SHN_LORESERVE, then the actual index of the section name
+    // string table section is contained in the sh_link field of the section
+    // header at index 0.
+    if (Sections.empty())
+      return createError(
+          "e_shstrndx == SHN_XINDEX, but the section header table is empty");
+
     Index = Sections[0].sh_link;
+  }
 
   if (!Index) // no section string table.
     return "";

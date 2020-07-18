@@ -164,7 +164,8 @@ ProcessProperties::ProcessProperties(lldb_private::Process *process)
         [this] { m_process->LoadOperatingSystemPlugin(true); });
   }
 
-  m_experimental_properties_up.reset(new ProcessExperimentalProperties());
+  m_experimental_properties_up =
+      std::make_unique<ProcessExperimentalProperties>();
   m_collection_sp->AppendProperty(
       ConstString(Properties::GetExperimentalSettingsName()),
       ConstString("Experimental settings - setting these won't produce "
@@ -1269,7 +1270,7 @@ void Process::UpdateThreadListIfNeeded() {
           for (size_t i = 0; i < num_old_threads; ++i)
             old_thread_list.GetThreadAtIndex(i, false)->ClearBackingThread();
           // See if the OS plugin reports all threads.  If it does, then
-          // it is safe to clear unseen thread's plans here.  Otherwise we 
+          // it is safe to clear unseen thread's plans here.  Otherwise we
           // should preserve them in case they show up again:
           clear_unused_threads = GetOSPluginReportsAllThreads();
 
@@ -2748,7 +2749,7 @@ DataExtractor Process::GetAuxvData() { return DataExtractor(); }
 
 JITLoaderList &Process::GetJITLoaders() {
   if (!m_jit_loaders_up) {
-    m_jit_loaders_up.reset(new JITLoaderList());
+    m_jit_loaders_up = std::make_unique<JITLoaderList>();
     JITLoader::LoadPlugins(this, *m_jit_loaders_up);
   }
   return *m_jit_loaders_up;
@@ -3095,14 +3096,14 @@ void Process::CompleteAttach() {
   }
 }
 
-Status Process::ConnectRemote(Stream *strm, llvm::StringRef remote_url) {
+Status Process::ConnectRemote(llvm::StringRef remote_url) {
   m_abi_sp.reset();
   m_process_input_reader.reset();
 
   // Find the process and its architecture.  Make sure it matches the
   // architecture of the current Target, and if not adjust it.
 
-  Status error(DoConnectRemote(strm, remote_url));
+  Status error(DoConnectRemote(remote_url));
   if (error.Success()) {
     if (GetID() != LLDB_INVALID_PROCESS_ID) {
       EventSP event_sp;

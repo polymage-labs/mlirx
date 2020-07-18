@@ -238,8 +238,8 @@ static void addSanitizerCoveragePass(const PassManagerBuilder &Builder,
   const CodeGenOptions &CGOpts = BuilderWrapper.getCGOpts();
   auto Opts = getSancovOptsFromCGOpts(CGOpts);
   PM.add(createModuleSanitizerCoverageLegacyPassPass(
-      Opts, CGOpts.SanitizeCoverageWhitelistFiles,
-      CGOpts.SanitizeCoverageBlacklistFiles));
+      Opts, CGOpts.SanitizeCoverageAllowlistFiles,
+      CGOpts.SanitizeCoverageBlocklistFiles));
 }
 
 // Check if ASan should use GC-friendly instrumentation for globals.
@@ -620,6 +620,9 @@ void EmitAssemblyHelper::CreatePasses(legacy::PassManager &MPM,
   PMBuilder.SizeLevel = CodeGenOpts.OptimizeSize;
   PMBuilder.SLPVectorize = CodeGenOpts.VectorizeSLP;
   PMBuilder.LoopVectorize = CodeGenOpts.VectorizeLoop;
+  // Only enable CGProfilePass when using integrated assembler, since
+  // non-integrated assemblers don't recognize .cgprofile section.
+  PMBuilder.CallGraphProfile = !CodeGenOpts.DisableIntegratedAS;
 
   PMBuilder.DisableUnrollLoops = !CodeGenOpts.UnrollLoops;
   // Loop interleaving in the loop vectorizer has historically been set to be
@@ -1022,8 +1025,8 @@ static void addSanitizersAtO0(ModulePassManager &MPM,
       CodeGenOpts.SanitizeCoverageTraceCmp) {
     auto SancovOpts = getSancovOptsFromCGOpts(CodeGenOpts);
     MPM.addPass(ModuleSanitizerCoveragePass(
-        SancovOpts, CodeGenOpts.SanitizeCoverageWhitelistFiles,
-        CodeGenOpts.SanitizeCoverageBlacklistFiles));
+        SancovOpts, CodeGenOpts.SanitizeCoverageAllowlistFiles,
+        CodeGenOpts.SanitizeCoverageBlocklistFiles));
   }
 
   auto ASanPass = [&](SanitizerMask Mask, bool CompileKernel) {
@@ -1144,7 +1147,9 @@ void EmitAssemblyHelper::EmitAssemblyWithNewPassManager(
   PTO.LoopInterleaving = CodeGenOpts.UnrollLoops;
   PTO.LoopVectorization = CodeGenOpts.VectorizeLoop;
   PTO.SLPVectorization = CodeGenOpts.VectorizeSLP;
-  PTO.CallGraphProfile = CodeGenOpts.CallGraphProfile;
+  // Only enable CGProfilePass when using integrated assembler, since
+  // non-integrated assemblers don't recognize .cgprofile section.
+  PTO.CallGraphProfile = !CodeGenOpts.DisableIntegratedAS;
   PTO.Coroutines = LangOpts.Coroutines;
 
   PassInstrumentationCallbacks PIC;
@@ -1282,8 +1287,8 @@ void EmitAssemblyHelper::EmitAssemblyWithNewPassManager(
                    PassBuilder::OptimizationLevel Level) {
               auto SancovOpts = getSancovOptsFromCGOpts(CodeGenOpts);
               MPM.addPass(ModuleSanitizerCoveragePass(
-                  SancovOpts, CodeGenOpts.SanitizeCoverageWhitelistFiles,
-                  CodeGenOpts.SanitizeCoverageBlacklistFiles));
+                  SancovOpts, CodeGenOpts.SanitizeCoverageAllowlistFiles,
+                  CodeGenOpts.SanitizeCoverageBlocklistFiles));
             });
       }
 
@@ -1562,7 +1567,9 @@ static void runThinLTOBackend(
   Conf.PTO.LoopInterleaving = CGOpts.UnrollLoops;
   Conf.PTO.LoopVectorization = CGOpts.VectorizeLoop;
   Conf.PTO.SLPVectorization = CGOpts.VectorizeSLP;
-  Conf.PTO.CallGraphProfile = CGOpts.CallGraphProfile;
+  // Only enable CGProfilePass when using integrated assembler, since
+  // non-integrated assemblers don't recognize .cgprofile section.
+  Conf.PTO.CallGraphProfile = !CGOpts.DisableIntegratedAS;
 
   // Context sensitive profile.
   if (CGOpts.hasProfileCSIRInstr()) {

@@ -60,7 +60,6 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAArch64.h"
-#include "llvm/IR/IntrinsicsX86.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
@@ -245,6 +244,10 @@ static cl::opt<bool>
                      cl::desc("Enable BFI update verification for "
                               "CodeGenPrepare."));
 
+static cl::opt<bool> OptimizePhiTypes(
+    "cgp-optimize-phi-types", cl::Hidden, cl::init(false),
+    cl::desc("Enable converting phi types in CodeGenPrepare"));
+
 namespace {
 
 enum ExtType {
@@ -373,6 +376,7 @@ class TypePromotionTransaction;
       return *DT;
     }
 
+    void removeAllAssertingVHReferences(Value *V);
     bool eliminateFallThrough(Function &F);
     bool eliminateMostlyEmptyBlocks(Function &F);
     BasicBlock *findDestBlockOfMergeableEmptyBlock(BasicBlock *BB);
@@ -380,6 +384,7 @@ class TypePromotionTransaction;
     void eliminateMostlyEmptyBlock(BasicBlock *BB);
     bool isMergingEmptyBlockProfitable(BasicBlock *BB, BasicBlock *DestBB,
                                        bool isPreheader);
+    bool makeBitReverse(Instruction &I);
     bool optimizeBlock(BasicBlock &BB, bool &ModifiedDT);
     bool optimizeInst(Instruction *I, bool &ModifiedDT);
     bool optimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
@@ -407,6 +412,9 @@ class TypePromotionTransaction;
                           unsigned CreatedInstsCost = 0);
     bool mergeSExts(Function &F);
     bool splitLargeGEPOffsets();
+    bool optimizePhiType(PHINode *Inst, SmallPtrSetImpl<PHINode *> &Visited,
+                         SmallPtrSetImpl<Instruction *> &DeletedInstrs);
+    bool optimizePhiTypes(Function &F);
     bool performAddressTypePromotion(
         Instruction *&Inst,
         bool AllowPromotionWithoutCommonHeader,
@@ -515,6 +523,7 @@ bool CodeGenPrepare::runOnFunction(Function &F) {
       MadeChange |= mergeSExts(F);
     if (!LargeOffsetGEPMap.empty())
       MadeChange |= splitLargeGEPOffsets();
+    MadeChange |= optimizePhiTypes(F);
 
     if (MadeChange)
       eliminateFallThrough(F);
@@ -592,6 +601,33 @@ bool CodeGenPrepare::runOnFunction(Function &F) {
 #endif
 
   return EverMadeChange;
+}
+
+/// An instruction is about to be deleted, so remove all references to it in our
+/// GEP-tracking data strcutures.
+void CodeGenPrepare::removeAllAssertingVHReferences(Value *V) {
+  LargeOffsetGEPMap.erase(V);
+  NewGEPBases.erase(V);
+
+  auto GEP = dyn_cast<GetElementPtrInst>(V);
+  if (!GEP)
+    return;
+
+  LargeOffsetGEPID.erase(GEP);
+
+  auto VecI = LargeOffsetGEPMap.find(GEP->getPointerOperand());
+  if (VecI == LargeOffsetGEPMap.end())
+    return;
+
+  auto &GEPVector = VecI->second;
+  const auto &I = std::find_if(GEPVector.begin(), GEPVector.end(),
+                               [=](auto &Elt) { return Elt.first == GEP; });
+  if (I == GEPVector.end())
+    return;
+
+  GEPVector.erase(I);
+  if (GEPVector.empty())
+    LargeOffsetGEPMap.erase(VecI);
 }
 
 // Verify BFI has been updated correctly by recomputing BFI and comparing them.
@@ -2815,8 +2851,9 @@ public:
   TypePromotionTransaction(SetOfInstrs &RemovedInsts)
       : RemovedInsts(RemovedInsts) {}
 
-  /// Advocate every changes made in that transaction.
-  void commit();
+  /// Advocate every changes made in that transaction. Return true if any change
+  /// happen.
+  bool commit();
 
   /// Undo all the changes made after the given point.
   void rollback(ConstRestorationPt Point);
@@ -2922,11 +2959,13 @@ TypePromotionTransaction::getRestorationPoint() const {
   return !Actions.empty() ? Actions.back().get() : nullptr;
 }
 
-void TypePromotionTransaction::commit() {
+bool TypePromotionTransaction::commit() {
   for (CommitPt It = Actions.begin(), EndIt = Actions.end(); It != EndIt;
        ++It)
     (*It)->commit();
+  bool Modified = !Actions.empty();
   Actions.clear();
+  return Modified;
 }
 
 void TypePromotionTransaction::rollback(
@@ -4346,15 +4385,20 @@ bool AddressingModeMatcher::matchOperationAddr(User *AddrInst, unsigned Opcode,
           cast<ConstantInt>(AddrInst->getOperand(i))->getZExtValue();
         ConstantOffset += SL->getElementOffset(Idx);
       } else {
-        uint64_t TypeSize = DL.getTypeAllocSize(GTI.getIndexedType());
-        if (ConstantInt *CI = dyn_cast<ConstantInt>(AddrInst->getOperand(i))) {
-          const APInt &CVal = CI->getValue();
-          if (CVal.getMinSignedBits() <= 64) {
-            ConstantOffset += CVal.getSExtValue() * TypeSize;
-            continue;
+        TypeSize TS = DL.getTypeAllocSize(GTI.getIndexedType());
+        if (TS.isNonZero()) {
+          // The optimisations below currently only work for fixed offsets.
+          if (TS.isScalable())
+            return false;
+          int64_t TypeSize = TS.getFixedSize();
+          if (ConstantInt *CI =
+                  dyn_cast<ConstantInt>(AddrInst->getOperand(i))) {
+            const APInt &CVal = CI->getValue();
+            if (CVal.getMinSignedBits() <= 64) {
+              ConstantOffset += CVal.getSExtValue() * TypeSize;
+              continue;
+            }
           }
-        }
-        if (TypeSize) {  // Scales of zero don't do anything.
           // We only allow one variable index at the moment.
           if (VariableOperand != -1)
             return false;
@@ -4952,7 +4996,7 @@ bool CodeGenPrepare::optimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
     TPT.rollback(LastKnownGood);
     return false;
   }
-  TPT.commit();
+  bool Modified = TPT.commit();
 
   // Get the combined AddrMode (or the only AddrMode, if we only had one).
   ExtAddrMode AddrMode = AddrModes.getAddrMode();
@@ -4966,7 +5010,7 @@ bool CodeGenPrepare::optimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
                   })) {
     LLVM_DEBUG(dbgs() << "CGP: Found      local addrmode: " << AddrMode
                       << "\n");
-    return false;
+    return Modified;
   }
 
   // Insert this computation right after this user.  Since our caller is
@@ -5007,7 +5051,7 @@ bool CodeGenPrepare::optimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
       // We can't add more than one pointer together, nor can we scale a
       // pointer (both of which seem meaningless).
       if (ResultPtr || AddrMode.Scale != 1)
-        return false;
+        return Modified;
 
       ResultPtr = AddrMode.ScaledReg;
       AddrMode.Scale = 0;
@@ -5024,12 +5068,12 @@ bool CodeGenPrepare::optimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
       Type *ScaledRegTy = AddrMode.ScaledReg->getType();
       if (cast<IntegerType>(IntPtrTy)->getBitWidth() >
           cast<IntegerType>(ScaledRegTy)->getBitWidth())
-        return false;
+        return Modified;
     }
 
     if (AddrMode.BaseGV) {
       if (ResultPtr)
-        return false;
+        return Modified;
 
       ResultPtr = AddrMode.BaseGV;
     }
@@ -5053,7 +5097,7 @@ bool CodeGenPrepare::optimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
         !AddrMode.BaseReg && !AddrMode.Scale && !AddrMode.BaseOffs) {
       SunkAddr = Constant::getNullValue(Addr->getType());
     } else if (!ResultPtr) {
-      return false;
+      return Modified;
     } else {
       Type *I8PtrTy =
           Builder.getInt8PtrTy(Addr->getType()->getPointerAddressSpace());
@@ -5138,7 +5182,7 @@ bool CodeGenPrepare::optimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
         (ScalePtrTy && DL->isNonIntegralPointerType(ScalePtrTy)) ||
         (AddrMode.BaseGV &&
          DL->isNonIntegralPointerType(AddrMode.BaseGV->getType())))
-      return false;
+      return Modified;
 
     LLVM_DEBUG(dbgs() << "CGP: SINKING nonlocal addrmode: " << AddrMode
                       << " for " << *MemoryInst << "\n");
@@ -5178,7 +5222,7 @@ bool CodeGenPrepare::optimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
         Instruction *I = dyn_cast_or_null<Instruction>(Result);
         if (I && (Result != AddrMode.BaseReg))
           I->eraseFromParent();
-        return false;
+        return Modified;
       }
       if (AddrMode.Scale != 1)
         V = Builder.CreateMul(V, ConstantInt::get(IntPtrTy, AddrMode.Scale),
@@ -5227,7 +5271,9 @@ bool CodeGenPrepare::optimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
     WeakTrackingVH IterHandle(CurValue);
     BasicBlock *BB = CurInstIterator->getParent();
 
-    RecursivelyDeleteTriviallyDeadInstructions(Repl, TLInfo);
+    RecursivelyDeleteTriviallyDeadInstructions(
+        Repl, TLInfo, nullptr,
+        [&](Value *V) { removeAllAssertingVHReferences(V); });
 
     if (IterHandle != CurValue) {
       // If the iterator instruction was recursively deleted, start over at the
@@ -5314,7 +5360,7 @@ bool CodeGenPrepare::optimizeGatherScatterInst(Instruction *MemoryInst,
   if (!RewriteGEP && Ops.size() == 2)
     return false;
 
-  unsigned NumElts = cast<VectorType>(Ptr->getType())->getNumElements();
+  unsigned NumElts = cast<FixedVectorType>(Ptr->getType())->getNumElements();
 
   IRBuilder<> Builder(MemoryInst);
 
@@ -5348,7 +5394,9 @@ bool CodeGenPrepare::optimizeGatherScatterInst(Instruction *MemoryInst,
   // If we have no uses, recursively delete the value and all dead instructions
   // using it.
   if (Ptr->use_empty())
-    RecursivelyDeleteTriviallyDeadInstructions(Ptr, TLInfo);
+    RecursivelyDeleteTriviallyDeadInstructions(
+        Ptr, TLInfo, nullptr,
+        [&](Value *V) { removeAllAssertingVHReferences(V); });
 
   return true;
 }
@@ -5569,9 +5617,9 @@ bool CodeGenPrepare::mergeSExts(Function &F) {
   return Changed;
 }
 
-// Spliting large data structures so that the GEPs accessing them can have
+// Splitting large data structures so that the GEPs accessing them can have
 // smaller offsets so that they can be sunk to the same blocks as their users.
-// For example, a large struct starting from %base is splitted into two parts
+// For example, a large struct starting from %base is split into two parts
 // where the second part starts from %new_base.
 //
 // Before:
@@ -5646,7 +5694,7 @@ bool CodeGenPrepare::splitLargeGEPOffsets() {
                                         GEP->getAddressSpace())) {
           // We need to create a new base if the offset to the current base is
           // too large to fit into the addressing mode. So, a very large struct
-          // may be splitted into several parts.
+          // may be split into several parts.
           BaseGEP = GEP;
           BaseOffset = Offset;
           NewBaseGEP = nullptr;
@@ -5714,6 +5762,155 @@ bool CodeGenPrepare::splitLargeGEPOffsets() {
       Changed = true;
     }
   }
+  return Changed;
+}
+
+bool CodeGenPrepare::optimizePhiType(
+    PHINode *I, SmallPtrSetImpl<PHINode *> &Visited,
+    SmallPtrSetImpl<Instruction *> &DeletedInstrs) {
+  // We are looking for a collection on interconnected phi nodes that together
+  // only use loads/bitcasts and are used by stores/bitcasts, and the bitcasts
+  // are of the same type. Convert the whole set of nodes to the type of the
+  // bitcast.
+  Type *PhiTy = I->getType();
+  Type *ConvertTy = nullptr;
+  if (Visited.count(I) ||
+      (!I->getType()->isIntegerTy() && !I->getType()->isFloatingPointTy()))
+    return false;
+
+  SmallVector<Instruction *, 4> Worklist;
+  Worklist.push_back(cast<Instruction>(I));
+  SmallPtrSet<PHINode *, 4> PhiNodes;
+  PhiNodes.insert(I);
+  Visited.insert(I);
+  SmallPtrSet<Instruction *, 4> Defs;
+  SmallPtrSet<Instruction *, 4> Uses;
+
+  while (!Worklist.empty()) {
+    Instruction *II = Worklist.pop_back_val();
+
+    if (auto *Phi = dyn_cast<PHINode>(II)) {
+      // Handle Defs, which might also be PHI's
+      for (Value *V : Phi->incoming_values()) {
+        if (auto *OpPhi = dyn_cast<PHINode>(V)) {
+          if (!PhiNodes.count(OpPhi)) {
+            if (Visited.count(OpPhi))
+              return false;
+            PhiNodes.insert(OpPhi);
+            Visited.insert(OpPhi);
+            Worklist.push_back(OpPhi);
+          }
+        } else if (auto *OpLoad = dyn_cast<LoadInst>(V)) {
+          if (!Defs.count(OpLoad)) {
+            Defs.insert(OpLoad);
+            Worklist.push_back(OpLoad);
+          }
+        } else if (auto *OpEx = dyn_cast<ExtractElementInst>(V)) {
+          if (!Defs.count(OpEx)) {
+            Defs.insert(OpEx);
+            Worklist.push_back(OpEx);
+          }
+        } else if (auto *OpBC = dyn_cast<BitCastInst>(V)) {
+          if (!ConvertTy)
+            ConvertTy = OpBC->getOperand(0)->getType();
+          if (OpBC->getOperand(0)->getType() != ConvertTy)
+            return false;
+          if (!Defs.count(OpBC)) {
+            Defs.insert(OpBC);
+            Worklist.push_back(OpBC);
+          }
+        } else if (!isa<UndefValue>(V))
+          return false;
+      }
+    }
+
+    // Handle uses which might also be phi's
+    for (User *V : II->users()) {
+      if (auto *OpPhi = dyn_cast<PHINode>(V)) {
+        if (!PhiNodes.count(OpPhi)) {
+          if (Visited.count(OpPhi))
+            return false;
+          PhiNodes.insert(OpPhi);
+          Visited.insert(OpPhi);
+          Worklist.push_back(OpPhi);
+        }
+      } else if (auto *OpStore = dyn_cast<StoreInst>(V)) {
+        if (OpStore->getOperand(0) != II)
+          return false;
+        Uses.insert(OpStore);
+      } else if (auto *OpBC = dyn_cast<BitCastInst>(V)) {
+        if (!ConvertTy)
+          ConvertTy = OpBC->getType();
+        if (OpBC->getType() != ConvertTy)
+          return false;
+        Uses.insert(OpBC);
+      } else
+        return false;
+    }
+  }
+
+  if (!ConvertTy || !TLI->shouldConvertPhiType(PhiTy, ConvertTy))
+    return false;
+
+  LLVM_DEBUG(dbgs() << "Converting " << *I << "\n  and connected nodes to "
+                    << *ConvertTy << "\n");
+
+  // Create all the new phi nodes of the new type, and bitcast any loads to the
+  // correct type.
+  ValueToValueMap ValMap;
+  ValMap[UndefValue::get(PhiTy)] = UndefValue::get(ConvertTy);
+  for (Instruction *D : Defs) {
+    if (isa<BitCastInst>(D))
+      ValMap[D] = D->getOperand(0);
+    else
+      ValMap[D] =
+          new BitCastInst(D, ConvertTy, D->getName() + ".bc", D->getNextNode());
+  }
+  for (PHINode *Phi : PhiNodes)
+    ValMap[Phi] = PHINode::Create(ConvertTy, Phi->getNumIncomingValues(),
+                                  Phi->getName() + ".tc", Phi);
+  // Pipe together all the PhiNodes.
+  for (PHINode *Phi : PhiNodes) {
+    PHINode *NewPhi = cast<PHINode>(ValMap[Phi]);
+    for (int i = 0, e = Phi->getNumIncomingValues(); i < e; i++)
+      NewPhi->addIncoming(ValMap[Phi->getIncomingValue(i)],
+                          Phi->getIncomingBlock(i));
+  }
+  // And finally pipe up the stores and bitcasts
+  for (Instruction *U : Uses) {
+    if (isa<BitCastInst>(U)) {
+      DeletedInstrs.insert(U);
+      U->replaceAllUsesWith(ValMap[U->getOperand(0)]);
+    } else
+      U->setOperand(0,
+                    new BitCastInst(ValMap[U->getOperand(0)], PhiTy, "bc", U));
+  }
+
+  // Save the removed phis to be deleted later.
+  for (PHINode *Phi : PhiNodes)
+    DeletedInstrs.insert(Phi);
+  return true;
+}
+
+bool CodeGenPrepare::optimizePhiTypes(Function &F) {
+  if (!OptimizePhiTypes)
+    return false;
+
+  bool Changed = false;
+  SmallPtrSet<PHINode *, 4> Visited;
+  SmallPtrSet<Instruction *, 4> DeletedInstrs;
+
+  // Attempt to optimize all the phis in the functions to the correct type.
+  for (auto &BB : F)
+    for (auto &Phi : BB.phis())
+      Changed |= optimizePhiType(&Phi, Visited, DeletedInstrs);
+
+  // Remove any old phi's that have been converted.
+  for (auto *I : DeletedInstrs) {
+    I->replaceAllUsesWith(UndefValue::get(I->getType()));
+    I->eraseFromParent();
+  }
+
   return Changed;
 }
 
@@ -6464,7 +6661,7 @@ bool CodeGenPrepare::optimizeShuffleVectorInst(ShuffleVectorInst *SVI) {
   if (!NewType)
     return false;
 
-  VectorType *SVIVecType = cast<VectorType>(SVI->getType());
+  auto *SVIVecType = cast<FixedVectorType>(SVI->getType());
   assert(!NewType->isVectorTy() && "Expected a scalar type!");
   assert(NewType->getScalarSizeInBits() == SVIVecType->getScalarSizeInBits() &&
          "Expected a type of the same size!");
@@ -6483,7 +6680,8 @@ bool CodeGenPrepare::optimizeShuffleVectorInst(ShuffleVectorInst *SVI) {
   Value *BC2 = Builder.CreateBitCast(Shuffle, SVIVecType);
 
   SVI->replaceAllUsesWith(BC2);
-  RecursivelyDeleteTriviallyDeadInstructions(SVI);
+  RecursivelyDeleteTriviallyDeadInstructions(
+      SVI, TLInfo, nullptr, [&](Value *V) { removeAllAssertingVHReferences(V); });
 
   // Also hoist the bitcast up to its operand if it they are not in the same
   // block.
@@ -7440,11 +7638,10 @@ bool CodeGenPrepare::optimizeInst(Instruction *I, bool &ModifiedDT) {
 
 /// Given an OR instruction, check to see if this is a bitreverse
 /// idiom. If so, insert the new intrinsic and return true.
-static bool makeBitReverse(Instruction &I, const DataLayout &DL,
-                           const TargetLowering &TLI) {
+bool CodeGenPrepare::makeBitReverse(Instruction &I) {
   if (!I.getType()->isIntegerTy() ||
-      !TLI.isOperationLegalOrCustom(ISD::BITREVERSE,
-                                    TLI.getValueType(DL, I.getType(), true)))
+      !TLI->isOperationLegalOrCustom(ISD::BITREVERSE,
+                                     TLI->getValueType(*DL, I.getType(), true)))
     return false;
 
   SmallVector<Instruction*, 4> Insts;
@@ -7452,7 +7649,8 @@ static bool makeBitReverse(Instruction &I, const DataLayout &DL,
     return false;
   Instruction *LastInst = Insts.back();
   I.replaceAllUsesWith(LastInst);
-  RecursivelyDeleteTriviallyDeadInstructions(&I);
+  RecursivelyDeleteTriviallyDeadInstructions(
+      &I, TLInfo, nullptr, [&](Value *V) { removeAllAssertingVHReferences(V); });
   return true;
 }
 
@@ -7474,7 +7672,7 @@ bool CodeGenPrepare::optimizeBlock(BasicBlock &BB, bool &ModifiedDT) {
   while (MadeBitReverse) {
     MadeBitReverse = false;
     for (auto &I : reverse(BB)) {
-      if (makeBitReverse(I, *DL, *TLI)) {
+      if (makeBitReverse(I)) {
         MadeBitReverse = MadeChange = true;
         break;
       }

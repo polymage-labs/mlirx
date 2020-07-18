@@ -203,6 +203,26 @@ define i1 @orderedLessZeroTree(float,float,float,float) {
   ret i1 %uge
 }
 
+define i1 @orderedLessZero_fdiv(float %x) {
+; CHECK-LABEL: @orderedLessZero_fdiv(
+; CHECK-NEXT:    ret i1 true
+;
+  %d = fdiv float %x, %x
+  %uge = fcmp uge float %d, 0.0
+  ret i1 %uge
+}
+
+; If x == -0.0, maxnum can return -0.0, but that still compares equal to 0.0.
+
+define i1 @orderedLessZero_maxnum(float %x) {
+; CHECK-LABEL: @orderedLessZero_maxnum(
+; CHECK-NEXT:    ret i1 true
+;
+  %d = call float @llvm.maxnum.f32(float %x, float 0.0)
+  %uge = fcmp uge float %d, 0.0
+  ret i1 %uge
+}
+
 define i1 @orderedLessZeroExpExt(float) {
 ; CHECK-LABEL: @orderedLessZeroExpExt(
 ; CHECK-NEXT:    ret i1 true
@@ -1017,4 +1037,72 @@ define <2 x i1> @unorderedCompareWithNaNVector_undef_elt(<2 x double> %A) {
 ;
   %cmp = fcmp ult <2 x double> %A, <double undef, double 0xFFFFFFFFFFFFFFFF>
   ret <2 x i1> %cmp
+}
+
+define i1 @is_infinite(float %x) {
+; CHECK-LABEL: @is_infinite(
+; CHECK-NEXT:    [[XABS:%.*]] = call ninf float @llvm.fabs.f32(float [[X:%.*]])
+; CHECK-NEXT:    [[R:%.*]] = fcmp oeq float [[XABS]], 0x7FF0000000000000
+; CHECK-NEXT:    ret i1 [[R]]
+;
+  %xabs = call ninf float @llvm.fabs.f32(float %x)
+  %r = fcmp oeq float %xabs, 0x7FF0000000000000
+  ret i1 %r
+}
+
+define <2 x i1> @is_infinite_neg(<2 x float> %x) {
+; CHECK-LABEL: @is_infinite_neg(
+; CHECK-NEXT:    [[X42:%.*]] = fadd ninf <2 x float> [[X:%.*]], <float 4.200000e+01, float 4.200000e+01>
+; CHECK-NEXT:    [[R:%.*]] = fcmp oeq <2 x float> [[X42]], <float 0xFFF0000000000000, float 0xFFF0000000000000>
+; CHECK-NEXT:    ret <2 x i1> [[R]]
+;
+  %x42 = fadd ninf <2 x float> %x, <float 42.0, float 42.0>
+  %r = fcmp oeq <2 x float> %x42, <float 0xFFF0000000000000, float 0xFFF0000000000000>
+  ret <2 x i1> %r
+}
+
+define i1 @is_infinite_or_nan(float %x) {
+; CHECK-LABEL: @is_infinite_or_nan(
+; CHECK-NEXT:    [[X42:%.*]] = fadd ninf float [[X:%.*]], 4.200000e+01
+; CHECK-NEXT:    [[R:%.*]] = fcmp ueq float [[X42]], 0xFFF0000000000000
+; CHECK-NEXT:    ret i1 [[R]]
+;
+  %x42 = fadd ninf float %x, 42.0
+  %r = fcmp ueq float %x42, 0xFFF0000000000000
+  ret i1 %r
+}
+
+define i1 @is_finite_or_nan(i1 %c, double %x) {
+; CHECK-LABEL: @is_finite_or_nan(
+; CHECK-NEXT:    [[XX:%.*]] = fmul ninf double [[X:%.*]], [[X]]
+; CHECK-NEXT:    [[S:%.*]] = select i1 [[C:%.*]], double 4.200000e+01, double [[XX]]
+; CHECK-NEXT:    [[R:%.*]] = fcmp une double [[S]], 0x7FF0000000000000
+; CHECK-NEXT:    ret i1 [[R]]
+;
+  %xx = fmul ninf double %x, %x
+  %s = select i1 %c, double 42.0, double %xx
+  %r = fcmp une double %s, 0x7FF0000000000000
+  ret i1 %r
+}
+
+define <2 x i1> @is_finite_or_nan_commute(<2 x i8> %x) {
+; CHECK-LABEL: @is_finite_or_nan_commute(
+; CHECK-NEXT:    [[CAST:%.*]] = uitofp <2 x i8> [[X:%.*]] to <2 x float>
+; CHECK-NEXT:    [[R:%.*]] = fcmp une <2 x float> <float 0x7FF0000000000000, float 0x7FF0000000000000>, [[CAST]]
+; CHECK-NEXT:    ret <2 x i1> [[R]]
+;
+  %cast = uitofp <2 x i8> %x to <2 x float>
+  %r = fcmp une <2 x float> <float 0x7FF0000000000000, float 0x7FF0000000000000>, %cast
+  ret <2 x i1> %r
+}
+
+define i1 @is_finite_and_ordered(double %x) {
+; CHECK-LABEL: @is_finite_and_ordered(
+; CHECK-NEXT:    [[XX:%.*]] = fmul ninf double [[X:%.*]], [[X]]
+; CHECK-NEXT:    [[R:%.*]] = fcmp one double [[XX]], 0x7FF0000000000000
+; CHECK-NEXT:    ret i1 [[R]]
+;
+  %xx = fmul ninf double %x, %x
+  %r = fcmp one double %xx, 0x7FF0000000000000
+  ret i1 %r
 }

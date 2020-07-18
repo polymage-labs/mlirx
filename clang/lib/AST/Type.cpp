@@ -347,15 +347,7 @@ ExtIntType::ExtIntType(bool IsUnsigned, unsigned NumBits)
 DependentExtIntType::DependentExtIntType(const ASTContext &Context,
                                          bool IsUnsigned, Expr *NumBitsExpr)
     : Type(DependentExtInt, QualType{},
-           ((NumBitsExpr->isValueDependent() || NumBitsExpr->isTypeDependent())
-                ? TypeDependence::Dependent
-                : TypeDependence::None) |
-               (NumBitsExpr->isInstantiationDependent()
-                    ? TypeDependence::Instantiation
-                    : TypeDependence::None) |
-               (NumBitsExpr->containsUnexpandedParameterPack()
-                    ? TypeDependence::VariablyModified
-                    : TypeDependence::None)),
+           toTypeDependence(NumBitsExpr->getDependence())),
       Context(Context), ExprAndUnsigned(NumBitsExpr, IsUnsigned) {}
 
 bool DependentExtIntType::isUnsigned() const {
@@ -2302,6 +2294,30 @@ bool Type::isSizelessBuiltinType() const {
 
 bool Type::isSizelessType() const { return isSizelessBuiltinType(); }
 
+bool Type::isVLSTBuiltinType() const {
+  if (const BuiltinType *BT = getAs<BuiltinType>()) {
+    switch (BT->getKind()) {
+    case BuiltinType::SveInt8:
+    case BuiltinType::SveInt16:
+    case BuiltinType::SveInt32:
+    case BuiltinType::SveInt64:
+    case BuiltinType::SveUint8:
+    case BuiltinType::SveUint16:
+    case BuiltinType::SveUint32:
+    case BuiltinType::SveUint64:
+    case BuiltinType::SveFloat16:
+    case BuiltinType::SveFloat32:
+    case BuiltinType::SveFloat64:
+    case BuiltinType::SveBFloat16:
+    case BuiltinType::SveBool:
+      return true;
+    default:
+      return false;
+    }
+  }
+  return false;
+}
+
 bool QualType::isPODType(const ASTContext &Context) const {
   // C++11 has a more relaxed definition of POD.
   if (Context.getLangOpts().CPlusPlus11)
@@ -3591,7 +3607,7 @@ TemplateSpecializationType::TemplateSpecializationType(
 
   auto *TemplateArgs = reinterpret_cast<TemplateArgument *>(this + 1);
   for (const TemplateArgument &Arg : Args) {
-    // Update instantiation-dependent and variably-modified bits.
+    // Update instantiation-dependent, variably-modified, and error bits.
     // If the canonical type exists and is non-dependent, the template
     // specialization type can be non-dependent even if one of the type
     // arguments is. Given:
