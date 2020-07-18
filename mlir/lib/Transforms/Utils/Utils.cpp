@@ -71,10 +71,8 @@ LogicalResult mlir::replaceAllMemRefUsesWith(Value oldMemRef, Value newMemRef,
 
   bool isMemRefNonDereferencing = false;
   if (!isMemRefDereferencingOp(*op))
-      isMemRefNonDereferencing = true;
-    // Failure: memref used in a non-dereferencing context (potentially
-    // escapes); no replacement in these cases.
-    // return failure();
+    isMemRefNonDereferencing = true;
+
   SmallVector<unsigned, 2> usePositions;
   for (const auto &opEntry : llvm::enumerate(op->getOperands())) {
     if (opEntry.value() == oldMemRef)
@@ -93,12 +91,12 @@ LogicalResult mlir::replaceAllMemRefUsesWith(Value oldMemRef, Value newMemRef,
 
   unsigned memRefOperandPos = usePositions.front();
 
-
   OpBuilder builder(op);
   OperationState state(op->getLoc(), op->getName());
 
-  // The following checks if op is dereferencing memref and performs the access index rewrites
-  if(isMemRefNonDereferencing == false) {
+  // The following checks if op is dereferencing memref and performs the access
+  // index rewrites.
+  if (isMemRefNonDereferencing == false) {
     NamedAttribute oldMapAttrPair = getAffineMapAttrForMemRef(op, oldMemRef);
     AffineMap oldMap = oldMapAttrPair.second.cast<AffineMapAttr>().getValue();
     unsigned oldMapNumInputs = oldMap.getNumInputs();
@@ -155,7 +153,7 @@ LogicalResult mlir::replaceAllMemRefUsesWith(Value oldMemRef, Value newMemRef,
     newMapOperands.reserve(newMemRefRank);
 
     // Prepend 'extraIndices' in 'newMapOperands'.
-    for (auto extraIndex : extraIndices) {
+    for (Value extraIndex : extraIndices) {
       assert(extraIndex.getDefiningOp()->getNumResults() == 1 &&
              "single result op's expected to generate these indices");
       assert((isValidDim(extraIndex) || isValidSymbol(extraIndex)) &&
@@ -203,14 +201,13 @@ LogicalResult mlir::replaceAllMemRefUsesWith(Value oldMemRef, Value newMemRef,
     // Add attribute for 'newMap', other Attributes do not change.
     auto newMapAttr = AffineMapAttr::get(newMap);
     for (auto namedAttr : op->getAttrs()) {
-      if (namedAttr.first == oldMapAttrPair.first) {
+      if (namedAttr.first == oldMapAttrPair.first)
         state.attributes.push_back({namedAttr.first, newMapAttr});
-      } else {
+      else
         state.attributes.push_back(namedAttr);
-      }
     }
   } else {
-    // For non-dereferencing op we simply replace the memref
+    // For non-dereferencing op we simply replace the memref type.
     state.operands.reserve(op->getNumOperands() + extraIndices.size());
     // Insert the non-memref operands.
     state.operands.append(op->operand_begin(),
@@ -286,7 +283,11 @@ LogicalResult mlir::replaceAllMemRefUsesWith(Value oldMemRef, Value newMemRef,
     // for the memref to be used in a non-dereferencing way outside of the
     // region where this replacement is happening.
     if (!isMemRefDereferencingOp(*op)) {
-      // As of now allowing any non-dereferencing type
+      // Any non-dereferencing op will be allowed to be a candidate for
+      // replacement.
+      // TODO(avarmapml): Only the following non-dereferencing types to support
+      // :-
+      //                  DeallocOp, CallOp and ReturnOp.
     }
 
     // We'll first collect and then replace --- since replacement erases the op
@@ -298,7 +299,6 @@ LogicalResult mlir::replaceAllMemRefUsesWith(Value oldMemRef, Value newMemRef,
     if (failed(replaceAllMemRefUsesWith(oldMemRef, newMemRef, op, extraIndices,
                                         indexRemap, extraOperands,
                                         symbolOperands))) {
-      llvm::dbgs()<<"\nreplaceAllMemRefUsesWith failed\n";
       llvm_unreachable("memref replacement guaranteed to succeed here");
     }
   }
@@ -462,14 +462,7 @@ LogicalResult mlir::normalizeMemRef(AllocOp allocOp, Value *normalizedMemRef) {
 
   // TODO(avarmapml) : Handle the initial filter to ensure that the only uses
   //                   of memref is DeallocOp, CallOp, (maybe) ReturnOp
-  // if(llvm::any_of(oldMemRef.getUsers(),
-  //                 [](Operation *op) { 
-  //                   if(isMemRefDereferencingOp(op)) {
-  //                     return !(isa<DeallocOp>(op) || isa<CallOp>(op))
-  //                   }
-  //                 })) {
-  //   llvm::dbgs()<<"No going to support such"
-  // }
+
   // Create the replacement alloc op.
   MemRefType newMemRefType =
       MemRefType::Builder(memrefType)
