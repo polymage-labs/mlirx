@@ -1764,7 +1764,7 @@ void mlir::scalarReplace(AffineForOp forOp) {
 
     // Replace all load/stores of original memref with %singleEltMemref[0].
     SmallVector<AffineExpr, 1> resultExprs = {b.getAffineConstantExpr(0)};
-    for (auto &acc : eqAccesses) {
+    for (const auto &acc : eqAccesses) {
       if (failed(replaceAllMemRefUsesWith(
               acc.memref, singleEltMemRef, acc.opInst, {},
               AffineMap::get(origMemrefType.getRank(), 0, resultExprs,
@@ -2525,7 +2525,7 @@ static void getNonIndexLiveInScalars(AffineForOp forOp,
   forOp.walk([&](Operation *op) {
     for (auto value : op->getOperands()) {
       auto type = value.getType();
-      if (type.isa<MemRefType>() || type.isa<IndexType>())
+      if (type.isa<MemRefType, IndexType>())
         continue;
       if (auto *defOp = value.getDefiningOp()) {
         ivs.clear();
@@ -2748,8 +2748,7 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
   getNonIndexLiveInScalars(forOp, liveInScalars);
   if (llvm::any_of(liveInScalars, [](Value v) {
         auto type = v.getType();
-        return type.isa<VectorType>() || type.isa<TensorType>() ||
-               type.isa<IndexType>();
+        return type.isa<VectorType, TensorType, IndexType>();
       })) {
     LLVM_DEBUG(llvm::dbgs() << "Non-scalar type live in - can't splat\n");
     return failure();
@@ -2769,7 +2768,7 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
   // Vectorize load ops with the loop being vectorized indexing the fastest
   // varying dimension of the memref. Turn the load into a load on its vector
   // memref cast, and scale down the last access by vector width.
-  for (auto op : toVecLoadOps) {
+  for (auto *op : toVecLoadOps) {
     auto loadOp = cast<AffineLoadOp>(op);
     OpBuilder rewriter(loadOp);
     auto vecLoadOp = rewriter.create<AffineLoadOp>(
@@ -2781,7 +2780,7 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
   }
 
   // Splat invariant load ops.
-  for (auto op : toSplatLoadOps) {
+  for (auto *op : toSplatLoadOps) {
     auto loadOp = cast<AffineLoadOp>(op);
     OpBuilder rewriter(loadOp.getContext());
     rewriter.setInsertionPointAfter(loadOp);
@@ -2796,7 +2795,7 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
   // Vectorize store ops with the loop being vectorized indexing the fastest
   // varying dimension of the memref. Turn the store into a store on its vector
   // memref cast, and scale down the last access by vector width.
-  for (auto op : toVecStoreOps) {
+  for (auto *op : toVecStoreOps) {
     auto storeOp = cast<AffineStoreOp>(op);
     OpBuilder rewriter(storeOp);
     rewriter.create<AffineStoreOp>(
@@ -2826,9 +2825,8 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
 
   // Vectorize remaining ops.
   forOp.walk([&](Operation *op) {
-    if (isa<AffineLoadOp>(op) || isa<AffineStoreOp>(op) ||
-        isa<AffineApplyOp>(op) || isa<SplatOp>(op) ||
-        isa<AffineYieldOp>(op))
+    if (isa<AffineLoadOp, AffineStoreOp, AffineApplyOp, SplatOp, AffineYieldOp>(
+            op))
       return;
     if (auto *vecOp = vectorizeMiscLeafOp(op, vectorWidth)) {
       op->replaceAllUsesWith(vecOp);
