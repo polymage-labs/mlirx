@@ -371,4 +371,8 @@ def SymbolDCE : Pass<"symbol-dce"> {
   let constructor = "mlir::createSymbolDCEPass()";
 }
 
+def NormalizeMemRefs : Pass<"normalize-memrefs", "ModuleOp"> {
+  let summary = "Interprocedural normalize memrefs";
+  let constructor = "mlir::createNormalizeMemRefsPass()";
+}
 #endif // MLIR_TRANSFORMS_PASSES

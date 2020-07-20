@@ -69,10 +69,6 @@ LogicalResult mlir::replaceAllMemRefUsesWith(Value oldMemRef, Value newMemRef,
   assert(oldMemRef.getType().cast<MemRefType>().getElementType() ==
          newMemRef.getType().cast<MemRefType>().getElementType());
 
-  bool isMemRefNonDereferencing = false;
-  if (!isMemRefDereferencingOp(*op))
-    isMemRefNonDereferencing = true;
-
   SmallVector<unsigned, 2> usePositions;
   for (const auto &opEntry : llvm::enumerate(op->getOperands())) {
     if (opEntry.value() == oldMemRef)
@@ -96,117 +92,7 @@ LogicalResult mlir::replaceAllMemRefUsesWith(Value oldMemRef, Value newMemRef,
 
   // The following checks if op is dereferencing memref and performs the access
   // index rewrites.
-  if (isMemRefNonDereferencing == false) {
-    NamedAttribute oldMapAttrPair = getAffineMapAttrForMemRef(op, oldMemRef);
-    AffineMap oldMap = oldMapAttrPair.second.cast<AffineMapAttr>().getValue();
-    unsigned oldMapNumInputs = oldMap.getNumInputs();
-    SmallVector<Value, 4> oldMapOperands(
-        op->operand_begin() + memRefOperandPos + 1,
-        op->operand_begin() + memRefOperandPos + 1 + oldMapNumInputs);
-    // Apply 'oldMemRefOperands = oldMap(oldMapOperands)'.
-    SmallVector<Value, 4> oldMemRefOperands;
-    SmallVector<Value, 4> affineApplyOps;
-    oldMemRefOperands.reserve(oldMemRefRank);
-    if (oldMap != builder.getMultiDimIdentityMap(oldMap.getNumDims())) {
-      for (auto resultExpr : oldMap.getResults()) {
-        auto singleResMap = AffineMap::get(oldMap.getNumDims(),
-                                           oldMap.getNumSymbols(), resultExpr);
-        auto afOp = builder.create<AffineApplyOp>(op->getLoc(), singleResMap,
-                                                  oldMapOperands);
-        oldMemRefOperands.push_back(afOp);
-        affineApplyOps.push_back(afOp);
-      }
-    } else {
-      oldMemRefOperands.append(oldMapOperands.begin(), oldMapOperands.end());
-    }
-
-    // Construct new indices as a remap of the old ones if a remapping has been
-    // provided. The indices of a memref come right after it, i.e.,
-    // at position memRefOperandPos + 1.
-    SmallVector<Value, 4> remapOperands;
-    remapOperands.reserve(extraOperands.size() + oldMemRefRank +
-                          symbolOperands.size());
-    remapOperands.append(extraOperands.begin(), extraOperands.end());
-    remapOperands.append(oldMemRefOperands.begin(), oldMemRefOperands.end());
-    remapOperands.append(symbolOperands.begin(), symbolOperands.end());
-
-    SmallVector<Value, 4> remapOutputs;
-    remapOutputs.reserve(oldMemRefRank);
-
-    if (indexRemap &&
-        indexRemap != builder.getMultiDimIdentityMap(indexRemap.getNumDims())) {
-      // Remapped indices.
-      for (auto resultExpr : indexRemap.getResults()) {
-        auto singleResMap = AffineMap::get(
-            indexRemap.getNumDims(), indexRemap.getNumSymbols(), resultExpr);
-        auto afOp = builder.create<AffineApplyOp>(op->getLoc(), singleResMap,
-                                                  remapOperands);
-        remapOutputs.push_back(afOp);
-        affineApplyOps.push_back(afOp);
-      }
-    } else {
-      // No remapping specified.
-      remapOutputs.append(remapOperands.begin(), remapOperands.end());
-    }
-
-    SmallVector<Value, 4> newMapOperands;
-    newMapOperands.reserve(newMemRefRank);
-
-    // Prepend 'extraIndices' in 'newMapOperands'.
-    for (Value extraIndex : extraIndices) {
-      assert(extraIndex.getDefiningOp()->getNumResults() == 1 &&
-             "single result op's expected to generate these indices");
-      assert((isValidDim(extraIndex) || isValidSymbol(extraIndex)) &&
-             "invalid memory op index");
-      newMapOperands.push_back(extraIndex);
-    }
-
-    // Append 'remapOutputs' to 'newMapOperands'.
-    newMapOperands.append(remapOutputs.begin(), remapOutputs.end());
-
-    // Create new fully composed AffineMap for new op to be created.
-    assert(newMapOperands.size() == newMemRefRank);
-    auto newMap = builder.getMultiDimIdentityMap(newMemRefRank);
-    // TODO(b/136262594) Avoid creating/deleting temporary AffineApplyOps here.
-    fullyComposeAffineMapAndOperands(&newMap, &newMapOperands);
-    newMap = simplifyAffineMap(newMap);
-    canonicalizeMapAndOperands(&newMap, &newMapOperands);
-    // Remove any affine.apply's that became dead as a result of composition.
-    for (auto value : affineApplyOps)
-      if (value.use_empty())
-        value.getDefiningOp()->erase();
-
-    // Construct the new operation using this memref.
-
-    state.operands.reserve(op->getNumOperands() + extraIndices.size());
-    // Insert the non-memref operands.
-    state.operands.append(op->operand_begin(),
-                          op->operand_begin() + memRefOperandPos);
-    // Insert the new memref value.
-    state.operands.push_back(newMemRef);
-
-    // Insert the new memref map operands.
-    state.operands.append(newMapOperands.begin(), newMapOperands.end());
-
-    // Insert the remaining operands unmodified.
-    state.operands.append(op->operand_begin() + memRefOperandPos + 1 +
-                              oldMapNumInputs,
-                          op->operand_end());
-
-    // Result types don't change. Both memref's are of the same elemental type.
-    state.types.reserve(op->getNumResults());
-    for (auto result : op->getResults())
-      state.types.push_back(result.getType());
-
-    // Add attribute for 'newMap', other Attributes do not change.
-    auto newMapAttr = AffineMapAttr::get(newMap);
-    for (auto namedAttr : op->getAttrs()) {
-      if (namedAttr.first == oldMapAttrPair.first)
-        state.attributes.push_back({namedAttr.first, newMapAttr});
-      else
-        state.attributes.push_back(namedAttr);
-    }
-  } else {
+  if (!isMemRefDereferencingOp(*op)) {
     // For non-dereferencing op we simply replace the memref type.
     state.operands.reserve(op->getNumOperands() + extraIndices.size());
     // Insert the non-memref operands.
@@ -217,6 +103,123 @@ LogicalResult mlir::replaceAllMemRefUsesWith(Value oldMemRef, Value newMemRef,
     state.types.reserve(op->getNumResults());
     for (auto result : op->getResults())
       state.types.push_back(result.getType());
+
+    // Create the new operation.
+    auto *repOp = builder.createOperation(state);
+    op->replaceAllUsesWith(repOp);
+    op->erase();
+
+    return success();
+  }
+  // Perform index rewrites for the dereferencing op and then replace the op
+  NamedAttribute oldMapAttrPair = getAffineMapAttrForMemRef(op, oldMemRef);
+  AffineMap oldMap = oldMapAttrPair.second.cast<AffineMapAttr>().getValue();
+  unsigned oldMapNumInputs = oldMap.getNumInputs();
+  SmallVector<Value, 4> oldMapOperands(
+      op->operand_begin() + memRefOperandPos + 1,
+      op->operand_begin() + memRefOperandPos + 1 + oldMapNumInputs);
+  // Apply 'oldMemRefOperands = oldMap(oldMapOperands)'.
+  SmallVector<Value, 4> oldMemRefOperands;
+  SmallVector<Value, 4> affineApplyOps;
+  oldMemRefOperands.reserve(oldMemRefRank);
+  if (oldMap != builder.getMultiDimIdentityMap(oldMap.getNumDims())) {
+    for (auto resultExpr : oldMap.getResults()) {
+      auto singleResMap = AffineMap::get(oldMap.getNumDims(),
+                                         oldMap.getNumSymbols(), resultExpr);
+      auto afOp = builder.create<AffineApplyOp>(op->getLoc(), singleResMap,
+                                                oldMapOperands);
+      oldMemRefOperands.push_back(afOp);
+      affineApplyOps.push_back(afOp);
+    }
+  } else {
+    oldMemRefOperands.assign(oldMapOperands.begin(), oldMapOperands.end());
+  }
+
+  // Construct new indices as a remap of the old ones if a remapping has been
+  // provided. The indices of a memref come right after it, i.e.,
+  // at position memRefOperandPos + 1.
+  SmallVector<Value, 4> remapOperands;
+  remapOperands.reserve(extraOperands.size() + oldMemRefRank +
+                        symbolOperands.size());
+  remapOperands.append(extraOperands.begin(), extraOperands.end());
+  remapOperands.append(oldMemRefOperands.begin(), oldMemRefOperands.end());
+  remapOperands.append(symbolOperands.begin(), symbolOperands.end());
+
+  SmallVector<Value, 4> remapOutputs;
+  remapOutputs.reserve(oldMemRefRank);
+
+  if (indexRemap &&
+      indexRemap != builder.getMultiDimIdentityMap(indexRemap.getNumDims())) {
+    // Remapped indices.
+    for (auto resultExpr : indexRemap.getResults()) {
+      auto singleResMap = AffineMap::get(
+          indexRemap.getNumDims(), indexRemap.getNumSymbols(), resultExpr);
+      auto afOp = builder.create<AffineApplyOp>(op->getLoc(), singleResMap,
+                                                remapOperands);
+      remapOutputs.push_back(afOp);
+      affineApplyOps.push_back(afOp);
+    }
+  } else {
+    // No remapping specified.
+    remapOutputs.assign(remapOperands.begin(), remapOperands.end());
+  }
+
+  SmallVector<Value, 4> newMapOperands;
+  newMapOperands.reserve(newMemRefRank);
+
+  // Prepend 'extraIndices' in 'newMapOperands'.
+  for (Value extraIndex : extraIndices) {
+    assert(extraIndex.getDefiningOp()->getNumResults() == 1 &&
+           "single result op's expected to generate these indices");
+    assert((isValidDim(extraIndex) || isValidSymbol(extraIndex)) &&
+           "invalid memory op index");
+    newMapOperands.push_back(extraIndex);
+  }
+
+  // Append 'remapOutputs' to 'newMapOperands'.
+  newMapOperands.append(remapOutputs.begin(), remapOutputs.end());
+
+  // Create new fully composed AffineMap for new op to be created.
+  assert(newMapOperands.size() == newMemRefRank);
+  auto newMap = builder.getMultiDimIdentityMap(newMemRefRank);
+  // TODO(b/136262594) Avoid creating/deleting temporary AffineApplyOps here.
+  fullyComposeAffineMapAndOperands(&newMap, &newMapOperands);
+  newMap = simplifyAffineMap(newMap);
+  canonicalizeMapAndOperands(&newMap, &newMapOperands);
+  // Remove any affine.apply's that became dead as a result of composition.
+  for (Value value : affineApplyOps)
+    if (value.use_empty())
+      value.getDefiningOp()->erase();
+
+  // Construct the new operation using this memref.
+
+  state.operands.reserve(op->getNumOperands() + extraIndices.size());
+  // Insert the non-memref operands.
+  state.operands.append(op->operand_begin(),
+                        op->operand_begin() + memRefOperandPos);
+  // Insert the new memref value.
+  state.operands.push_back(newMemRef);
+
+  // Insert the new memref map operands.
+  state.operands.append(newMapOperands.begin(), newMapOperands.end());
+
+  // Insert the remaining operands unmodified.
+  state.operands.append(op->operand_begin() + memRefOperandPos + 1 +
+                            oldMapNumInputs,
+                        op->operand_end());
+
+  // Result types don't change. Both memref's are of the same elemental type.
+  state.types.reserve(op->getNumResults());
+  for (auto result : op->getResults())
+    state.types.push_back(result.getType());
+
+  // Add attribute for 'newMap', other Attributes do not change.
+  auto newMapAttr = AffineMapAttr::get(newMap);
+  for (auto namedAttr : op->getAttrs()) {
+    if (namedAttr.first == oldMapAttrPair.first)
+      state.attributes.push_back({namedAttr.first, newMapAttr});
+    else
+      state.attributes.push_back(namedAttr);
   }
   // Create the new operation.
   auto *repOp = builder.createOperation(state);

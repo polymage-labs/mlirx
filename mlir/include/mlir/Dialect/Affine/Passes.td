@@ -171,8 +171,4 @@ def SimplifyAffineStructures : FunctionPass<"simplify-affine-structures"> {
   let constructor = "mlir::createSimplifyAffineStructuresPass()";
 }
 
-def NormalizeMemRefs : Pass<"normalize-memrefs", "ModuleOp"> {
-  let summary = "Interprocedural normalize memrefs";
-  let constructor = "mlir::createNormalizeMemRefsPass()";
-}
 #endif // MLIR_DIALECT_AFFINE_PASSES
