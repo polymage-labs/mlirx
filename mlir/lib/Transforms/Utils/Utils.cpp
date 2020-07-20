@@ -95,6 +95,9 @@ LogicalResult mlir::replaceAllMemRefUsesWith(Value oldMemRef, Value newMemRef,
   // index rewrites.
   if (!isMemRefDereferencingOp(*op)) {
     if(!allowNonDereferencingOps)
+      // Failure: memref used in a non-dereferencing context (potentially
+      // escapes); no replacement in these cases unless allowNonDereferencingOps
+      // is set.
       return failure();
     // For non-dereferencing op we simply replace the memref type.
     state.operands.reserve(op->getNumOperands() + extraIndices.size());
