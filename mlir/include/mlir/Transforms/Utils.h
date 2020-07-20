@@ -63,7 +63,8 @@ LogicalResult replaceAllMemRefUsesWith(Value oldMemRef, Value newMemRef,
                                        ArrayRef<Value> extraOperands = {},
                                        ArrayRef<Value> symbolOperands = {},
                                        Operation *domInstFilter = nullptr,
-                                       Operation *postDomInstFilter = nullptr);
+                                       Operation *postDomInstFilter = nullptr,
+                                       bool allowNonDereferencingOps = false);
 
 /// Performs the same replacement as the other version above but only for the
 /// dereferencing uses of `oldMemRef` in `op`.
@@ -72,7 +73,8 @@ LogicalResult replaceAllMemRefUsesWith(Value oldMemRef, Value newMemRef,
                                        ArrayRef<Value> extraIndices = {},
                                        AffineMap indexRemap = AffineMap(),
                                        ArrayRef<Value> extraOperands = {},
-                                       ArrayRef<Value> symbolOperands = {});
+                                       ArrayRef<Value> symbolOperands = {},
+                                       bool allowNonDereferencingOps = false);
 
 /// Rewrites the memref defined by this alloc op to have an identity layout map
 /// and updates all its indexing uses. Returns failure if any of its uses

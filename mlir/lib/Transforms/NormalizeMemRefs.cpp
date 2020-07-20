@@ -179,7 +179,10 @@ void NormalizeMemRefs::runOnOperation() {
                                           /*extraIndices=*/{},
                                           /*indexRemap=*/layoutMap,
                                           /*extraOperands=*/{},
-                                          /*symbolOperands=*/{}))) {
+                                          /*symbolOperands=*/{},
+                                          /*domInstFilter=*/nullptr,
+                                          /*postDomInstFilter=*/nullptr,
+                                          /*allowNonDereferencingOps=*/true))) {
         // If it failed (due to escapes for example), bail out. Removing the
         // temporary argument inserted previously.
         funcOp.front().eraseArgument(argIndex);

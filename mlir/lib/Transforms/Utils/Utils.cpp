@@ -50,7 +50,8 @@ LogicalResult mlir::replaceAllMemRefUsesWith(Value oldMemRef, Value newMemRef,
                                              ArrayRef<Value> extraIndices,
                                              AffineMap indexRemap,
                                              ArrayRef<Value> extraOperands,
-                                             ArrayRef<Value> symbolOperands) {
+                                             ArrayRef<Value> symbolOperands,
+                                             bool allowNonDereferencingOps) {
   unsigned newMemRefRank = newMemRef.getType().cast<MemRefType>().getRank();
   (void)newMemRefRank; // unused in opt mode
   unsigned oldMemRefRank = oldMemRef.getType().cast<MemRefType>().getRank();
@@ -93,6 +94,8 @@ LogicalResult mlir::replaceAllMemRefUsesWith(Value oldMemRef, Value newMemRef,
   // The following checks if op is dereferencing memref and performs the access
   // index rewrites.
   if (!isMemRefDereferencingOp(*op)) {
+    if(!allowNonDereferencingOps)
+      return failure();
     // For non-dereferencing op we simply replace the memref type.
     state.operands.reserve(op->getNumOperands() + extraIndices.size());
     // Insert the non-memref operands.
@@ -235,7 +238,8 @@ LogicalResult mlir::replaceAllMemRefUsesWith(Value oldMemRef, Value newMemRef,
                                              ArrayRef<Value> extraOperands,
                                              ArrayRef<Value> symbolOperands,
                                              Operation *domInstFilter,
-                                             Operation *postDomInstFilter) {
+                                             Operation *postDomInstFilter,
+                                             bool allowNonDereferencingOps) {
   unsigned newMemRefRank = newMemRef.getType().cast<MemRefType>().getRank();
   (void)newMemRefRank; // unused in opt mode
   unsigned oldMemRefRank = oldMemRef.getType().cast<MemRefType>().getRank();
@@ -291,6 +295,8 @@ LogicalResult mlir::replaceAllMemRefUsesWith(Value oldMemRef, Value newMemRef,
       // TODO(avarmapml): Only the following non-dereferencing types to support
       // :-
       //                  DeallocOp, CallOp and ReturnOp.
+      if(!allowNonDereferencingOps)
+        return failure();
     }
 
     // We'll first collect and then replace --- since replacement erases the op
@@ -301,7 +307,7 @@ LogicalResult mlir::replaceAllMemRefUsesWith(Value oldMemRef, Value newMemRef,
   for (auto *op : opsToReplace) {
     if (failed(replaceAllMemRefUsesWith(oldMemRef, newMemRef, op, extraIndices,
                                         indexRemap, extraOperands,
-                                        symbolOperands))) {
+                                        symbolOperands, allowNonDereferencingOps))) {
       llvm_unreachable("memref replacement guaranteed to succeed here");
     }
   }
