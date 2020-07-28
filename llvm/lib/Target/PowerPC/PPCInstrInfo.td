@@ -757,7 +757,13 @@ def PPCS34ImmAsmOperand : AsmOperandClass {
 }
 def s34imm : Operand<i64> {
   let PrintMethod = "printS34ImmOperand";
-  let EncoderMethod = "getImm34Encoding";
+  let EncoderMethod = "getImm34EncodingNoPCRel";
+  let ParserMatchClass = PPCS34ImmAsmOperand;
+  let DecoderMethod = "decodeSImmOperand<34>";
+}
+def s34imm_pcrel : Operand<i64> {
+  let PrintMethod = "printS34ImmOperand";
+  let EncoderMethod = "getImm34EncodingPCRel";
   let ParserMatchClass = PPCS34ImmAsmOperand;
   let DecoderMethod = "decodeSImmOperand<34>";
 }
@@ -1406,9 +1412,14 @@ def PROBED_ALLOCA_32 : PPCCustomInserterPseudo<(outs gprc:$result),
                          (ins gprc:$negsize, memri:$fpsi), "#PROBED_ALLOCA_32",
                            [(set i32:$result,
                              (PPCprobedalloca i32:$negsize, iaddr:$fpsi))]>;
-def PREPARE_PROBED_ALLOCA_32 : PPCEmitTimePseudo<(outs gprc:$fp,
-    gprc:$sp),
+def PREPARE_PROBED_ALLOCA_32 : PPCEmitTimePseudo<(outs
+    gprc:$fp, gprc:$actual_negsize),
     (ins gprc:$negsize, memri:$fpsi), "#PREPARE_PROBED_ALLOCA_32", []>;
+def PREPARE_PROBED_ALLOCA_NEGSIZE_SAME_REG_32 : PPCEmitTimePseudo<(outs
+    gprc:$fp, gprc:$actual_negsize),
+    (ins gprc:$negsize, memri:$fpsi),
+    "#PREPARE_PROBED_ALLOCA_NEGSIZE_SAME_REG_32", []>,
+    RegConstraint<"$actual_negsize = $negsize">;
 def PROBED_STACKALLOC_32 : PPCEmitTimePseudo<(outs gprc:$scratch, gprc:$temp),
     (ins i64imm:$stacksize),
     "#PROBED_STACKALLOC_32", []>;
@@ -3246,8 +3257,12 @@ def : Pat<(PPCcall (i32 texternalsym:$dst)),
 // Calls for AIX only
 def : Pat<(PPCcall (i32 mcsym:$dst)),
           (BL mcsym:$dst)>;
+
 def : Pat<(PPCcall_nop (i32 mcsym:$dst)),
           (BL_NOP mcsym:$dst)>;
+
+def : Pat<(PPCcall_nop (i32 texternalsym:$dst)),
+          (BL_NOP texternalsym:$dst)>;
 
 def : Pat<(PPCtc_return (i32 tglobaladdr:$dst),  imm:$imm),
           (TCRETURNdi tglobaladdr:$dst, imm:$imm)>;

@@ -446,9 +446,9 @@ LogicalResult mlir::normalizeMemRef(AllocOp allocOp, Value *normalizedMemRef) {
       MemRefType::Builder(memrefType)
           .setShape(newShape)
           .setAffineMaps(b.getMultiDimIdentityMap(newRank));
-  auto newAlloc = b.create<AllocOp>(
-      allocOp.getLoc(), newMemRefType, llvm::None,
-      allocOp.getAttrOfType<IntegerAttr>(AllocOp::getAlignmentAttrName()));
+
+  auto newAlloc = b.create<AllocOp>(allocOp.getLoc(), newMemRefType, llvm::None,
+                                    allocOp.alignmentAttr());
 
   // Replace all uses of the old memref.
   if (failed(replaceAllMemRefUsesWith(oldMemRef, /*newMemRef=*/newAlloc,

@@ -716,14 +716,14 @@ void mlir::populateAffineToVectorConversionPatterns(
 
 namespace {
 class LowerAffinePass : public ConvertAffineToStandardBase<LowerAffinePass> {
-  void runOnFunction() override {
+  void runOnOperation() override {
     OwningRewritePatternList patterns;
     populateAffineToStdConversionPatterns(patterns, &getContext());
     populateAffineToVectorConversionPatterns(patterns, &getContext());
     ConversionTarget target(getContext());
     target
         .addLegalDialect<scf::SCFDialect, StandardOpsDialect, VectorDialect>();
-    if (failed(applyPartialConversion(getFunction(), target, patterns)))
+    if (failed(applyPartialConversion(getOperation(), target, patterns)))
       signalPassFailure();
   }
 };
@@ -731,6 +731,6 @@ class LowerAffinePass : public ConvertAffineToStandardBase<LowerAffinePass> {
 
 /// Lowers If and For operations within a function into their lower level CFG
 /// equivalent blocks.
-std::unique_ptr<OperationPass<FuncOp>> mlir::createLowerAffinePass() {
+std::unique_ptr<Pass> mlir::createLowerAffinePass() {
   return std::make_unique<LowerAffinePass>();
 }

@@ -15,6 +15,7 @@ if (NOT DEFINED CLANGD_BUILD_XPC)
 endif ()
 
 llvm_canonicalize_cmake_booleans(CLANGD_BUILD_XPC)
+llvm_canonicalize_cmake_booleans(CLANGD_ENABLE_REMOTE)
 
 configure_file(
   ${CMAKE_CURRENT_SOURCE_DIR}/Features.inc.in
@@ -27,6 +28,10 @@ set(LLVM_LINK_COMPONENTS
   FrontendOpenMP
   Option
   )
+
+if(MSVC AND NOT CLANG_CL)
+ set_source_files_properties(CompileCommands.cpp PROPERTIES COMPILE_FLAGS -wd4130) # disables C4130: logical operation on address of string constant
+endif()
 
 add_clang_library(clangDaemon
   AST.cpp
