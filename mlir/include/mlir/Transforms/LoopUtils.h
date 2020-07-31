@@ -178,9 +178,9 @@ struct AffineCopyOptions {
   // generate new indices, effectively enforcing a new layout; row major
   // layout is unsed if left unspecified.
   AffineMap fastBufferLayout;
-  //optional alignment argument, specifies the alignment explicitly
-  //for the `alloc` of the copy buffer 
-  uint64_t alignment=0;
+  // optional alignment argument, specifies the alignment explicitly
+  // for the `alloc` of the copy buffer
+  uint64_t alignment = 0;
 };
 
 /// Performs explicit copying for the contiguous sequence of operations in the
