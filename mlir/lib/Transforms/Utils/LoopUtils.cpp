@@ -2100,10 +2100,9 @@ static LogicalResult generateCopy(
     // Create the fast memory space buffer just before the 'affine.for'
     // operation.
     AllocOp allocOp = prologue.create<AllocOp>(loc, fastMemRefType);
-    if (copyOptions.alignment) {
+    if (copyOptions.alignment)
       allocOp.setAttr(AllocOp::getAlignmentAttrName(),
                       prologue.getI64IntegerAttr(copyOptions.alignment));
-    }
     fastMemRef = allocOp.getResult();
 
     // Record it.

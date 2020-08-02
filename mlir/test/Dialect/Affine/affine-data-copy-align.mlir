@@ -1,4 +1,4 @@
-/// Checks for the optional buffer alignment attribute in the alloc instruction
+/// Checks for the buffer alignment attribute in the alloc instruction.
 // RUN: mlir-opt %s -test-affine-data-copy="alloc-alignment" -split-input-file | FileCheck %s
 // CHECK-LABEL: func @simple_gemm
 // CHECK: %{{[0-9]+}} = alloc() {alignment = {{[0-9]+}} : i64} : memref<{{[0-9]+}}x{{[0-9]+}}xf32>

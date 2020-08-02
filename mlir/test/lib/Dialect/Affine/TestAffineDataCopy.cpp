@@ -83,7 +83,7 @@ void TestAffineDataCopy::runOnFunction() {
                                    /*fastMemorySpace=*/0,
                                    /*tagMemorySpace=*/0,
                                    /*fastMemCapacityBytes=*/32 * 1024 * 1024UL,
-                                   /*fastBufLayout*/ {}};
+                                   /*fastBufLayout*/{}};
   DenseSet<Operation *> copyNests;
 
   if (clMemRefFilter) {
