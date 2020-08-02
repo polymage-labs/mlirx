@@ -47,7 +47,6 @@ private:
       *this, "alloc-alignment",
       llvm::cl::desc("Test alignment attribute of alloc instruction"),
       llvm::cl::init(false)};
-
 };
 
 } // end anonymous namespace
@@ -57,7 +56,7 @@ void TestAffineDataCopy::runOnFunction() {
   std::vector<SmallVector<AffineForOp, 2>> depthToLoops;
   gatherLoops(getFunction(), depthToLoops);
   assert(depthToLoops.size() && "Loop nest not found");
-	
+
   // Only support tests with a single loop nest and a single innermost loop
   // for now.
   unsigned innermostLoopIdx = depthToLoops.size() - 1;
@@ -67,7 +66,8 @@ void TestAffineDataCopy::runOnFunction() {
   auto loopNest = depthToLoops[0][0];
   auto innermostLoop = depthToLoops[innermostLoopIdx][0];
   AffineLoadOp load;
-  if (clMemRefFilter || clTestGenerateCopyForMemRegion || clTestAllocAlignment) {
+  if (clMemRefFilter || clTestGenerateCopyForMemRegion ||
+      clTestAllocAlignment) {
     // Gather MemRef filter. For simplicity, we use the first loaded memref
     // found in the innermost loop.
     for (auto &op : *innermostLoop.getBody()) {
@@ -83,8 +83,7 @@ void TestAffineDataCopy::runOnFunction() {
                                    /*fastMemorySpace=*/0,
                                    /*tagMemorySpace=*/0,
                                    /*fastMemCapacityBytes=*/32 * 1024 * 1024UL,
-                                   /*fastBufLayout*/{}
-  };
+                                   /*fastBufLayout*/ {}};
   DenseSet<Operation *> copyNests;
 
   if (clMemRefFilter) {
@@ -95,10 +94,9 @@ void TestAffineDataCopy::runOnFunction() {
     region.compute(load, /*loopDepth=*/0);
     generateCopyForMemRegion(region, loopNest, copyOptions, result);
   } else if (clTestAllocAlignment) {
-	copyOptions.alignment = 64;
+    copyOptions.alignment = 64;
     affineDataCopyGenerate(loopNest, copyOptions, load.getMemRef(), copyNests);
   }
-
 
   // Promote any single iteration loops in the copy nests and simplify
   // load/stores.
