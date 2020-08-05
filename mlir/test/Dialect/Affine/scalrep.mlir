@@ -236,3 +236,17 @@ func @escaping_use(%A : memref<100 x f32>, %M : index, %N : index) {
   }
   return
 }
+
+// The test checks for value forwarding from vector stores to vector loads.
+// The value loaded from %in can directly be stored to %out by eliminating
+// store and load from %tmp.
+func @vector_forwarding(%in : memref<512xf32>, %out : memref<512xf32>) {
+  %tmp = alloc() : memref<512xf32>
+  affine.for %i = 0 to 16 {
+    %ld0 = affine.vector_load %in[32*%i] : memref<512xf32>, vector<32xf32>
+    affine.vector_store %ld0, %tmp[32*%i] : memref<512xf32>, vector<32xf32>
+    %ld1 = affine.vector_load %tmp[32*%i] : memref<512xf32>, vector<32xf32>
+    affine.vector_store %ld1, %out[32*%i] : memref<512xf32>, vector<32xf32>
+  }
+  return
+}

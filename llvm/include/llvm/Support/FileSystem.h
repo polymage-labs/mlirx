@@ -1140,7 +1140,7 @@ openNativeFileForRead(const Twine &Name, OpenFlags Flags = OF_None,
 /// none of other processes read or write this file, provided that all processes
 /// lock the file prior to accessing its content.
 ///
-/// @param File    The descriptor representing the file to lock.
+/// @param FD      The descriptor representing the file to lock.
 /// @param Timeout Time in milliseconds that the process should wait before
 ///                reporting lock failure. Zero value means try to get lock only
 ///                once.
@@ -1163,7 +1163,7 @@ std::error_code lockFile(int FD);
 
 /// Unlock the file.
 ///
-/// @param File The descriptor representing the file to unlock.
+/// @param FD The descriptor representing the file to unlock.
 /// @returns errc::success if lock is successfully released or platform-specific
 /// error_code otherwise.
 std::error_code unlockFile(int FD);
@@ -1178,6 +1178,35 @@ std::error_code unlockFile(int FD);
 /// @returns An error code if closing the file failed. Typically, an error here
 /// means that the filesystem may have failed to perform some buffered writes.
 std::error_code closeFile(file_t &F);
+
+/// RAII class that facilitates file locking.
+class FileLocker {
+  int FD; ///< Locked file handle.
+  FileLocker(int FD) : FD(FD) {}
+  friend class llvm::raw_fd_ostream;
+
+public:
+  FileLocker(const FileLocker &L) = delete;
+  FileLocker(FileLocker &&L) : FD(L.FD) { L.FD = -1; }
+  ~FileLocker() {
+    if (FD != -1)
+      unlockFile(FD);
+  }
+  FileLocker &operator=(FileLocker &&L) {
+    FD = L.FD;
+    L.FD = -1;
+    return *this;
+  }
+  FileLocker &operator=(const FileLocker &L) = delete;
+  std::error_code unlock() {
+    if (FD != -1) {
+      std::error_code Result = unlockFile(FD);
+      FD = -1;
+      return Result;
+    }
+    return std::error_code();
+  }
+};
 
 std::error_code getUniqueID(const Twine Path, UniqueID &Result);
 

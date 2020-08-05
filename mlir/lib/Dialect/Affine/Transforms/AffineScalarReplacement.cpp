@@ -19,9 +19,9 @@
 #include "mlir/Analysis/AffineAnalysis.h"
 #include "mlir/Analysis/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Affine/Passes.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/Dominance.h"
-#include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/LoopUtils.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include <algorithm>
@@ -68,7 +68,7 @@ struct AffineScalarReplacement
   void runOnFunction() override;
 
   bool forwardStoreToLoad(FuncOp f);
-  void forwardStoreToLoad(AffineLoadOp loadOp);
+  void forwardStoreToLoad(AffineReadOpInterface loadOp);
 
   // A list of memref's that are potentially dead / could be eliminated.
   SmallPtrSet<Value, 4> memrefsToErase;
@@ -90,14 +90,14 @@ mlir::createAffineScalarReplacementPass() {
 
 // This is a straightforward implementation not optimized for speed. Optimize
 // if needed.
-void AffineScalarReplacement::forwardStoreToLoad(AffineLoadOp loadOp) {
+void AffineScalarReplacement::forwardStoreToLoad(AffineReadOpInterface loadOp) {
   // First pass over the use list to get minimum number of surrounding
   // loops common between the load op and the store op, with min taken across
   // all store ops.
   SmallVector<Operation *, 8> storeOps;
   unsigned minSurroundingLoops = getNestingDepth(loadOp);
   for (auto *user : loadOp.getMemRef().getUsers()) {
-    auto storeOp = dyn_cast<AffineStoreOp>(user);
+    auto storeOp = dyn_cast<AffineWriteOpInterface>(user);
     if (!storeOp)
       continue;
     unsigned nsLoops = getNumCommonSurroundingLoops(*loadOp, *storeOp);
@@ -173,8 +173,9 @@ void AffineScalarReplacement::forwardStoreToLoad(AffineLoadOp loadOp) {
     return;
 
   // Perform the actual store to load forwarding.
-  Value storeVal = cast<AffineStoreOp>(lastWriteStoreOp).getValueToStore();
-  loadOp.replaceAllUsesWith(storeVal);
+  Value storeVal =
+    cast<AffineWriteOpInterface>(lastWriteStoreOp).getValueToStore();
+  loadOp.getValue().replaceAllUsesWith(storeVal);
   // Record the memref for a later sweep to optimize away.
   memrefsToErase.insert(loadOp.getMemRef());
   // Record this to erase later.
@@ -190,7 +191,7 @@ bool AffineScalarReplacement::forwardStoreToLoad(FuncOp f) {
   memrefsToErase.clear();
 
   // Walk all load's and perform store to load forwarding.
-  f.walk([&](AffineLoadOp loadOp) { forwardStoreToLoad(loadOp); });
+  f.walk([&](AffineReadOpInterface loadOp) { forwardStoreToLoad(loadOp); });
 
   // Erase all load op's whose results were replaced with store fwd'ed ones.
   for (auto *loadOp : loadOpsToErase)
@@ -207,7 +208,7 @@ bool AffineScalarReplacement::forwardStoreToLoad(FuncOp f) {
       // could still erase it if the call had no side-effects.
       continue;
     if (llvm::any_of(memref.getUsers(), [&](Operation *ownerOp) {
-          return !isa<AffineStoreOp, DeallocOp>(ownerOp);
+          return !isa<AffineWriteOpInterface, DeallocOp>(ownerOp);
         }))
       continue;
 

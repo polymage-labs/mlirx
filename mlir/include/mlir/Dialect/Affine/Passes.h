@@ -14,17 +14,12 @@
 #ifndef MLIR_DIALECT_AFFINE_TRANSFORMS_PASSES_H
 #define MLIR_DIALECT_AFFINE_TRANSFORMS_PASSES_H
 
-#include "mlir/Support/LLVM.h"
-#include <functional>
+#include "mlir/Pass/Pass.h"
 #include <limits>
 
 namespace mlir {
 
 class AffineForOp;
-class FuncOp;
-class ModuleOp;
-class Pass;
-template <typename T> class OperationPass;
 
 /// Creates a simplification pass for affine structures (maps and sets). In
 /// addition, this pass also normalizes memrefs to have the trivial (identity)
@@ -35,6 +30,11 @@ std::unique_ptr<OperationPass<FuncOp>> createSimplifyAffineStructuresPass();
 /// operations out of affine loops.
 std::unique_ptr<OperationPass<FuncOp>>
 createAffineLoopInvariantCodeMotionPass();
+
+/// Creates a pass to perform optimizations relying on memref dataflow such as
+/// store to load forwarding, scalar replacement of memref accesses, elimination
+/// of dead stores, and dead allocs.
+std::unique_ptr<OperationPass<FuncOp>> createAffineScalarReplacementPass();
 
 /// Creates a pass to vectorize affine loops (the new one).
 std::unique_ptr<OperationPass<FuncOp>> createAffineVectorizePass();
@@ -81,6 +81,14 @@ std::unique_ptr<OperationPass<FuncOp>>
 createSuperVectorizePass(ArrayRef<int64_t> virtualVectorSize);
 /// Overload relying on pass options for initialization.
 std::unique_ptr<OperationPass<FuncOp>> createSuperVectorizePass();
+
+//===----------------------------------------------------------------------===//
+// Registration
+//===----------------------------------------------------------------------===//
+
+/// Generate the code for registering passes.
+#define GEN_PASS_REGISTRATION
+#include "mlir/Dialect/Affine/Passes.h.inc"
 
 } // end namespace mlir
 
