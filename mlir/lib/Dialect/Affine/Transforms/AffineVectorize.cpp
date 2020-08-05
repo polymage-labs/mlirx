@@ -29,14 +29,11 @@
 #include "mlir/Transforms/LoopUtils.h"
 #include "mlir/Dialect/Affine/Passes.h"
 
-#include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "affine-vect"
 
 using namespace mlir;
-
-using llvm::SetVector;
 
 namespace {
 
@@ -123,7 +120,7 @@ void AffineVectorize::runOnFunction() {
     }
   });
 
-  for (auto loop : vectorizableLoops) {
+  for (Operation *loop : vectorizableLoops) {
     LLVM_DEBUG(llvm::dbgs() << "\n******************************************");
     LLVM_DEBUG(llvm::dbgs() << "\n******************************************");
     LLVM_DEBUG(llvm::dbgs() << "\n[affine-vect] Vectorizing loop\n");

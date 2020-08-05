@@ -1578,7 +1578,6 @@ static bool mayBeEqual(const MemRefAccess &A, const MemRefAccess &B) {
   B.getAccessMap(&BMap);
 
   AffineValueMap::difference(AMap, BMap, &diff);
-  // return !diff.getAffineMap().getResult(0).isa<AffineConstantExpr>();
   return llvm::any_of(diff.getAffineMap().getResults(), [](AffineExpr e) {
     return !e.isa<AffineConstantExpr>();
   });
@@ -1608,7 +1607,7 @@ void mlir::scalarReplace(AffineForOp forOp) {
   LLVM_DEBUG(llvm::dbgs() << "COLLECTING ACCESS SETS\n";);
   // Process all affine load and store ops.
   forOp.walk([&](Operation *op) {
-    if (!isa<AffineLoadOp>(op) && !isa<AffineStoreOp>(op))
+    if (!isa<AffineLoadOp, AffineStoreOp>(op))
       return;
 
     MemRefAccess acc(op);
