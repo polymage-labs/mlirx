@@ -81,7 +81,8 @@ private:
   ImplicitRules *parent_;
   SemanticsContext &context_;
   bool inheritFromParent_{false}; // look in parent if not specified here
-  bool isImplicitNoneType_{false};
+  bool isImplicitNoneType_{
+      context_.IsEnabled(common::LanguageFeature::ImplicitNoneTypeAlways)};
   bool isImplicitNoneExternal_{false};
   // map_ contains the mapping between letters and types that were defined
   // by the IMPLICIT statements of the related scope. It does not contain
@@ -117,7 +118,7 @@ public:
   Message &Say(const SourceName &, MessageFixedText &&);
   // Emit a formatted message associated with a source location.
   template <typename... A>
-  Message &Say(const SourceName &source, MessageFixedText &&msg, A &&... args) {
+  Message &Say(const SourceName &source, MessageFixedText &&msg, A &&...args) {
     return context_->Say(source, std::move(msg), std::forward<A>(args)...);
   }
 
@@ -213,12 +214,12 @@ public:
     }
   }
 
-  template <typename... A> Message &Say(A &&... args) {
+  template <typename... A> Message &Say(A &&...args) {
     return messageHandler_.Say(std::forward<A>(args)...);
   }
   template <typename... A>
   Message &Say(
-      const parser::Name &name, MessageFixedText &&text, const A &... args) {
+      const parser::Name &name, MessageFixedText &&text, const A &...args) {
     return messageHandler_.Say(name.source, std::move(text), args...);
   }
 
@@ -1682,9 +1683,8 @@ bool ImplicitRulesVisitor::Pre(const parser::ImplicitStmt &x) {
                          Say("IMPLICIT statement after IMPLICIT NONE or "
                              "IMPLICIT NONE(TYPE) statement"_err_en_US);
                          return false;
-                       } else {
-                         implicitRules().set_isImplicitNoneType(false);
                        }
+                       implicitRules().set_isImplicitNoneType(false);
                        return true;
                      },
                  },
@@ -1744,12 +1744,16 @@ bool ImplicitRulesVisitor::HandleImplicitNone(
     return false;
   }
   prevImplicitNone_ = currStmtSource();
+  bool implicitNoneTypeNever{
+      context().IsEnabled(common::LanguageFeature::ImplicitNoneTypeNever)};
   if (nameSpecs.empty()) {
-    prevImplicitNoneType_ = currStmtSource();
-    implicitRules().set_isImplicitNoneType(true);
-    if (prevImplicit_) {
-      Say("IMPLICIT NONE statement after IMPLICIT statement"_err_en_US);
-      return false;
+    if (!implicitNoneTypeNever) {
+      prevImplicitNoneType_ = currStmtSource();
+      implicitRules().set_isImplicitNoneType(true);
+      if (prevImplicit_) {
+        Say("IMPLICIT NONE statement after IMPLICIT statement"_err_en_US);
+        return false;
+      }
     }
   } else {
     int sawType{0};
@@ -1761,13 +1765,15 @@ bool ImplicitRulesVisitor::HandleImplicitNone(
         ++sawExternal;
         break;
       case ImplicitNoneNameSpec::Type:
-        prevImplicitNoneType_ = currStmtSource();
-        implicitRules().set_isImplicitNoneType(true);
-        if (prevImplicit_) {
-          Say("IMPLICIT NONE(TYPE) after IMPLICIT statement"_err_en_US);
-          return false;
+        if (!implicitNoneTypeNever) {
+          prevImplicitNoneType_ = currStmtSource();
+          implicitRules().set_isImplicitNoneType(true);
+          if (prevImplicit_) {
+            Say("IMPLICIT NONE(TYPE) after IMPLICIT statement"_err_en_US);
+            return false;
+          }
+          ++sawType;
         }
-        ++sawType;
         break;
       }
     }

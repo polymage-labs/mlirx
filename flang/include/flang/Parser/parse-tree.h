@@ -108,7 +108,7 @@ class ProcedureRef; // forward definition, represents a CALL statement
 // is conventionally named "t".
 #define TUPLE_CLASS_BOILERPLATE(classname) \
   template <typename... Ts, typename = common::NoLvalue<Ts...>> \
-  classname(Ts &&... args) : t(std::move(args)...) {} \
+  classname(Ts &&...args) : t(std::move(args)...) {} \
   using TupleTrait = std::true_type; \
   BOILERPLATE(classname)
 
@@ -3415,6 +3415,13 @@ struct OmpReductionClause {
   std::tuple<OmpReductionOperator, std::list<Designator>> t;
 };
 
+// OMP 5.0 2.11.4 allocate-clause -> ALLOCATE ([allocator:] variable-name-list)
+struct OmpAllocateClause {
+  TUPLE_CLASS_BOILERPLATE(OmpAllocateClause);
+  WRAPPER_CLASS(Allocator, ScalarIntExpr);
+  std::tuple<std::optional<Allocator>, OmpObjectList> t;
+};
+
 // 2.13.9 depend-vec-length -> +/- non-negative-constant
 struct OmpDependSinkVecLength {
   TUPLE_CLASS_BOILERPLATE(OmpDependSinkVecLength);
@@ -3490,9 +3497,9 @@ struct OmpClause {
       Firstprivate, From, Grainsize, Lastprivate, NumTasks, NumTeams,
       NumThreads, Ordered, Priority, Private, Safelen, Shared, Simdlen,
       ThreadLimit, To, Link, Uniform, UseDevicePtr, IsDevicePtr,
-      OmpAlignedClause, OmpDefaultClause, OmpDefaultmapClause, OmpDependClause,
-      OmpIfClause, OmpLinearClause, OmpMapClause, OmpProcBindClause,
-      OmpReductionClause, OmpScheduleClause>
+      OmpAlignedClause, OmpAllocateClause, OmpDefaultClause,
+      OmpDefaultmapClause, OmpDependClause, OmpIfClause, OmpLinearClause,
+      OmpMapClause, OmpProcBindClause, OmpReductionClause, OmpScheduleClause>
       u;
 };
 

@@ -225,11 +225,11 @@ names from both the *Processor* and *Alternative Processor* can be used.
                                                                                  names.
      ``gfx906``                  ``amdgcn``   dGPU  - xnack                   - Radeon Instinct MI50
                                                       [off]                   - Radeon Instinct MI60
-                                                                              - Radeon VII
-                                                                              - Radeon Pro VII
+                                                    - sram-ecc                - Radeon VII
+                                                      [off]                   - Radeon Pro VII
      ``gfx908``                  ``amdgcn``   dGPU  - xnack                   *TBA*
                                                       [off]
-                                                      sram-ecc
+                                                    - sram-ecc
                                                       [on]
                                                                               .. TODO::
                                                                                  Add product
@@ -260,6 +260,15 @@ names from both the *Processor* and *Alternative Processor* can be used.
                                                     - cumode
                                                       [off]
      ``gfx1030``                 ``amdgcn``   dGPU  - wavefrontsize64         *TBA*
+                                                      [off]
+                                                    - cumode
+                                                      [off]
+                                                                              .. TODO
+                                                                                 Add product
+                                                                                 names.
+     ``gfx1031``                 ``amdgcn``   dGPU  - xnack                   *TBA*
+                                                      [off]
+                                                    - wavefrontsize64
                                                       [off]
                                                     - cumode
                                                       [off]
@@ -810,6 +819,7 @@ The AMDGPU backend uses the following ELF header:
      ``EF_AMDGPU_MACH_AMDGCN_GFX1011`` 0x034      ``gfx1011``
      ``EF_AMDGPU_MACH_AMDGCN_GFX1012`` 0x035      ``gfx1012``
      ``EF_AMDGPU_MACH_AMDGCN_GFX1030`` 0x036      ``gfx1030``
+     ``EF_AMDGPU_MACH_AMDGCN_GFX1031`` 0x037      ``gfx1031``
      ================================= ========== =============================
 
 Sections

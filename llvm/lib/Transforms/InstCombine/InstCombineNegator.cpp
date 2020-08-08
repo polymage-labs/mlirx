@@ -43,6 +43,8 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
+#include <cassert>
+#include <cstdint>
 #include <functional>
 #include <tuple>
 #include <type_traits>
@@ -182,6 +184,10 @@ LLVM_NODISCARD Value *Negator::visitImpl(Value *V, unsigned Depth) {
       }
       return BO;
     }
+    // While we could negate exact arithmetic shift:
+    //   ashr exact %x, C  -->   sdiv exact i8 %x, -1<<C
+    // iff C != 0 and C u< bitwidth(%x), we don't want to,
+    // because division is *THAT* much worse than a shift.
     break;
   }
   case Instruction::SExt:
@@ -255,20 +261,16 @@ LLVM_NODISCARD Value *Negator::visitImpl(Value *V, unsigned Depth) {
     return NegatedPHI;
   }
   case Instruction::Select: {
-    {
-      // `abs`/`nabs` is always negatible.
-      Value *LHS, *RHS;
-      SelectPatternFlavor SPF =
-          matchSelectPattern(I, LHS, RHS, /*CastOp=*/nullptr, Depth).Flavor;
-      if (SPF == SPF_ABS || SPF == SPF_NABS) {
-        auto *NewSelect = cast<SelectInst>(I->clone());
-        // Just swap the operands of the select.
-        NewSelect->swapValues();
-        // Don't swap prof metadata, we didn't change the branch behavior.
-        NewSelect->setName(I->getName() + ".neg");
-        Builder.Insert(NewSelect);
-        return NewSelect;
-      }
+    if (isKnownNegation(I->getOperand(1), I->getOperand(2))) {
+      // Of one hand of select is known to be negation of another hand,
+      // just swap the hands around.
+      auto *NewSelect = cast<SelectInst>(I->clone());
+      // Just swap the operands of the select.
+      NewSelect->swapValues();
+      // Don't swap prof metadata, we didn't change the branch behavior.
+      NewSelect->setName(I->getName() + ".neg");
+      Builder.Insert(NewSelect);
+      return NewSelect;
     }
     // `select` is negatible if both hands of `select` are negatible.
     Value *NegOp1 = negate(I->getOperand(1), Depth + 1);
