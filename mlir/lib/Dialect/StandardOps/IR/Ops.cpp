@@ -2187,11 +2187,10 @@ static LogicalResult verify(ReturnOp op) {
 
   for (unsigned i = 0, e = retTypes.size(); i != e; ++i)
     if (op.getOperand(i).getType() != retTypes[i])
-      return op.emitError()
-             << "type of return operand " << i << " ("
-             << op.getOperand(i).getType()
-             << ") doesn't match function result type (" << retTypes[i] << ")"
-             << " in enclosing op";
+      return op.emitError() << "type of return operand " << i << " ("
+                            << op.getOperand(i).getType()
+                            << ") doesn't match enclosing op result type ("
+                            << retTypes[i] << ")";
 
   return success();
 }
