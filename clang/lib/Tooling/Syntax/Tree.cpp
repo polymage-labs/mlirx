@@ -268,3 +268,121 @@ syntax::Node *syntax::Tree::findChild(NodeRole R) {
   }
   return nullptr;
 }
+
+std::vector<syntax::List::ElementAndDelimiter<syntax::Node>>
+syntax::List::getElementsAsNodesAndDelimiters() {
+  if (!firstChild())
+    return {};
+
+  auto children = std::vector<syntax::List::ElementAndDelimiter<Node>>();
+  syntax::Node *elementWithoutDelimiter = nullptr;
+  for (auto *C = firstChild(); C; C = C->nextSibling()) {
+    switch (C->role()) {
+    case syntax::NodeRole::List_element: {
+      if (elementWithoutDelimiter) {
+        children.push_back({elementWithoutDelimiter, nullptr});
+      }
+      elementWithoutDelimiter = C;
+      break;
+    }
+    case syntax::NodeRole::List_delimiter: {
+      children.push_back({elementWithoutDelimiter, cast<syntax::Leaf>(C)});
+      elementWithoutDelimiter = nullptr;
+      break;
+    }
+    default:
+      llvm_unreachable(
+          "A list can have only elements and delimiters as children.");
+    }
+  }
+
+  switch (getTerminationKind()) {
+  case syntax::List::TerminationKind::Separated: {
+    children.push_back({elementWithoutDelimiter, nullptr});
+    break;
+  }
+  case syntax::List::TerminationKind::Terminated:
+  case syntax::List::TerminationKind::MaybeTerminated: {
+    if (elementWithoutDelimiter) {
+      children.push_back({elementWithoutDelimiter, nullptr});
+    }
+    break;
+  }
+  }
+
+  return children;
+}
+
+// Almost the same implementation of `getElementsAsNodesAndDelimiters` but
+// ignoring delimiters
+std::vector<syntax::Node *> syntax::List::getElementsAsNodes() {
+  if (!firstChild())
+    return {};
+
+  auto children = std::vector<syntax::Node *>();
+  syntax::Node *elementWithoutDelimiter = nullptr;
+  for (auto *C = firstChild(); C; C = C->nextSibling()) {
+    switch (C->role()) {
+    case syntax::NodeRole::List_element: {
+      if (elementWithoutDelimiter) {
+        children.push_back(elementWithoutDelimiter);
+      }
+      elementWithoutDelimiter = C;
+      break;
+    }
+    case syntax::NodeRole::List_delimiter: {
+      children.push_back(elementWithoutDelimiter);
+      elementWithoutDelimiter = nullptr;
+      break;
+    }
+    default:
+      llvm_unreachable("A list has only elements or delimiters.");
+    }
+  }
+
+  switch (getTerminationKind()) {
+  case syntax::List::TerminationKind::Separated: {
+    children.push_back(elementWithoutDelimiter);
+    break;
+  }
+  case syntax::List::TerminationKind::Terminated:
+  case syntax::List::TerminationKind::MaybeTerminated: {
+    if (elementWithoutDelimiter) {
+      children.push_back(elementWithoutDelimiter);
+    }
+    break;
+  }
+  }
+
+  return children;
+}
+
+clang::tok::TokenKind syntax::List::getDelimiterTokenKind() {
+  switch (this->kind()) {
+  case NodeKind::NestedNameSpecifier:
+    return clang::tok::coloncolon;
+  default:
+    llvm_unreachable("This is not a subclass of List, thus "
+                     "getDelimiterTokenKind() cannot be called");
+  }
+}
+
+syntax::List::TerminationKind syntax::List::getTerminationKind() {
+  switch (this->kind()) {
+  case NodeKind::NestedNameSpecifier:
+    return TerminationKind::Terminated;
+  default:
+    llvm_unreachable("This is not a subclass of List, thus "
+                     "getTerminationKind() cannot be called");
+  }
+}
+
+bool syntax::List::canBeEmpty() {
+  switch (this->kind()) {
+  case NodeKind::NestedNameSpecifier:
+    return false;
+  default:
+    llvm_unreachable("This is not a subclass of List, thus canBeEmpty() "
+                     "cannot be called");
+  }
+}

@@ -1039,7 +1039,7 @@ bool AMDGPURegisterBankInfo::executeInWaterfallLoop(
 
 // Return any unique registers used by \p MI at \p OpIndices that need to be
 // handled in a waterfall loop. Returns these registers in \p
-// SGPROperandRegs. Returns true if there are any operansd to handle and a
+// SGPROperandRegs. Returns true if there are any operands to handle and a
 // waterfall loop is necessary.
 bool AMDGPURegisterBankInfo::collectWaterfallOperands(
   SmallSet<Register, 4> &SGPROperandRegs, MachineInstr &MI,
@@ -2319,15 +2319,8 @@ void AMDGPURegisterBankInfo::applyMappingImpl(
 
     setRegsToType(MRI, DefRegs, HalfTy);
 
-    B.buildInstr(Opc)
-      .addDef(DefRegs[0])
-      .addUse(Src0Regs[0])
-      .addUse(Src1Regs[0]);
-
-    B.buildInstr(Opc)
-      .addDef(DefRegs[1])
-      .addUse(Src0Regs[1])
-      .addUse(Src1Regs[1]);
+    B.buildInstr(Opc, {DefRegs[0]}, {Src0Regs[0], Src1Regs[0]});
+    B.buildInstr(Opc, {DefRegs[1]}, {Src0Regs[1], Src1Regs[1]});
 
     MRI.setRegBank(DstReg, AMDGPU::VGPRRegBank);
     MI.eraseFromParent();
@@ -2994,7 +2987,6 @@ void AMDGPURegisterBankInfo::applyMappingImpl(
       constrainOpWithReadfirstlane(MI, MRI, 3); // Index
       return;
     }
-    case Intrinsic::amdgcn_ballot:
     case Intrinsic::amdgcn_interp_p1:
     case Intrinsic::amdgcn_interp_p2:
     case Intrinsic::amdgcn_interp_mov:
@@ -3022,6 +3014,9 @@ void AMDGPURegisterBankInfo::applyMappingImpl(
     case Intrinsic::amdgcn_ubfe:
       applyMappingBFEIntrinsic(OpdMapper, false);
       return;
+    case Intrinsic::amdgcn_ballot:
+      // Use default handling and insert copy to vcc source.
+      break;
     }
     break;
   }
@@ -4252,6 +4247,7 @@ AMDGPURegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
       OpdsMapping[0] = AMDGPU::getValueMapping(AMDGPU::SGPRRegBankID, Size);
       break;
     }
+    case Intrinsic::amdgcn_global_atomic_fadd:
     case Intrinsic::amdgcn_global_atomic_csub:
       return getDefaultMappingAllVGPR(MI);
     case Intrinsic::amdgcn_ds_ordered_add:

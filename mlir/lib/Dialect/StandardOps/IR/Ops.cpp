@@ -564,7 +564,8 @@ static ParseResult parseGenericAtomicRMWOp(OpAsmParser &parser,
     return failure();
 
   Region *body = result.addRegion();
-  if (parser.parseRegion(*body, llvm::None, llvm::None))
+  if (parser.parseRegion(*body, llvm::None, llvm::None) ||
+      parser.parseOptionalAttrDict(result.attributes))
     return failure();
   result.types.push_back(memrefType.cast<MemRefType>().getElementType());
   return success();
@@ -1779,6 +1780,14 @@ bool FPToSIOp::areCastCompatible(Type a, Type b) {
 }
 
 //===----------------------------------------------------------------------===//
+// FPToUIOp
+//===----------------------------------------------------------------------===//
+
+bool FPToUIOp::areCastCompatible(Type a, Type b) {
+  return a.isa<FloatType>() && b.isSignlessInteger();
+}
+
+//===----------------------------------------------------------------------===//
 // FPTruncOp
 //===----------------------------------------------------------------------===//
 
@@ -2422,6 +2431,15 @@ OpFoldResult SubIOp::fold(ArrayRef<Attribute> operands) {
 
   return constFoldBinaryOp<IntegerAttr>(operands,
                                         [](APInt a, APInt b) { return a - b; });
+}
+
+//===----------------------------------------------------------------------===//
+// UIToFPOp
+//===----------------------------------------------------------------------===//
+
+// uitofp is applicable from integer types to float types.
+bool UIToFPOp::areCastCompatible(Type a, Type b) {
+  return a.isSignlessInteger() && b.isa<FloatType>();
 }
 
 //===----------------------------------------------------------------------===//
@@ -3106,15 +3124,6 @@ static Type getTensorTypeFromMemRefType(Type type) {
     return RankedTensorType::get(memref.getShape(), memref.getElementType());
   if (auto memref = type.dyn_cast<UnrankedMemRefType>())
     return UnrankedTensorType::get(memref.getElementType());
-  return NoneType::get(type.getContext());
-}
-
-static Type getMemRefTypeFromTensorType(Type type) {
-  if (auto tensor = type.dyn_cast<MemRefType>())
-    return MemRefType::get(tensor.getShape(), tensor.getElementType());
-  if (auto tensor = type.dyn_cast<UnrankedMemRefType>())
-    return UnrankedMemRefType::get(tensor.getElementType(),
-                                   tensor.getMemorySpace());
   return NoneType::get(type.getContext());
 }
 

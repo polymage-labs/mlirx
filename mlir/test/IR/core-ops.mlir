@@ -554,6 +554,18 @@ func @standard_instrs(tensor<4x4x?xf32>, f32, i32, index, i64, f16) {
   // CHECK: = fptosi {{.*}} : f16 to i64
   %162 = fptosi %half : f16 to i64
 
+  // CHECK: floorf %arg1 : f32
+  %163 = "std.floorf"(%f) : (f32) -> f32
+
+  // CHECK: %{{[0-9]+}} = floorf %arg1 : f32
+  %164 = floorf %f : f32
+
+  // CHECK: %{{[0-9]+}} = floorf %cst_8 : vector<4xf32>
+  %165 = floorf %vcf32 : vector<4xf32>
+
+  // CHECK: %{{[0-9]+}} = floorf %arg0 : tensor<4x4x?xf32>
+  %166 = floorf %t : tensor<4x4x?xf32>
+
   return
 }
 
@@ -730,6 +742,11 @@ func @memref_shape_cast(%arg0: memref<60x8xf32>, %arg1: memref<?x?xf32>) -> memr
   return %0 : memref<60x2xvector<4xf32>>
 }
 
+// Check that unranked memrefs with non-default memory space roundtrip
+// properly.
+// CHECK-LABEL: @unranked_memref_roundtrip(memref<*xf32, 4>)
+func @unranked_memref_roundtrip(memref<*xf32, 4>)
+
 // CHECK-LABEL: func @memref_view(%arg0
 func @memref_view(%arg0 : index, %arg1 : index, %arg2 : index) {
   %0 = alloc() : memref<2048xi8>
@@ -875,7 +892,8 @@ func @generic_atomic_rmw(%I: memref<1x2xf32>, %i : index, %j : index) {
       %c1 = constant 1.0 : f32
       %out = addf %c1, %old_value : f32
       atomic_yield %out : f32
-  }
+  // CHECK: index_attr = 8 : index
+  } { index_attr = 8 : index }
   return
 }
 
