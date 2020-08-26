@@ -44,6 +44,10 @@ CombinerHelper::CombinerHelper(GISelChangeObserver &Observer,
   (void)this->KB;
 }
 
+const TargetLowering &CombinerHelper::getTargetLowering() const {
+  return *Builder.getMF().getSubtarget().getTargetLowering();
+}
+
 bool CombinerHelper::isLegalOrBeforeLegalizer(
     const LegalityQuery &Query) const {
   return !LI || LI->getAction(Query).Action == LegalizeActions::Legal;
@@ -1501,6 +1505,59 @@ bool CombinerHelper::applyCombineMulToShl(MachineInstr &MI,
   return true;
 }
 
+// shl ([sza]ext x), y => zext (shl x, y), if shift does not overflow source
+bool CombinerHelper::matchCombineShlOfExtend(MachineInstr &MI,
+                                             RegisterImmPair &MatchData) {
+  assert(MI.getOpcode() == TargetOpcode::G_SHL && KB);
+
+  Register LHS = MI.getOperand(1).getReg();
+
+  Register ExtSrc;
+  if (!mi_match(LHS, MRI, m_GAnyExt(m_Reg(ExtSrc))) &&
+      !mi_match(LHS, MRI, m_GZExt(m_Reg(ExtSrc))) &&
+      !mi_match(LHS, MRI, m_GSExt(m_Reg(ExtSrc))))
+    return false;
+
+  // TODO: Should handle vector splat.
+  Register RHS = MI.getOperand(2).getReg();
+  auto MaybeShiftAmtVal = getConstantVRegValWithLookThrough(RHS, MRI);
+  if (!MaybeShiftAmtVal)
+    return false;
+
+  if (LI) {
+    LLT SrcTy = MRI.getType(ExtSrc);
+
+    // We only really care about the legality with the shifted value. We can
+    // pick any type the constant shift amount, so ask the target what to
+    // use. Otherwise we would have to guess and hope it is reported as legal.
+    LLT ShiftAmtTy = getTargetLowering().getPreferredShiftAmountTy(SrcTy);
+    if (!isLegalOrBeforeLegalizer({TargetOpcode::G_SHL, {SrcTy, ShiftAmtTy}}))
+      return false;
+  }
+
+  int64_t ShiftAmt = MaybeShiftAmtVal->Value;
+  MatchData.Reg = ExtSrc;
+  MatchData.Imm = ShiftAmt;
+
+  unsigned MinLeadingZeros = KB->getKnownZeroes(ExtSrc).countLeadingOnes();
+  return MinLeadingZeros >= ShiftAmt;
+}
+
+bool CombinerHelper::applyCombineShlOfExtend(MachineInstr &MI,
+                                             const RegisterImmPair &MatchData) {
+  Register ExtSrcReg = MatchData.Reg;
+  int64_t ShiftAmtVal = MatchData.Imm;
+
+  LLT ExtSrcTy = MRI.getType(ExtSrcReg);
+  Builder.setInstrAndDebugLoc(MI);
+  auto ShiftAmt = Builder.buildConstant(ExtSrcTy, ShiftAmtVal);
+  auto NarrowShift =
+      Builder.buildShl(ExtSrcTy, ExtSrcReg, ShiftAmt, MI.getFlags());
+  Builder.buildZExt(MI.getOperand(0), NarrowShift);
+  MI.eraseFromParent();
+  return true;
+}
+
 bool CombinerHelper::matchCombineShiftToUnmerge(MachineInstr &MI,
                                                 unsigned TargetShiftSize,
                                                 unsigned &ShiftVal) {
@@ -1640,6 +1697,51 @@ bool CombinerHelper::applyCombineP2IToI2P(MachineInstr &MI, Register &Reg) {
   Register DstReg = MI.getOperand(0).getReg();
   Builder.setInstr(MI);
   Builder.buildZExtOrTrunc(DstReg, Reg);
+  MI.eraseFromParent();
+  return true;
+}
+
+bool CombinerHelper::matchCombineAddP2IToPtrAdd(
+    MachineInstr &MI, std::pair<Register, bool> &PtrReg) {
+  assert(MI.getOpcode() == TargetOpcode::G_ADD);
+  Register LHS = MI.getOperand(1).getReg();
+  Register RHS = MI.getOperand(2).getReg();
+  LLT IntTy = MRI.getType(LHS);
+
+  // G_PTR_ADD always has the pointer in the LHS, so we may need to commute the
+  // instruction.
+  PtrReg.second = false;
+  for (Register SrcReg : {LHS, RHS}) {
+    if (mi_match(SrcReg, MRI, m_GPtrToInt(m_Reg(PtrReg.first)))) {
+      // Don't handle cases where the integer is implicitly converted to the
+      // pointer width.
+      LLT PtrTy = MRI.getType(PtrReg.first);
+      if (PtrTy.getScalarSizeInBits() == IntTy.getScalarSizeInBits())
+        return true;
+    }
+
+    PtrReg.second = true;
+  }
+
+  return false;
+}
+
+bool CombinerHelper::applyCombineAddP2IToPtrAdd(
+    MachineInstr &MI, std::pair<Register, bool> &PtrReg) {
+  Register Dst = MI.getOperand(0).getReg();
+  Register LHS = MI.getOperand(1).getReg();
+  Register RHS = MI.getOperand(2).getReg();
+
+  const bool DoCommute = PtrReg.second;
+  if (DoCommute)
+    std::swap(LHS, RHS);
+  LHS = PtrReg.first;
+
+  LLT PtrTy = MRI.getType(LHS);
+
+  Builder.setInstrAndDebugLoc(MI);
+  auto PtrAdd = Builder.buildPtrAdd(PtrTy, LHS, RHS);
+  Builder.buildPtrToInt(Dst, PtrAdd);
   MI.eraseFromParent();
   return true;
 }

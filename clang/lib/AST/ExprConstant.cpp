@@ -11180,6 +11180,17 @@ bool IntExprEvaluator::VisitBuiltinCallExpr(const CallExpr *E,
     return Success(AlignedVal, E);
   }
 
+  case Builtin::BI__builtin_bitreverse8:
+  case Builtin::BI__builtin_bitreverse16:
+  case Builtin::BI__builtin_bitreverse32:
+  case Builtin::BI__builtin_bitreverse64: {
+    APSInt Val;
+    if (!EvaluateInteger(E->getArg(0), Val, Info))
+      return false;
+
+    return Success(Val.reverseBits(), E);
+  }
+
   case Builtin::BI__builtin_bswap16:
   case Builtin::BI__builtin_bswap32:
   case Builtin::BI__builtin_bswap64: {
@@ -11345,6 +11356,40 @@ bool IntExprEvaluator::VisitBuiltinCallExpr(const CallExpr *E,
       return false;
 
     return Success(Val.countPopulation(), E);
+  }
+
+  case Builtin::BI__builtin_rotateleft8:
+  case Builtin::BI__builtin_rotateleft16:
+  case Builtin::BI__builtin_rotateleft32:
+  case Builtin::BI__builtin_rotateleft64:
+  case Builtin::BI_rotl8: // Microsoft variants of rotate right
+  case Builtin::BI_rotl16:
+  case Builtin::BI_rotl:
+  case Builtin::BI_lrotl:
+  case Builtin::BI_rotl64: {
+    APSInt Val, Amt;
+    if (!EvaluateInteger(E->getArg(0), Val, Info) ||
+        !EvaluateInteger(E->getArg(1), Amt, Info))
+      return false;
+
+    return Success(Val.rotl(Amt.urem(Val.getBitWidth())), E);
+  }
+
+  case Builtin::BI__builtin_rotateright8:
+  case Builtin::BI__builtin_rotateright16:
+  case Builtin::BI__builtin_rotateright32:
+  case Builtin::BI__builtin_rotateright64:
+  case Builtin::BI_rotr8: // Microsoft variants of rotate right
+  case Builtin::BI_rotr16:
+  case Builtin::BI_rotr:
+  case Builtin::BI_lrotr:
+  case Builtin::BI_rotr64: {
+    APSInt Val, Amt;
+    if (!EvaluateInteger(E->getArg(0), Val, Info) ||
+        !EvaluateInteger(E->getArg(1), Amt, Info))
+      return false;
+
+    return Success(Val.rotr(Amt.urem(Val.getBitWidth())), E);
   }
 
   case Builtin::BIstrlen:

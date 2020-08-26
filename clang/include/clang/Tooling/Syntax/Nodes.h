@@ -57,6 +57,7 @@ enum class NodeKind : uint16_t {
   IdExpression,
   MemberExpression,
   ThisExpression,
+  CallExpression,
 
   // Statements.
   UnknownStatement,
@@ -98,12 +99,14 @@ enum class NodeKind : uint16_t {
   ParametersAndQualifiers,
   MemberPointer,
   UnqualifiedId,
+  ParameterDeclarationList,
   // Nested Name Specifiers.
   NestedNameSpecifier,
   GlobalNameSpecifier,
   DecltypeNameSpecifier,
   IdentifierNameSpecifier,
-  SimpleTemplateNameSpecifier
+  SimpleTemplateNameSpecifier,
+  CallArguments
 };
 /// For debugging purposes.
 raw_ostream &operator<<(raw_ostream &OS, NodeKind K);
@@ -171,7 +174,7 @@ enum class NodeRole : uint8_t {
   ExplicitTemplateInstantiation_declaration,
   ArraySubscript_sizeExpression,
   TrailingReturnType_declarator,
-  ParametersAndQualifiers_parameter,
+  ParametersAndQualifiers_parameters,
   ParametersAndQualifiers_trailingReturn,
   IdExpression_id,
   IdExpression_qualifier,
@@ -179,6 +182,8 @@ enum class NodeRole : uint8_t {
   MemberExpression_object,
   MemberExpression_accessToken,
   MemberExpression_member,
+  CallExpression_callee,
+  CallExpression_arguments,
 };
 /// For debugging purposes.
 raw_ostream &operator<<(raw_ostream &OS, NodeRole R);
@@ -322,6 +327,37 @@ public:
     return N->kind() == NodeKind::ThisExpression;
   }
   Leaf *thisKeyword();
+};
+
+/// Models arguments of a function call.
+///   call-arguments:
+///     delimited_list(expression, ',')
+/// Note: This construct is a simplification of the grammar rule for
+/// `expression-list`, that is used in the definition of `call-expression`
+class CallArguments final : public List {
+public:
+  CallArguments() : List(NodeKind::CallArguments) {}
+  static bool classof(const Node *N) {
+    return N->kind() <= NodeKind::CallArguments;
+  }
+  std::vector<Expression *> arguments();
+  std::vector<List::ElementAndDelimiter<Expression>> argumentsAndCommas();
+};
+
+/// A function call. C++ [expr.call]
+/// call-expression:
+///   expression '(' call-arguments ')'
+/// e.g `f(1, '2')` or `this->Base::f()`
+class CallExpression final : public Expression {
+public:
+  CallExpression() : Expression(NodeKind::CallExpression) {}
+  static bool classof(const Node *N) {
+    return N->kind() == NodeKind::CallExpression;
+  }
+  Expression *callee();
+  Leaf *openParen();
+  CallArguments *arguments();
+  Leaf *closeParen();
 };
 
 /// Models a parenthesized expression `(E)`. C++ [expr.prim.paren]
@@ -953,6 +989,19 @@ public:
   SimpleDeclarator *declarator();
 };
 
+/// Models a `parameter-declaration-list` which appears within
+/// `parameters-and-qualifiers`. See C++ [dcl.fct]
+class ParameterDeclarationList final : public List {
+public:
+  ParameterDeclarationList() : List(NodeKind::ParameterDeclarationList) {}
+  static bool classof(const Node *N) {
+    return N->kind() == NodeKind::ParameterDeclarationList;
+  }
+  std::vector<SimpleDeclaration *> parameterDeclarations();
+  std::vector<List::ElementAndDelimiter<syntax::SimpleDeclaration>>
+  parametersAndCommas();
+};
+
 /// Parameter list for a function type and a trailing return type, if the
 /// function has one.
 /// E.g.:
@@ -971,8 +1020,7 @@ public:
     return N->kind() == NodeKind::ParametersAndQualifiers;
   }
   Leaf *lparen();
-  /// FIXME: use custom iterator instead of 'vector'.
-  std::vector<SimpleDeclaration *> parameters();
+  ParameterDeclarationList *parameters();
   Leaf *rparen();
   TrailingReturnType *trailingReturn();
 };

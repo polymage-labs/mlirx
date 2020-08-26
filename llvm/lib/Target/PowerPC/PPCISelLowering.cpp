@@ -824,6 +824,10 @@ PPCTargetLowering::PPCTargetLowering(const PPCTargetMachine &TM,
     setOperationAction(ISD::SELECT, MVT::v4i32,
                        Subtarget.useCRBits() ? Legal : Expand);
     setOperationAction(ISD::STORE , MVT::v4i32, Legal);
+    setOperationAction(ISD::STRICT_FP_TO_SINT, MVT::v4i32, Legal);
+    setOperationAction(ISD::STRICT_FP_TO_UINT, MVT::v4i32, Legal);
+    setOperationAction(ISD::STRICT_SINT_TO_FP, MVT::v4i32, Legal);
+    setOperationAction(ISD::STRICT_UINT_TO_FP, MVT::v4i32, Legal);
     setOperationAction(ISD::FP_TO_SINT, MVT::v4i32, Legal);
     setOperationAction(ISD::FP_TO_UINT, MVT::v4i32, Legal);
     setOperationAction(ISD::SINT_TO_FP, MVT::v4i32, Legal);
@@ -1002,6 +1006,10 @@ PPCTargetLowering::PPCTargetLowering(const PPCTargetMachine &TM,
 
       setOperationAction(ISD::VECTOR_SHUFFLE, MVT::v2i64, Legal);
 
+      setOperationAction(ISD::STRICT_SINT_TO_FP, MVT::v2i64, Legal);
+      setOperationAction(ISD::STRICT_UINT_TO_FP, MVT::v2i64, Legal);
+      setOperationAction(ISD::STRICT_FP_TO_SINT, MVT::v2i64, Legal);
+      setOperationAction(ISD::STRICT_FP_TO_UINT, MVT::v2i64, Legal);
       setOperationAction(ISD::SINT_TO_FP, MVT::v2i64, Legal);
       setOperationAction(ISD::UINT_TO_FP, MVT::v2i64, Legal);
       setOperationAction(ISD::FP_TO_SINT, MVT::v2i64, Legal);
@@ -1010,6 +1018,14 @@ PPCTargetLowering::PPCTargetLowering(const PPCTargetMachine &TM,
       // Custom handling for partial vectors of integers converted to
       // floating point. We already have optimal handling for v2i32 through
       // the DAG combine, so those aren't necessary.
+      setOperationAction(ISD::STRICT_UINT_TO_FP, MVT::v2i8, Custom);
+      setOperationAction(ISD::STRICT_UINT_TO_FP, MVT::v4i8, Custom);
+      setOperationAction(ISD::STRICT_UINT_TO_FP, MVT::v2i16, Custom);
+      setOperationAction(ISD::STRICT_UINT_TO_FP, MVT::v4i16, Custom);
+      setOperationAction(ISD::STRICT_SINT_TO_FP, MVT::v2i8, Custom);
+      setOperationAction(ISD::STRICT_SINT_TO_FP, MVT::v4i8, Custom);
+      setOperationAction(ISD::STRICT_SINT_TO_FP, MVT::v2i16, Custom);
+      setOperationAction(ISD::STRICT_SINT_TO_FP, MVT::v4i16, Custom);
       setOperationAction(ISD::UINT_TO_FP, MVT::v2i8, Custom);
       setOperationAction(ISD::UINT_TO_FP, MVT::v4i8, Custom);
       setOperationAction(ISD::UINT_TO_FP, MVT::v2i16, Custom);
@@ -7846,19 +7862,44 @@ SDValue PPCTargetLowering::LowerTRUNCATEVector(SDValue Op,
   //   <uu, uu, uu, uu, uu, uu, LSB2|MSB2, LSB1|MSB1> to
   //   <u, u, u, u, u, u, u, u, u, u, u, u, u, u, LSB2, LSB1>
 
-  assert(Op.getValueType().isVector() && "Vector type expected.");
-
-  SDLoc DL(Op);
-  SDValue N1 = Op.getOperand(0);
-  unsigned SrcSize = N1.getValueType().getSizeInBits();
-  assert(SrcSize <= 128 && "Source must fit in an Altivec/VSX vector");
-  SDValue WideSrc = SrcSize == 128 ? N1 : widenVec(DAG, N1, DL);
-
   EVT TrgVT = Op.getValueType();
+  assert(TrgVT.isVector() && "Vector type expected.");
   unsigned TrgNumElts = TrgVT.getVectorNumElements();
   EVT EltVT = TrgVT.getVectorElementType();
+  if (!isOperationCustom(Op.getOpcode(), TrgVT) ||
+      TrgVT.getSizeInBits() > 128 || !isPowerOf2_32(TrgNumElts) ||
+      !isPowerOf2_32(EltVT.getSizeInBits()))
+    return SDValue();
+
+  SDValue N1 = Op.getOperand(0);
+  EVT SrcVT = N1.getValueType();  
+  unsigned SrcSize = SrcVT.getSizeInBits();
+  if (SrcSize > 256 ||
+      !isPowerOf2_32(SrcVT.getVectorNumElements()) ||
+      !isPowerOf2_32(SrcVT.getVectorElementType().getSizeInBits()))
+    return SDValue();
+  if (SrcSize == 256 && SrcVT.getVectorNumElements() < 2)
+    return SDValue();
+
   unsigned WideNumElts = 128 / EltVT.getSizeInBits();
   EVT WideVT = EVT::getVectorVT(*DAG.getContext(), EltVT, WideNumElts);
+
+  SDLoc DL(Op);
+  SDValue Op1, Op2;
+  if (SrcSize == 256) {
+    EVT VecIdxTy = getVectorIdxTy(DAG.getDataLayout());
+    EVT SplitVT =
+        N1.getValueType().getHalfNumVectorElementsVT(*DAG.getContext());
+    unsigned SplitNumElts = SplitVT.getVectorNumElements();
+    Op1 = DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, SplitVT, N1,
+                      DAG.getConstant(0, DL, VecIdxTy));
+    Op2 = DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, SplitVT, N1,
+                      DAG.getConstant(SplitNumElts, DL, VecIdxTy));
+  }
+  else {
+    Op1 = SrcSize == 128 ? N1 : widenVec(DAG, N1, DL);
+    Op2 = DAG.getUNDEF(WideVT);
+  }
 
   // First list the elements we want to keep.
   unsigned SizeMult = SrcSize / TrgVT.getSizeInBits();
@@ -7875,8 +7916,9 @@ SDValue PPCTargetLowering::LowerTRUNCATEVector(SDValue Op,
     // ShuffV.push_back(i + WideNumElts);
     ShuffV.push_back(WideNumElts + 1);
 
-  SDValue Conv = DAG.getNode(ISD::BITCAST, DL, WideVT, WideSrc);
-  return DAG.getVectorShuffle(WideVT, DL, Conv, DAG.getUNDEF(WideVT), ShuffV);
+  Op1 = DAG.getNode(ISD::BITCAST, DL, WideVT, Op1);
+  Op2 = DAG.getNode(ISD::BITCAST, DL, WideVT, Op2);
+  return DAG.getVectorShuffle(WideVT, DL, Op1, Op2, ShuffV);
 }
 
 /// LowerSELECT_CC - Lower floating point select_cc's into fsel instruction when
@@ -8346,17 +8388,19 @@ static SDValue widenVec(SelectionDAG &DAG, SDValue Vec, const SDLoc &dl) {
 
 SDValue PPCTargetLowering::LowerINT_TO_FPVector(SDValue Op, SelectionDAG &DAG,
                                                 const SDLoc &dl) const {
-
+  bool IsStrict = Op->isStrictFPOpcode();
   unsigned Opc = Op.getOpcode();
-  assert((Opc == ISD::UINT_TO_FP || Opc == ISD::SINT_TO_FP) &&
+  SDValue Src = Op.getOperand(IsStrict ? 1 : 0);
+  assert((Opc == ISD::UINT_TO_FP || Opc == ISD::SINT_TO_FP ||
+          Opc == ISD::STRICT_UINT_TO_FP || Opc == ISD::STRICT_SINT_TO_FP) &&
          "Unexpected conversion type");
   assert((Op.getValueType() == MVT::v2f64 || Op.getValueType() == MVT::v4f32) &&
          "Supports conversions to v2f64/v4f32 only.");
 
-  bool SignedConv = Opc == ISD::SINT_TO_FP;
+  bool SignedConv = Opc == ISD::SINT_TO_FP || Opc == ISD::STRICT_SINT_TO_FP;
   bool FourEltRes = Op.getValueType() == MVT::v4f32;
 
-  SDValue Wide = widenVec(DAG, Op.getOperand(0), dl);
+  SDValue Wide = widenVec(DAG, Src, dl);
   EVT WideVT = Wide.getValueType();
   unsigned WideNumElts = WideVT.getVectorNumElements();
   MVT IntermediateVT = FourEltRes ? MVT::v4i32 : MVT::v2i64;
@@ -8381,7 +8425,7 @@ SDValue PPCTargetLowering::LowerINT_TO_FPVector(SDValue Op, SelectionDAG &DAG,
   SDValue Extend;
   if (SignedConv) {
     Arrange = DAG.getBitcast(IntermediateVT, Arrange);
-    EVT ExtVT = Op.getOperand(0).getValueType();
+    EVT ExtVT = Src.getValueType();
     if (Subtarget.hasP9Altivec())
       ExtVT = EVT::getVectorVT(*DAG.getContext(), WideVT.getVectorElementType(),
                                IntermediateVT.getVectorNumElements());
@@ -8390,6 +8434,10 @@ SDValue PPCTargetLowering::LowerINT_TO_FPVector(SDValue Op, SelectionDAG &DAG,
                          DAG.getValueType(ExtVT));
   } else
     Extend = DAG.getNode(ISD::BITCAST, dl, IntermediateVT, Arrange);
+
+  if (IsStrict)
+    return DAG.getNode(Opc, dl, {Op.getValueType(), MVT::Other},
+                       {Op.getOperand(0), Extend});
 
   return DAG.getNode(Opc, dl, Op.getValueType(), Extend);
 }
@@ -10648,6 +10696,28 @@ SDValue PPCTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   }
 }
 
+void PPCTargetLowering::LowerOperationWrapper(SDNode *N,
+                                              SmallVectorImpl<SDValue> &Results,
+                                              SelectionDAG &DAG) const {
+  SDValue Res = LowerOperation(SDValue(N, 0), DAG);
+
+  if (!Res.getNode())
+    return;
+
+  // Take the return value as-is if original node has only one result.
+  if (N->getNumValues() == 1) {
+    Results.push_back(Res);
+    return;
+  }
+
+  // New node should have the same number of results.
+  assert((N->getNumValues() == Res->getNumValues()) &&
+      "Lowering returned the wrong number of results!");
+
+  for (unsigned i = 0; i < N->getNumValues(); ++i)
+    Results.push_back(Res.getValue(i));
+}
+
 void PPCTargetLowering::ReplaceNodeResults(SDNode *N,
                                            SmallVectorImpl<SDValue>&Results,
                                            SelectionDAG &DAG) const {
@@ -10706,13 +10776,11 @@ void PPCTargetLowering::ReplaceNodeResults(SDNode *N,
     Results.push_back(LowerFP_TO_INT(SDValue(N, 0), DAG, dl));
     return;
   case ISD::TRUNCATE: {
-    EVT TrgVT = N->getValueType(0);
-    EVT OpVT = N->getOperand(0).getValueType();
-    if (TrgVT.isVector() &&
-        isOperationCustom(N->getOpcode(), TrgVT) &&
-        OpVT.getSizeInBits() <= 128 &&
-        isPowerOf2_32(OpVT.getVectorElementType().getSizeInBits()))
-      Results.push_back(LowerTRUNCATEVector(SDValue(N, 0), DAG));
+    if (!N->getValueType(0).isVector())
+      return;
+    SDValue Lowered = LowerTRUNCATEVector(SDValue(N, 0), DAG);
+    if (Lowered)
+      Results.push_back(Lowered);
     return;
   }
   case ISD::BITCAST:
