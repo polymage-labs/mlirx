@@ -658,7 +658,7 @@ def BranchOp : Std_Op<"br",
 // CallOp
 //===----------------------------------------------------------------------===//
 
-def CallOp : Std_Op<"call", [CallOpInterface]> {
+def CallOp : Std_Op<"call", [CallOpInterface, MemRefsNormalizable]> {
   let summary = "call operation";
   let description = [{
     The `call` operation represents a direct call to a function that is within
@@ -1388,7 +1388,8 @@ def SinOp : FloatUnaryOp<"sin"> {
 // DeallocOp
 //===----------------------------------------------------------------------===//
 
-def DeallocOp : Std_Op<"dealloc", [MemoryEffects<[MemFree]>]> {
+def DeallocOp : Std_Op<"dealloc",
+    [MemoryEffects<[MemFree]>, MemRefsNormalizable]> {
   let summary = "memory deallocation operation";
   let description = [{
     The `dealloc` operation frees the region of memory referenced by a memref
@@ -2122,20 +2123,6 @@ def PrefetchOp : Std_Op<"prefetch"> {
                      IntMaxValue<3>]>:$localityHint,
                    BoolAttr:$isDataCache);
 
-  let builders = [OpBuilder<
-    "OpBuilder &builder, OperationState &result, Value memref,"
-    "ArrayRef<Value> indices, bool isWrite, unsigned hint, bool isData",
-    [{
-      auto hintAttr = builder.getI32IntegerAttr(hint);
-      auto isWriteAttr = builder.getBoolAttr(isWrite);
-      auto isDataCacheAttr = builder.getBoolAttr(isData);
-      result.addOperands(memref);
-      result.addOperands(indices);
-      result.addAttribute("localityHint", hintAttr);
-      result.addAttribute("isWrite", isWriteAttr);
-      result.addAttribute("isDataCache", isDataCacheAttr);
-    }]>];
-
   let extraClassDeclaration = [{
     MemRefType getMemRefType() {
       return memref().getType().cast<MemRefType>();
@@ -2222,7 +2209,9 @@ def RemFOp : FloatArithmeticOp<"remf"> {
 // ReturnOp
 //===----------------------------------------------------------------------===//
 
-def ReturnOp : Std_Op<"return", [NoSideEffect, ReturnLike, Terminator]> {
+def ReturnOp
+    : Std_Op<"return",
+             [MemRefsNormalizable, NoSideEffect, ReturnLike, Terminator]> {
   let summary = "return operation";
   let description = [{
     The `return` terminator operation, when enclosed immediately by a function,
@@ -3080,7 +3069,7 @@ def TensorLoadOp : Std_Op<"tensor_load",
 
   let extraClassDeclaration = [{
     /// The result of a tensor_load is always a tensor.
-    TensorType getType() { 
+    TensorType getType() {
       Type resultType = getResult().getType();
       if (resultType.isa<TensorType>())
         return resultType.cast<TensorType>();

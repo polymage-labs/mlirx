@@ -2022,10 +2022,14 @@ bool TargetLowering::SimplifyDemandedBits(
   case ISD::EXTRACT_VECTOR_ELT: {
     SDValue Src = Op.getOperand(0);
     SDValue Idx = Op.getOperand(1);
-    unsigned NumSrcElts = Src.getValueType().getVectorNumElements();
+    ElementCount SrcEltCnt = Src.getValueType().getVectorElementCount();
     unsigned EltBitWidth = Src.getScalarValueSizeInBits();
 
+    if (SrcEltCnt.isScalable())
+      return false;
+
     // Demand the bits from every vector element without a constant index.
+    unsigned NumSrcElts = SrcEltCnt.getFixedValue();
     APInt DemandedSrcElts = APInt::getAllOnesValue(NumSrcElts);
     if (auto *CIdx = dyn_cast<ConstantSDNode>(Idx))
       if (CIdx->getAPIntValue().ult(NumSrcElts))
@@ -2603,13 +2607,9 @@ bool TargetLowering::SimplifyDemandedVectorElts(
                                      KnownZero, TLO, Depth + 1))
         return true;
 
-      KnownUndef.clearBit(Idx);
-      if (Scl.isUndef())
-        KnownUndef.setBit(Idx);
+      KnownUndef.setBitVal(Idx, Scl.isUndef());
 
-      KnownZero.clearBit(Idx);
-      if (isNullConstant(Scl) || isNullFPConstant(Scl))
-        KnownZero.setBit(Idx);
+      KnownZero.setBitVal(Idx, isNullConstant(Scl) || isNullFPConstant(Scl));
       break;
     }
 
@@ -5820,15 +5820,17 @@ SDValue TargetLowering::getNegatedExpression(SDValue Op, SelectionDAG &DAG,
     // Negate the X if its cost is less or equal than Y.
     if (NegX && (CostX <= CostY)) {
       Cost = CostX;
+      SDValue N = DAG.getNode(ISD::FSUB, DL, VT, NegX, Y, Flags);
       RemoveDeadNode(NegY);
-      return DAG.getNode(ISD::FSUB, DL, VT, NegX, Y, Flags);
+      return N;
     }
 
     // Negate the Y if it is not expensive.
     if (NegY) {
       Cost = CostY;
+      SDValue N = DAG.getNode(ISD::FSUB, DL, VT, NegY, X, Flags);
       RemoveDeadNode(NegX);
-      return DAG.getNode(ISD::FSUB, DL, VT, NegY, X, Flags);
+      return N;
     }
     break;
   }
@@ -5865,8 +5867,9 @@ SDValue TargetLowering::getNegatedExpression(SDValue Op, SelectionDAG &DAG,
     // Negate the X if its cost is less or equal than Y.
     if (NegX && (CostX <= CostY)) {
       Cost = CostX;
+      SDValue N = DAG.getNode(Opcode, DL, VT, NegX, Y, Flags);
       RemoveDeadNode(NegY);
-      return DAG.getNode(Opcode, DL, VT, NegX, Y, Flags);
+      return N;
     }
 
     // Ignore X * 2.0 because that is expected to be canonicalized to X + X.
@@ -5877,8 +5880,9 @@ SDValue TargetLowering::getNegatedExpression(SDValue Op, SelectionDAG &DAG,
     // Negate the Y if it is not expensive.
     if (NegY) {
       Cost = CostY;
+      SDValue N = DAG.getNode(Opcode, DL, VT, X, NegY, Flags);
       RemoveDeadNode(NegX);
-      return DAG.getNode(Opcode, DL, VT, X, NegY, Flags);
+      return N;
     }
     break;
   }
@@ -5907,15 +5911,17 @@ SDValue TargetLowering::getNegatedExpression(SDValue Op, SelectionDAG &DAG,
     // Negate the X if its cost is less or equal than Y.
     if (NegX && (CostX <= CostY)) {
       Cost = std::min(CostX, CostZ);
+      SDValue N = DAG.getNode(Opcode, DL, VT, NegX, Y, NegZ, Flags);
       RemoveDeadNode(NegY);
-      return DAG.getNode(Opcode, DL, VT, NegX, Y, NegZ, Flags);
+      return N;
     }
 
     // Negate the Y if it is not expensive.
     if (NegY) {
       Cost = std::min(CostY, CostZ);
+      SDValue N = DAG.getNode(Opcode, DL, VT, X, NegY, NegZ, Flags);
       RemoveDeadNode(NegX);
-      return DAG.getNode(Opcode, DL, VT, X, NegY, NegZ, Flags);
+      return N;
     }
     break;
   }
@@ -6305,7 +6311,7 @@ bool TargetLowering::expandFP_TO_SINT(SDNode *Node, SDValue &Result,
   if (Node->isStrictFPOpcode())
     // When a NaN is converted to an integer a trap is allowed. We can't
     // use this expansion here because it would eliminate that trap. Other
-    // traps are also allowed and cannot be eliminated. See 
+    // traps are also allowed and cannot be eliminated. See
     // IEEE 754-2008 sec 5.8.
     return false;
 
@@ -6376,7 +6382,7 @@ bool TargetLowering::expandFP_TO_UINT(SDNode *Node, SDValue &Result,
       getSetCCResultType(DAG.getDataLayout(), *DAG.getContext(), DstVT);
 
   // Only expand vector types if we have the appropriate vector bit operations.
-  unsigned SIntOpcode = Node->isStrictFPOpcode() ? ISD::STRICT_FP_TO_SINT : 
+  unsigned SIntOpcode = Node->isStrictFPOpcode() ? ISD::STRICT_FP_TO_SINT :
                                                    ISD::FP_TO_SINT;
   if (DstVT.isVector() && (!isOperationLegalOrCustom(SIntOpcode, DstVT) ||
                            !isOperationLegalOrCustomOrPromote(ISD::XOR, SrcVT)))
@@ -6391,8 +6397,8 @@ bool TargetLowering::expandFP_TO_UINT(SDNode *Node, SDValue &Result,
   if (APFloat::opOverflow &
       APF.convertFromAPInt(SignMask, false, APFloat::rmNearestTiesToEven)) {
     if (Node->isStrictFPOpcode()) {
-      Result = DAG.getNode(ISD::STRICT_FP_TO_SINT, dl, { DstVT, MVT::Other }, 
-                           { Node->getOperand(0), Src }); 
+      Result = DAG.getNode(ISD::STRICT_FP_TO_SINT, dl, { DstVT, MVT::Other },
+                           { Node->getOperand(0), Src });
       Chain = Result.getValue(1);
     } else
       Result = DAG.getNode(ISD::FP_TO_SINT, dl, DstVT, Src);
@@ -6430,9 +6436,9 @@ bool TargetLowering::expandFP_TO_UINT(SDNode *Node, SDValue &Result,
                                    DAG.getConstant(SignMask, dl, DstVT));
     SDValue SInt;
     if (Node->isStrictFPOpcode()) {
-      SDValue Val = DAG.getNode(ISD::STRICT_FSUB, dl, { SrcVT, MVT::Other }, 
+      SDValue Val = DAG.getNode(ISD::STRICT_FSUB, dl, { SrcVT, MVT::Other },
                                 { Chain, Src, FltOfs });
-      SInt = DAG.getNode(ISD::STRICT_FP_TO_SINT, dl, { DstVT, MVT::Other }, 
+      SInt = DAG.getNode(ISD::STRICT_FP_TO_SINT, dl, { DstVT, MVT::Other },
                          { Val.getValue(1), Val });
       Chain = SInt.getValue(1);
     } else {
@@ -7215,7 +7221,7 @@ TargetLowering::IncrementMemoryAddress(SDValue Addr, SDValue Mask,
   SDValue Increment;
   EVT AddrVT = Addr.getValueType();
   EVT MaskVT = Mask.getValueType();
-  assert(DataVT.getVectorNumElements() == MaskVT.getVectorNumElements() &&
+  assert(DataVT.getVectorElementCount() == MaskVT.getVectorElementCount() &&
          "Incompatible types of Data and Mask");
   if (IsCompressedMemory) {
     if (DataVT.isScalableVector())

@@ -477,10 +477,8 @@ bb2:
   ret i32 0
 }
 
-; TODO
-; We can remove redundant store, as noalias %p guarantees that the function does
-; only access it via %p. This also holds for the call to unknown_func even though
-; it could unwind
+; We cannot remove any stores, because @unknown_func may unwind and the caller
+; may read %p while unwinding.
 define void @test34(i32* noalias %p) {
 ; CHECK-LABEL: @test34(
 ; CHECK-NEXT:    store i32 1, i32* [[P:%.*]], align 4
@@ -636,9 +634,10 @@ entry:
   ret void
 }
 
-; I think this case is currently handled incorrectly by memdeps dse
-; throwing should leave store i32 1, not remove from the free.
 declare void @free(i8* nocapture)
+
+; We cannot remove `store i32 1, i32* %p`, because @unknown_func may unwind
+; and the caller may read %p while unwinding.
 define void @test41(i32* noalias %P) {
 ; CHECK-LABEL: @test41(
 ; CHECK-NEXT:    [[P2:%.*]] = bitcast i32* [[P:%.*]] to i8*
@@ -749,4 +748,18 @@ define void @test47_volatile(i32* %P) {
   store volatile i32 2, i32* %P, align 4
   store volatile i32 3, i32* %P, align 4
   ret void
+}
+
+define i32 @test48(i32* %P, i32* noalias %Q, i32* %R) {
+; CHECK-LABEL: @test48(
+; CHECK-NEXT:    store i32 2, i32* [[P:%.*]], align 4
+; CHECK-NEXT:    store i32 3, i32* [[Q:%.*]], align 4
+; CHECK-NEXT:    [[L:%.*]] = load i32, i32* [[R:%.*]], align 4
+; CHECK-NEXT:    ret i32 [[L]]
+;
+  store i32 1, i32* %Q
+  store i32 2, i32* %P
+  store i32 3, i32* %Q
+  %l = load i32, i32* %R
+  ret i32 %l
 }

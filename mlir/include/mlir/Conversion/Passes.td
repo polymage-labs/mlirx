@@ -189,6 +189,16 @@ def ConvertLinalgToSPIRV : Pass<"convert-linalg-to-spirv", "ModuleOp"> {
 }
 
 //===----------------------------------------------------------------------===//
+// OpenMPToLLVM
+//===----------------------------------------------------------------------===//
+
+def ConvertOpenMPToLLVM : Pass<"convert-openmp-to-llvm", "ModuleOp"> {
+  let summary = "Convert the OpenMP ops to OpenMP ops with LLVM dialect";
+  let constructor = "mlir::createConvertOpenMPToLLVMPass()";
+  let dependentDialects = ["LLVM::LLVMDialect"];
+}
+
+//===----------------------------------------------------------------------===//
 // SCFToStandard
 //===----------------------------------------------------------------------===//
 
@@ -348,7 +358,10 @@ def ConvertVectorToLLVM : Pass<"convert-vector-to-llvm", "ModuleOp"> {
   let options = [
     Option<"reassociateFPReductions", "reassociate-fp-reductions",
            "bool", /*default=*/"false",
-           "Allows llvm to reassociate floating-point reductions for speed">
+           "Allows llvm to reassociate floating-point reductions for speed">,
+    Option<"enableIndexOptimizations", "enable-index-optimizations",
+           "bool", /*default=*/"false",
+           "Allows compiler to assume indices fit in 32-bit if that yields faster code">
   ];
 }
 

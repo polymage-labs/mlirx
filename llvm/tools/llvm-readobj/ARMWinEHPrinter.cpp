@@ -62,7 +62,6 @@
 // epilogue of the function.
 
 #include "ARMWinEHPrinter.h"
-#include "Error.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ARMWinEH.h"
@@ -168,6 +167,11 @@ const Decoder::RingEntry Decoder::Ring64[] = {
   { 0xff, 0xe3, 1, &Decoder::opcode_nop },
   { 0xff, 0xe4, 1, &Decoder::opcode_end },
   { 0xff, 0xe5, 1, &Decoder::opcode_end_c },
+  { 0xff, 0xe6, 1, &Decoder::opcode_save_next },
+  { 0xff, 0xe8, 1, &Decoder::opcode_trap_frame },
+  { 0xff, 0xe9, 1, &Decoder::opcode_machine_frame },
+  { 0xff, 0xea, 1, &Decoder::opcode_context },
+  { 0xff, 0xec, 1, &Decoder::opcode_clear_unwound_to_call },
 };
 
 void Decoder::printRegisters(const std::pair<uint16_t, uint32_t> &RegisterMask) {
@@ -217,7 +221,7 @@ Decoder::getSectionContaining(const COFFObjectFile &COFF, uint64_t VA) {
     if (VA >= Address && (VA - Address) <= Size)
       return Section;
   }
-  return readobj_error::unknown_symbol;
+  return inconvertibleErrorCode();
 }
 
 ErrorOr<object::SymbolRef> Decoder::getSymbol(const COFFObjectFile &COFF,
@@ -235,7 +239,7 @@ ErrorOr<object::SymbolRef> Decoder::getSymbol(const COFFObjectFile &COFF,
     if (*Address == VA)
       return Symbol;
   }
-  return readobj_error::unknown_symbol;
+  return inconvertibleErrorCode();
 }
 
 ErrorOr<SymbolRef> Decoder::getRelocatedSymbol(const COFFObjectFile &,
@@ -246,7 +250,7 @@ ErrorOr<SymbolRef> Decoder::getRelocatedSymbol(const COFFObjectFile &,
     if (RelocationOffset == Offset)
       return *Relocation.getSymbol();
   }
-  return readobj_error::unknown_symbol;
+  return inconvertibleErrorCode();
 }
 
 bool Decoder::opcode_0xxxxxxx(const uint8_t *OC, unsigned &Offset,
@@ -775,6 +779,47 @@ bool Decoder::opcode_end_c(const uint8_t *OC, unsigned &Offset, unsigned Length,
   SW.startLine() << format("0x%02x                ; end_c\n", OC[Offset]);
   ++Offset;
   return true;
+}
+
+bool Decoder::opcode_save_next(const uint8_t *OC, unsigned &Offset,
+                               unsigned Length, bool Prologue) {
+  if (Prologue)
+    SW.startLine() << format("0x%02x                ; save next\n", OC[Offset]);
+  else
+    SW.startLine() << format("0x%02x                ; restore next\n",
+                             OC[Offset]);
+  ++Offset;
+  return false;
+}
+
+bool Decoder::opcode_trap_frame(const uint8_t *OC, unsigned &Offset,
+                                unsigned Length, bool Prologue) {
+  SW.startLine() << format("0x%02x                ; trap frame\n", OC[Offset]);
+  ++Offset;
+  return false;
+}
+
+bool Decoder::opcode_machine_frame(const uint8_t *OC, unsigned &Offset,
+                                   unsigned Length, bool Prologue) {
+  SW.startLine() << format("0x%02x                ; machine frame\n",
+                           OC[Offset]);
+  ++Offset;
+  return false;
+}
+
+bool Decoder::opcode_context(const uint8_t *OC, unsigned &Offset,
+                             unsigned Length, bool Prologue) {
+  SW.startLine() << format("0x%02x                ; context\n", OC[Offset]);
+  ++Offset;
+  return false;
+}
+
+bool Decoder::opcode_clear_unwound_to_call(const uint8_t *OC, unsigned &Offset,
+                                           unsigned Length, bool Prologue) {
+  SW.startLine() << format("0x%02x                ; clear unwound to call\n",
+                           OC[Offset]);
+  ++Offset;
+  return false;
 }
 
 void Decoder::decodeOpcodes(ArrayRef<uint8_t> Opcodes, unsigned Offset,
