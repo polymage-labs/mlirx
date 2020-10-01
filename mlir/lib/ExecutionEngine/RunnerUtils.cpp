@@ -40,13 +40,13 @@ extern "C" void _mlir_ciface_print_memref_f32(UnrankedMemRefType<float> *M) {
   impl::printMemRef(*M);
 }
 
+extern "C" void _mlir_ciface_print_memref_f64(UnrankedMemRefType<double> *M) {
+  impl::printMemRef(*M);
+}
+
 extern "C" void print_memref_i32(int64_t rank, void *ptr) {
   UnrankedMemRefType<int32_t> descriptor = {rank, ptr};
   _mlir_ciface_print_memref_i32(&descriptor);
-}
-
-extern "C" void _mlir_ciface_print_memref_f64(UnrankedMemRefType<double> *M) {
-  impl::printMemRef(*M);
 }
 
 extern "C" void print_memref_f32(int64_t rank, void *ptr) {
@@ -55,9 +55,7 @@ extern "C" void print_memref_f32(int64_t rank, void *ptr) {
 }
 
 extern "C" void print_memref_f64(int64_t rank, void *ptr) {
-  UnrankedMemRefType<double> descriptor;
-  descriptor.rank = rank;
-  descriptor.descriptor = ptr;
+  UnrankedMemRefType<double> descriptor = {rank, ptr};
   _mlir_ciface_print_memref_f64(&descriptor);
 }
 

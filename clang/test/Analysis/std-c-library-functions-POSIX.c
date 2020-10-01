@@ -63,8 +63,6 @@
 // CHECK: Loaded summary for: void rewinddir(DIR *dir)
 // CHECK: Loaded summary for: void seekdir(DIR *dirp, long loc)
 // CHECK: Loaded summary for: int rand_r(unsigned int *seedp)
-// CHECK: Loaded summary for: int strcasecmp(const char *s1, const char *s2)
-// CHECK: Loaded summary for: int strncasecmp(const char *s1, const char *s2, size_t n)
 // CHECK: Loaded summary for: int fileno(FILE *stream)
 // CHECK: Loaded summary for: int fseeko(FILE *stream, off_t offset, int whence)
 // CHECK: Loaded summary for: off_t ftello(FILE *stream)
@@ -108,6 +106,20 @@
 // CHECK: Loaded summary for: struct tm *gmtime(const time_t *tp)
 // CHECK: Loaded summary for: int clock_gettime(clockid_t clock_id, struct timespec *tp)
 // CHECK: Loaded summary for: int getitimer(int which, struct itimerval *curr_value)
+// CHECK: Loaded summary for: int pthread_cond_signal(pthread_cond_t *cond)
+// CHECK: Loaded summary for: int pthread_cond_broadcast(pthread_cond_t *cond)
+// CHECK: Loaded summary for: int pthread_create(pthread_t *restrict thread, const pthread_attr_t *restrict attr, void *(*start_routine)(void *), void *restrict arg)
+// CHECK: Loaded summary for: int pthread_attr_destroy(pthread_attr_t *attr)
+// CHECK: Loaded summary for: int pthread_attr_init(pthread_attr_t *attr)
+// CHECK: Loaded summary for: int pthread_attr_getstacksize(const pthread_attr_t *restrict attr, size_t *restrict stacksize)
+// CHECK: Loaded summary for: int pthread_attr_getguardsize(const pthread_attr_t *restrict attr, size_t *restrict guardsize)
+// CHECK: Loaded summary for: int pthread_attr_setstacksize(pthread_attr_t *attr, size_t stacksize)
+// CHECK: Loaded summary for: int pthread_attr_setguardsize(pthread_attr_t *attr, size_t guardsize)
+// CHECK: Loaded summary for: int pthread_mutex_init(pthread_mutex_t *restrict mutex, const pthread_mutexattr_t *restrict attr)
+// CHECK: Loaded summary for: int pthread_mutex_destroy(pthread_mutex_t *mutex)
+// CHECK: Loaded summary for: int pthread_mutex_lock(pthread_mutex_t *mutex)
+// CHECK: Loaded summary for: int pthread_mutex_trylock(pthread_mutex_t *mutex)
+// CHECK: Loaded summary for: int pthread_mutex_unlock(pthread_mutex_t *mutex)
 
 long a64l(const char *str64);
 char *l64a(long value);
@@ -181,8 +193,6 @@ FILE *fdopen(int fd, const char *mode);
 void rewinddir(DIR *dir);
 void seekdir(DIR *dirp, long loc);
 int rand_r(unsigned int *seedp);
-int strcasecmp(const char *s1, const char *s2);
-int strncasecmp(const char *s1, const char *s2, size_t n);
 int fileno(FILE *stream);
 int fseeko(FILE *stream, off_t offset, int whence);
 off_t ftello(FILE *stream);
@@ -258,6 +268,34 @@ typedef unsigned long clockid_t;
 int clock_gettime(clockid_t clock_id, struct timespec *tp);
 struct itimerval;
 int getitimer(int which, struct itimerval *curr_value);
+
+typedef union {
+  int x;
+} pthread_cond_t;
+int pthread_cond_signal(pthread_cond_t *cond);
+int pthread_cond_broadcast(pthread_cond_t *cond);
+typedef union {
+  int x;
+} pthread_attr_t;
+typedef unsigned long int pthread_t;
+int pthread_create(pthread_t *restrict thread, const pthread_attr_t *restrict attr, void *(*start_routine)(void *), void *restrict arg);
+int pthread_attr_destroy(pthread_attr_t *attr);
+int pthread_attr_init(pthread_attr_t *attr);
+int pthread_attr_getstacksize(const pthread_attr_t *restrict attr, size_t *restrict stacksize);
+int pthread_attr_getguardsize(const pthread_attr_t *restrict attr, size_t *restrict guardsize);
+int pthread_attr_setstacksize(pthread_attr_t *attr, size_t stacksize);
+int pthread_attr_setguardsize(pthread_attr_t *attr, size_t guardsize);
+typedef union {
+  int x;
+} pthread_mutex_t;
+typedef union {
+  int x;
+} pthread_mutexattr_t;
+int pthread_mutex_init(pthread_mutex_t *restrict mutex, const pthread_mutexattr_t *restrict attr);
+int pthread_mutex_destroy(pthread_mutex_t *mutex);
+int pthread_mutex_lock(pthread_mutex_t *mutex);
+int pthread_mutex_trylock(pthread_mutex_t *mutex);
+int pthread_mutex_unlock(pthread_mutex_t *mutex);
 
 // Must have at least one call expression to initialize the summary map.
 int bar(void);

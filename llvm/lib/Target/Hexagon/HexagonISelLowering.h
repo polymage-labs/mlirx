@@ -15,6 +15,7 @@
 #define LLVM_LIB_TARGET_HEXAGON_HEXAGONISELLOWERING_H
 
 #include "Hexagon.h"
+#include "MCTargetDesc/HexagonMCTargetDesc.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
@@ -88,6 +89,13 @@ enum NodeType : unsigned {
                // been loaded from address in Op2.
   VALIGNADDR,  // Align vector address: Op0 & -Op1, except when it is
                // an address in a vector load, then it's a no-op.
+  VPACKL,      // Pack low parts of the input vector to the front of the
+               // output. For example v64i16 VPACKL(v32i32) will pick
+               // the low halfwords and pack them into the first 32
+               // halfwords of the output. The rest of the output is
+               // unspecified.
+  VUNPACK,     // Unpacking into low elements with sign extension.
+  VUNPACKU,    // Unpacking into low elements with zero extension.
   OP_END
 };
 
@@ -361,6 +369,7 @@ private:
   SDValue contractPredicate(SDValue Vec64, const SDLoc &dl,
                             SelectionDAG &DAG) const;
   SDValue getVectorShiftByInt(SDValue Op, SelectionDAG &DAG) const;
+  SDValue appendUndef(SDValue Val, MVT ResTy, SelectionDAG &DAG) const;
 
   bool isUndef(SDValue Op) const {
     if (Op.isMachineOpcode())
@@ -475,13 +484,17 @@ private:
 
   SDValue SplitHvxPairOp(SDValue Op, SelectionDAG &DAG) const;
   SDValue SplitHvxMemOp(SDValue Op, SelectionDAG &DAG) const;
+  SDValue WidenHvxLoad(SDValue Op, SelectionDAG &DAG) const;
   SDValue WidenHvxStore(SDValue Op, SelectionDAG &DAG) const;
+  SDValue WidenHvxExtend(SDValue Op, SelectionDAG &DAG) const;
+  SDValue WidenHvxTruncate(SDValue Op, SelectionDAG &DAG) const;
 
   std::pair<const TargetRegisterClass*, uint8_t>
   findRepresentativeClass(const TargetRegisterInfo *TRI, MVT VT)
       const override;
 
-  bool isHvxOperation(SDNode *N) const;
+  bool shouldWidenToHvx(MVT Ty, SelectionDAG &DAG) const;
+  bool isHvxOperation(SDNode *N, SelectionDAG &DAG) const;
   SDValue LowerHvxOperation(SDValue Op, SelectionDAG &DAG) const;
   void LowerHvxOperationWrapper(SDNode *N, SmallVectorImpl<SDValue> &Results,
                                 SelectionDAG &DAG) const;
