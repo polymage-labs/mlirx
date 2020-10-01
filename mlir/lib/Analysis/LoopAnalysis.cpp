@@ -267,7 +267,6 @@ bool mlir::isContiguousAccess(Value iv, LoadOrStoreOp memoryOp,
     return memoryOp.emitError("NYI: non-trivial layoutMap"), false;
   }
 
-  Optional<int64_t> stride;
   int uniqueVaryingIndexAlongIv = -1;
   auto accessMap = memoryOp.getAffineMap();
   for (unsigned i = 0, e = memRefType.getRank(); i < e; ++i) {
