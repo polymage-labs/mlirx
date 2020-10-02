@@ -2392,61 +2392,50 @@ struct MemRefShapeCastOpLowering
     : public ConvertOpToLLVMPattern<MemRefShapeCastOp> {
   using ConvertOpToLLVMPattern<MemRefShapeCastOp>::ConvertOpToLLVMPattern;
 
-  LogicalResult match(Operation *op) const override {
-    auto memRefShapeCastOp = cast<MemRefShapeCastOp>(op);
+  LogicalResult
+  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto memRefShapeCastOp = cast<MemRefVectorCastOp>(op);
     MemRefType sourceType =
         memRefShapeCastOp.getOperand().getType().cast<MemRefType>();
     MemRefType targetType = memRefShapeCastOp.getType();
-    return (isSupportedMemRefType(targetType) &&
-            isSupportedMemRefType(sourceType))
-               ? success()
-               : failure();
-  }
+    if (!isSupportedMemRefType(targetType) ||
+        !isSupportedMemRefType(sourceType))
+      return failure();
 
-  void rewrite(Operation *op, ArrayRef<Value> operands,
-               ConversionPatternRewriter &rewriter) const override {
-    auto loc = op->getLoc();
-    auto memRefShapeCastOp = cast<MemRefShapeCastOp>(op);
-    MemRefShapeCastOp::Adaptor transformed(operands);
-    auto targetType = memRefShapeCastOp.getType();
-    auto sourceType =
-        memRefShapeCastOp.getOperand().getType().cast<MemRefType>();
-
+    MemRefVectorCastOp::Adaptor transformed(operands);
     MemRefDescriptor srcMemRefDesc(transformed.source());
 
-    auto targetStructType =
+    Type targetStructType =
         typeConverter.convertType(memRefShapeCastOp.getType());
-    Value memRefDescriptor = rewriter.create<LLVM::UndefOp>(
-        loc, targetStructType, ArrayRef<Value>{});
-    LLVM::LLVMType targetElementPtrType =
-        MemRefDescriptor(memRefDescriptor).getElementPtrType();
+    if (!targetStructType)
+      return failure();
+    Location loc = op->getLoc();
+    MemRefDescriptor memRefDescriptor =
+        MemRefDescriptor::undef(rewriter, loc, targetStructType);
+    LLVM::LLVMType targetElementPtrType = memRefDescriptor.getElementPtrType();
 
     Value srcBuffer = srcMemRefDesc.allocatedPtr(rewriter, loc);
     Value targetBuffer = rewriter.create<LLVM::BitcastOp>(
         loc, targetElementPtrType, ArrayRef<Value>(srcBuffer));
-
-    memRefDescriptor = rewriter.create<LLVM::InsertValueOp>(
-        loc, targetStructType, memRefDescriptor, targetBuffer,
-        rewriter.getIndexArrayAttr(kAllocatedPtrPosInMemRefDescriptor));
+    memRefDescriptor.setAllocatedPtr(rewriter, loc, targetBuffer);
 
     Value srcBufferAligned = srcMemRefDesc.alignedPtr(rewriter, loc);
     Value targetBufAligned = rewriter.create<LLVM::BitcastOp>(
         loc, targetElementPtrType, ArrayRef<Value>(srcBufferAligned));
-    memRefDescriptor = rewriter.create<LLVM::InsertValueOp>(
-        loc, targetStructType, memRefDescriptor, targetBufAligned,
-        rewriter.getIndexArrayAttr(kAlignedPtrPosInMemRefDescriptor));
+    memRefDescriptor.setAlignedPtr(rewriter, loc, targetBufAligned);
 
     int64_t offset;
     SmallVector<int64_t, 4> strides;
-    auto successStrides = getStridesAndOffset(targetType, strides, offset);
-    (void)successStrides;
-    assert(offset != MemRefType::getDynamicStrideOrOffset() &&
-           "unexpected dynamic offset");
+    if (failed(getStridesAndOffset(targetType, strides, offset)))
+      return failure();
 
-    memRefDescriptor = rewriter.create<LLVM::InsertValueOp>(
-        loc, targetStructType, memRefDescriptor,
-        createIndexConstant(rewriter, loc, offset),
-        rewriter.getIndexArrayAttr(kOffsetPosInMemRefDescriptor));
+    // Unhandled dynamic offset.
+    if (offset == MemRefType::getDynamicStrideOrOffset())
+      return failure();
+
+    memRefDescriptor.setOffset(rewriter, loc,
+                               createIndexConstant(rewriter, loc, offset));
 
     // Get the sizes of the memref: all but the last one are copied from the
     // source memref. If the dimension size was static, the target memref would
@@ -2468,7 +2457,7 @@ struct MemRefShapeCastOpLowering
           createIndexConstant(rewriter, loc, targetType.getShape().back()));
     } else {
       // We need to divide the dynamic size on the source by the vector width.
-      auto vecWidth = createIndexConstant(
+      Value vecWidth = createIndexConstant(
           rewriter, loc,
           targetType.getElementType().cast<ShapedType>().getNumElements());
       sizes.push_back(rewriter.create<LLVM::UDivOp>(
@@ -2487,7 +2476,7 @@ struct MemRefShapeCastOpLowering
     // Calculate the strides.
     Value runningStride = nullptr;
     // Iterate strides in reverse order, compute runningStride and strideValues.
-    auto nStrides = strides.size();
+    unsigned nStrides = strides.size();
     SmallVector<Value, 4> strideValues(nStrides, nullptr);
     for (auto indexedStride : llvm::enumerate(llvm::reverse(strides))) {
       int64_t index = nStrides - 1 - indexedStride.index();
@@ -2506,15 +2495,12 @@ struct MemRefShapeCastOpLowering
     // Fill size and stride descriptors in memref.
     for (auto indexedSize : llvm::enumerate(sizes)) {
       int64_t index = indexedSize.index();
-      memRefDescriptor = rewriter.create<LLVM::InsertValueOp>(
-          loc, targetStructType, memRefDescriptor, indexedSize.value(),
-          rewriter.getI64ArrayAttr({kSizePosInMemRefDescriptor, index}));
-      memRefDescriptor = rewriter.create<LLVM::InsertValueOp>(
-          loc, targetStructType, memRefDescriptor, strideValues[index],
-          rewriter.getI64ArrayAttr({kStridePosInMemRefDescriptor, index}));
+      memRefDescriptor.setSize(rewriter, loc, index, indexedSize.value());
+      memRefDescriptor.setStride(rewriter, loc, index, strideValues[index]);
     }
 
-    return rewriter.replaceOp(op, memRefDescriptor);
+    rewriter.replaceOp(op, {memRefDescriptor});
+    return success();
   }
 };
 
