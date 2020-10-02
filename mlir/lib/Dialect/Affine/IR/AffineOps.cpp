@@ -2580,7 +2580,7 @@ static ParseResult parseAffineExecuteRegionOp(OpAsmParser &parser,
   // Region arguments to be created.
   SmallVector<OpAsmParser::OperandType, 4> regionMemRefs;
 
-  // The graybox op has the same type signature as a function.
+  // The execute_region op has the same type signature as a function.
   FunctionType opType;
 
   // Parse the memref assignments.
