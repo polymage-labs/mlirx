@@ -2395,7 +2395,7 @@ struct MemRefShapeCastOpLowering
   LogicalResult
   matchAndRewrite(Operation *op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const override {
-    auto memRefShapeCastOp = cast<MemRefVectorCastOp>(op);
+    auto memRefShapeCastOp = cast<MemRefShapeCastOp>(op);
     MemRefType sourceType =
         memRefShapeCastOp.getOperand().getType().cast<MemRefType>();
     MemRefType targetType = memRefShapeCastOp.getType();
@@ -2403,7 +2403,7 @@ struct MemRefShapeCastOpLowering
         !isSupportedMemRefType(sourceType))
       return failure();
 
-    MemRefVectorCastOp::Adaptor transformed(operands);
+    MemRefShapeCastOp::Adaptor transformed(operands);
     MemRefDescriptor srcMemRefDesc(transformed.source());
 
     Type targetStructType =

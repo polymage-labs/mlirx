@@ -256,12 +256,12 @@ func @memref_shape_cast(%M : memref<42x16xf32>) -> memref<42x4xvector<4xf32>> {
 // CHECK-NEXT:   llvm.mlir.undef : !llvm.struct<(ptr<vec<4 x float>>, ptr<vec<4 x float>>, i64, array<2 x i64>, array<2 x i64>)>
 // CHECK-NEXT:   llvm.extractvalue %{{.*}}[0] : !llvm.struct<(ptr<float>, ptr<float>, i64, array<2 x i64>, array<2 x i64>)>
 // CHECK-NEXT:   llvm.bitcast %{{.*}} : !llvm.ptr<float> to !llvm.ptr<vec<4 x float>>
-// CHECK-NEXT:   llvm.insertvalue %{{.*}}, %{{.*}}[0 : index] : !llvm.struct<(ptr<vec<4 x float>>, ptr<vec<4 x float>>, i64, array<2 x i64>, array<2 x i64>)>
+// CHECK-NEXT:   llvm.insertvalue %{{.*}}, %{{.*}}[0] : !llvm.struct<(ptr<vec<4 x float>>, ptr<vec<4 x float>>, i64, array<2 x i64>, array<2 x i64>)>
 // CHECK-NEXT:   llvm.extractvalue %{{.*}}[1] : !llvm.struct<(ptr<float>, ptr<float>, i64, array<2 x i64>, array<2 x i64>)>
 // CHECK-NEXT:   llvm.bitcast %{{.*}} : !llvm.ptr<float> to !llvm.ptr<vec<4 x float>>
-// CHECK-NEXT:   llvm.insertvalue %{{.*}}, %{{.*}}[1 : index] : !llvm.struct<(ptr<vec<4 x float>>, ptr<vec<4 x float>>, i64, array<2 x i64>, array<2 x i64>)>
+// CHECK-NEXT:   llvm.insertvalue %{{.*}}, %{{.*}}[1] : !llvm.struct<(ptr<vec<4 x float>>, ptr<vec<4 x float>>, i64, array<2 x i64>, array<2 x i64>)>
 // CHECK-NEXT:   %{{.*}} = llvm.mlir.constant(0 : index) : !llvm.i64
-// CHECK-NEXT:   %{{.*}} = llvm.insertvalue %{{.*}}, %{{.*}}[2 : index] : !llvm.struct<(ptr<vec<4 x float>>, ptr<vec<4 x float>>, i64, array<2 x i64>, array<2 x i64>)>
+// CHECK-NEXT:   %{{.*}} = llvm.insertvalue %{{.*}}, %{{.*}}[2] : !llvm.struct<(ptr<vec<4 x float>>, ptr<vec<4 x float>>, i64, array<2 x i64>, array<2 x i64>)>
 // CHECK-NEXT:   %[[size1:.*]] = llvm.mlir.constant(42 : index) : !llvm.i64
 // CHECK-NEXT:   %[[size2:.*]] = llvm.mlir.constant(4 : index) : !llvm.i64
 // CHECK-NEXT:   %[[cumul_size:.*]] = llvm.mul %[[size1]], %[[size2]]
