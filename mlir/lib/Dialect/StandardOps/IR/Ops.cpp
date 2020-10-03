@@ -2004,17 +2004,17 @@ OpFoldResult IndexCastOp::fold(ArrayRef<Attribute> cstOperands) {
 // ExecuteRegionOp
 //===----------------------------------------------------------------------===//
 
-//
-// (ssa-id `=`)? `execute_region` `->` function-result-type `{`
-//    block+
-// `}`
-//
-// Ex:
-//    std.execute_region -> i32 {
-//      %idx = load %rI[%i] : memref<128xi32>
-//      return %idx : i32
-//    }
-//
+///
+/// (ssa-id `=`)? `execute_region` `->` function-result-type `{`
+///    block+
+/// `}`
+///
+/// Example:
+///   std.execute_region -> i32 {
+///     %idx = load %rI[%i] : memref<128xi32>
+///     return %idx : i32
+///   }
+///
 static ParseResult parseExecuteRegionOp(OpAsmParser &parser,
                                         OperationState &result) {
   if (parser.parseOptionalArrowTypeList(result.types))
@@ -2043,6 +2043,16 @@ static void print(OpAsmPrinter &p, ExecuteRegionOp op) {
                 /*printBlockTerminators=*/true);
 
   p.printOptionalAttrDict(op.getAttrs());
+}
+
+static LogicalResult verify(ExecuteRegionOp op) {
+  if (op.region().empty())
+    return op.emitOpError("region needs to have at least one block");
+
+  if (op.region().front().getNumArguments() > 0)
+    return op.emitOpError("region cannot have any arguments");
+
+  return success();
 }
 
 //===----------------------------------------------------------------------===//
