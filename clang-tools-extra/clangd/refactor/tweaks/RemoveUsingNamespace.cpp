@@ -38,8 +38,12 @@ public:
 
   bool prepare(const Selection &Inputs) override;
   Expected<Effect> apply(const Selection &Inputs) override;
-  std::string title() const override;
-  Intent intent() const override { return Refactor; }
+  std::string title() const override {
+    return "Remove using namespace, re-qualify names instead";
+  }
+  llvm::StringLiteral kind() const override {
+    return CodeAction::REFACTOR_KIND;
+  }
 
 private:
   const UsingDirectiveDecl *TargetDirective = nullptr;
@@ -198,10 +202,6 @@ Expected<Tweak::Effect> RemoveUsingNamespace::apply(const Selection &Inputs) {
   return Effect::mainFileEdit(SM, std::move(R));
 }
 
-std::string RemoveUsingNamespace::title() const {
-  return std::string(
-      llvm::formatv("Remove using namespace, re-qualify names instead."));
-}
 } // namespace
 } // namespace clangd
 } // namespace clang

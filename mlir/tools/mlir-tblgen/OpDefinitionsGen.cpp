@@ -137,7 +137,7 @@ static std::string replaceAllSubstrs(std::string str, const std::string &match,
 static inline bool hasStringAttribute(const Record &record,
                                       StringRef fieldName) {
   auto valueInit = record.getValueInit(fieldName);
-  return isa<CodeInit, StringInit>(valueInit);
+  return isa<StringInit>(valueInit);
 }
 
 static std::string getArgumentName(const Operator &op, int index) {
@@ -290,11 +290,16 @@ private:
   // Generates the traits used by the object.
   void genTraits();
 
-  // Generate the OpInterface methods.
+  // Generate the OpInterface methods for all interfaces.
   void genOpInterfaceMethods();
 
-  // Generate op interface method.
-  void genOpInterfaceMethod(const tblgen::InterfaceOpTrait *trait);
+  // Generate op interface methods for the given interface.
+  void genOpInterfaceMethods(const tblgen::InterfaceOpTrait *trait);
+
+  // Generate op interface method for the given interface method. If
+  // 'declaration' is true, generates a declaration, else a definition.
+  OpMethod *genOpInterfaceMethod(const tblgen::InterfaceMethod &method,
+                                 bool declaration = true);
 
   // Generate the side effect interface methods.
   void genSideEffectInterfaceMethods();
@@ -325,7 +330,7 @@ private:
 //   attribute (the generated function call returns an Attribute);
 // - operandGet corresponds to the name of the function with which to retrieve
 //   an operand (the generated function call returns an OperandRange);
-// - reultGet corresponds to the name of the function to get an result (the
+// - resultGet corresponds to the name of the function to get an result (the
 //   generated function call returns a ValueRange);
 static void populateSubstitutions(const Operator &op, const char *attrGet,
                                   const char *operandGet, const char *resultGet,
@@ -453,10 +458,10 @@ OpEmitter::OpEmitter(const Operator &op)
   genVerifier();
   genCanonicalizerDecls();
   genFolderDecls();
+  genTypeInterfaceMethods();
   genOpInterfaceMethods();
   generateOpFormat(op, opClass);
   genSideEffectInterfaceMethods();
-  genTypeInterfaceMethods();
 }
 
 void OpEmitter::emitDecl(const Operator &op, raw_ostream &os) {
@@ -487,16 +492,7 @@ void OpEmitter::genAttrGetters() {
 
   // Emit with return type specified.
   auto emitAttrWithReturnType = [&](StringRef name, Attribute attr) {
-    Dialect attrDialect = attr.getDialect();
-    // Does the current operation have a different namespace than the attribute?
-    bool differentNamespace =
-        attrDialect && opDialect && attrDialect != opDialect;
-    std::string returnType = differentNamespace
-                                 ? (llvm::Twine(attrDialect.getCppNamespace()) +
-                                    "::" + attr.getReturnType())
-                                       .str()
-                                 : attr.getReturnType().str();
-    auto *method = opClass.addMethodAndPrune(returnType, name);
+    auto *method = opClass.addMethodAndPrune(attr.getReturnType(), name);
     auto &body = method->body();
     body << "  auto attr = " << name << "Attr();\n";
     if (attr.hasDefaultValue()) {
@@ -579,7 +575,7 @@ void OpEmitter::genAttrGetters() {
         PrintWarning(
             op.getLoc(),
             formatv(
-                "op has non-materialzable derived attributes '{0}', skipping",
+                "op has non-materializable derived attributes '{0}', skipping",
                 os.str()));
         body << formatv("  emitOpError(\"op has non-materializable derived "
                         "attributes '{0}'\");\n",
@@ -974,7 +970,7 @@ void OpEmitter::genSeparateArgParamBuilder() {
     llvm_unreachable("unhandled TypeParamKind");
   };
 
-  // Some of the build methods generated here may be amiguous, but TableGen's
+  // Some of the build methods generated here may be ambiguous, but TableGen's
   // ambiguous function detection will elide those ones.
   for (auto attrType : attrBuilderType) {
     emit(attrType, TypeParamKind::Separate, /*inferType=*/false);
@@ -1153,6 +1149,82 @@ void OpEmitter::genUseAttrAsResultTypeBuilder() {
   body << "  }\n";
 }
 
+/// Returns a signature of the builder as defined by a dag-typed initializer.
+/// Updates the context `fctx` to enable replacement of $_builder and $_state
+/// in the body. Reports errors at `loc`.
+static std::string builderSignatureFromDAG(const DagInit *init,
+                                           ArrayRef<llvm::SMLoc> loc,
+                                           FmtContext &fctx) {
+  auto *defInit = dyn_cast<DefInit>(init->getOperator());
+  if (!defInit || !defInit->getDef()->getName().equals("ins"))
+    PrintFatalError(loc, "expected 'ins' in builders");
+
+  // Inject builder and state arguments.
+  llvm::SmallVector<std::string, 8> arguments;
+  arguments.reserve(init->getNumArgs() + 2);
+  arguments.push_back(llvm::formatv("::mlir::OpBuilder &{0}", builder).str());
+  arguments.push_back(
+      llvm::formatv("::mlir::OperationState &{0}", builderOpState).str());
+
+  // Accept either a StringInit or a DefInit with two string values as dag
+  // arguments. The former corresponds to the type, the latter to the type and
+  // the default value. Similarly to C++, once an argument with a default value
+  // is detected, the following arguments must have default values as well.
+  bool seenDefaultValue = false;
+  for (unsigned i = 0, e = init->getNumArgs(); i < e; ++i) {
+    // If no name is provided, generate one.
+    StringInit *argName = init->getArgName(i);
+    std::string name =
+        argName ? argName->getValue().str() : "odsArg" + std::to_string(i);
+
+    Init *argInit = init->getArg(i);
+    StringRef type;
+    std::string defaultValue;
+    if (StringInit *strType = dyn_cast<StringInit>(argInit)) {
+      type = strType->getValue();
+    } else {
+      const Record *typeAndDefaultValue = cast<DefInit>(argInit)->getDef();
+      type = typeAndDefaultValue->getValueAsString("type");
+      StringRef defaultValueRef =
+          typeAndDefaultValue->getValueAsString("defaultValue");
+      if (!defaultValueRef.empty()) {
+        seenDefaultValue = true;
+        defaultValue = llvm::formatv(" = {0}", defaultValueRef).str();
+      }
+    }
+    if (seenDefaultValue && defaultValue.empty())
+      PrintFatalError(loc,
+                      "expected an argument with default value after other "
+                      "arguments with default values");
+    arguments.push_back(
+        llvm::formatv("{0} {1}{2}", type, name, defaultValue).str());
+  }
+
+  fctx.withBuilder(builder);
+  fctx.addSubst("_state", builderOpState);
+
+  return llvm::join(arguments, ", ");
+}
+
+// Returns a signature fo the builder as defined by a string initializer,
+// optionally injecting the builder and state arguments.
+// TODO: to be removed after the transition is complete.
+static std::string builderSignatureFromString(StringRef params,
+                                              FmtContext &fctx) {
+  bool skipParamGen = params.startswith("OpBuilder") ||
+                      params.startswith("mlir::OpBuilder") ||
+                      params.startswith("::mlir::OpBuilder");
+  if (skipParamGen)
+    return params.str();
+
+  fctx.withBuilder(builder);
+  fctx.addSubst("_state", builderOpState);
+  return std::string(llvm::formatv("::mlir::OpBuilder &{0}, "
+                                   "::mlir::OperationState &{1}{2}{3}",
+                                   builder, builderOpState,
+                                   params.empty() ? "" : ", ", params));
+}
+
 void OpEmitter::genBuilder() {
   // Handle custom builders if provided.
   // TODO: Create wrapper class for OpBuilder to hide the native
@@ -1162,35 +1234,28 @@ void OpEmitter::genBuilder() {
     if (listInit) {
       for (Init *init : listInit->getValues()) {
         Record *builderDef = cast<DefInit>(init)->getDef();
-        StringRef params = builderDef->getValueAsString("params").trim();
-        // TODO: Remove this and just generate the builder/state always.
-        bool skipParamGen = params.startswith("OpBuilder") ||
-                            params.startswith("mlir::OpBuilder") ||
-                            params.startswith("::mlir::OpBuilder");
+        llvm::Optional<StringRef> params =
+            builderDef->getValueAsOptionalString("params");
+        FmtContext fctx;
+        if (params.hasValue()) {
+          PrintWarning(op.getLoc(),
+                       "Op uses a deprecated, string-based OpBuilder format; "
+                       "use OpBuilderDAG with '(ins <...>)' instead");
+        }
+        std::string paramStr =
+            params.hasValue() ? builderSignatureFromString(params->trim(), fctx)
+                              : builderSignatureFromDAG(
+                                    builderDef->getValueAsDag("dagParams"),
+                                    op.getLoc(), fctx);
+
         StringRef body = builderDef->getValueAsString("body");
         bool hasBody = !body.empty();
-
         OpMethod::Property properties =
             hasBody ? OpMethod::MP_Static : OpMethod::MP_StaticDeclaration;
-        std::string paramStr =
-            skipParamGen ? params.str()
-                         : llvm::formatv("::mlir::OpBuilder &{0}, "
-                                         "::mlir::OperationState &{1}{2}{3}",
-                                         builder, builderOpState,
-                                         params.empty() ? "" : ", ", params)
-                               .str();
         auto *method =
             opClass.addMethodAndPrune("void", "build", properties, paramStr);
-        if (hasBody) {
-          if (skipParamGen) {
-            method->body() << body;
-          } else {
-            FmtContext fctx;
-            fctx.withBuilder(builder);
-            fctx.addSubst("_state", builderOpState);
-            method->body() << tgfmt(body, &fctx);
-          }
-        }
+        if (hasBody)
+          method->body() << tgfmt(body, &fctx);
       }
     }
     if (op.skipDefaultBuilders()) {
@@ -1528,7 +1593,7 @@ void OpEmitter::genFolderDecls() {
   }
 }
 
-void OpEmitter::genOpInterfaceMethod(const tblgen::InterfaceOpTrait *opTrait) {
+void OpEmitter::genOpInterfaceMethods(const tblgen::InterfaceOpTrait *opTrait) {
   auto interface = opTrait->getOpInterface();
 
   // Get the set of methods that should always be declared.
@@ -1546,33 +1611,39 @@ void OpEmitter::genOpInterfaceMethod(const tblgen::InterfaceOpTrait *opTrait) {
     if (method.getDefaultImplementation() &&
         !alwaysDeclaredMethods.count(method.getName()))
       continue;
-
-    SmallVector<OpMethodParameter, 4> paramList;
-    for (const InterfaceMethod::Argument &arg : method.getArguments())
-      paramList.emplace_back(arg.type, arg.name);
-
-    auto properties = method.isStatic() ? OpMethod::MP_StaticDeclaration
-                                        : OpMethod::MP_Declaration;
-    opClass.addMethodAndPrune(method.getReturnType(), method.getName(),
-                              properties, std::move(paramList));
+    genOpInterfaceMethod(method);
   }
+}
+
+OpMethod *OpEmitter::genOpInterfaceMethod(const InterfaceMethod &method,
+                                          bool declaration) {
+  SmallVector<OpMethodParameter, 4> paramList;
+  for (const InterfaceMethod::Argument &arg : method.getArguments())
+    paramList.emplace_back(arg.type, arg.name);
+
+  auto properties = method.isStatic() ? OpMethod::MP_Static : OpMethod::MP_None;
+  if (declaration)
+    properties =
+        static_cast<OpMethod::Property>(properties | OpMethod::MP_Declaration);
+  return opClass.addMethodAndPrune(method.getReturnType(), method.getName(),
+                                   properties, std::move(paramList));
 }
 
 void OpEmitter::genOpInterfaceMethods() {
   for (const auto &trait : op.getTraits()) {
     if (const auto *opTrait = dyn_cast<tblgen::InterfaceOpTrait>(&trait))
       if (opTrait->shouldDeclareMethods())
-        genOpInterfaceMethod(opTrait);
+        genOpInterfaceMethods(opTrait);
   }
 }
 
 void OpEmitter::genSideEffectInterfaceMethods() {
-  enum EffectKind { Operand, Result, Static };
+  enum EffectKind { Operand, Result, Symbol, Static };
   struct EffectLocation {
     /// The effect applied.
     SideEffect effect;
 
-    /// The index if the kind is either operand or result.
+    /// The index if the kind is not static.
     unsigned index : 30;
 
     /// The kind of the location.
@@ -1601,16 +1672,28 @@ void OpEmitter::genSideEffectInterfaceMethods() {
       effects.push_back(EffectLocation{cast<SideEffect>(decorator),
                                        /*index=*/0, EffectKind::Static});
   }
-  /// Operands.
+  /// Attributes and Operands.
   for (unsigned i = 0, operandIt = 0, e = op.getNumArgs(); i != e; ++i) {
-    if (op.getArg(i).is<NamedTypeConstraint *>()) {
+    Argument arg = op.getArg(i);
+    if (arg.is<NamedTypeConstraint *>()) {
       resolveDecorators(op.getArgDecorators(i), operandIt, EffectKind::Operand);
       ++operandIt;
+      continue;
     }
+    const NamedAttribute *attr = arg.get<NamedAttribute *>();
+    if (attr->attr.getBaseAttr().isSymbolRefAttr())
+      resolveDecorators(op.getArgDecorators(i), i, EffectKind::Symbol);
   }
   /// Results.
   for (unsigned i = 0, e = op.getNumResults(); i != e; ++i)
     resolveDecorators(op.getResultDecorators(i), i, EffectKind::Result);
+
+  // The code used to add an effect instance.
+  // {0}: The effect class.
+  // {1}: Optional value or symbol reference.
+  // {1}: The resource class.
+  const char *addEffectCode =
+      "  effects.emplace_back({0}::get(), {1}{2}::get());\n";
 
   for (auto &it : interfaceEffects) {
     // Generate the 'getEffects' method.
@@ -1624,19 +1707,30 @@ void OpEmitter::genSideEffectInterfaceMethods() {
 
     // Add effect instances for each of the locations marked on the operation.
     for (auto &location : it.second) {
-      if (location.kind != EffectKind::Static) {
+      StringRef effect = location.effect.getName();
+      StringRef resource = location.effect.getResource();
+      if (location.kind == EffectKind::Static) {
+        // A static instance has no attached value.
+        body << llvm::formatv(addEffectCode, effect, "", resource).str();
+      } else if (location.kind == EffectKind::Symbol) {
+        // A symbol reference requires adding the proper attribute.
+        const auto *attr = op.getArg(location.index).get<NamedAttribute *>();
+        if (attr->attr.isOptional()) {
+          body << "  if (auto symbolRef = " << attr->name << "Attr())\n  "
+               << llvm::formatv(addEffectCode, effect, "symbolRef, ", resource)
+                      .str();
+        } else {
+          body << llvm::formatv(addEffectCode, effect, attr->name + "(), ",
+                                resource)
+                      .str();
+        }
+      } else {
+        // Otherwise this is an operand/result, so we need to attach the Value.
         body << "  for (::mlir::Value value : getODS"
              << (location.kind == EffectKind::Operand ? "Operands" : "Results")
-             << "(" << location.index << "))\n  ";
+             << "(" << location.index << "))\n  "
+             << llvm::formatv(addEffectCode, effect, "value, ", resource).str();
       }
-
-      body << "  effects.emplace_back(" << location.effect.getName()
-           << "::get()";
-
-      // If the effect isn't static, it has a specific value attached to it.
-      if (location.kind != EffectKind::Static)
-        body << ", value";
-      body << ", " << location.effect.getResource() << "::get());\n";
     }
   }
 }
@@ -1644,19 +1738,20 @@ void OpEmitter::genSideEffectInterfaceMethods() {
 void OpEmitter::genTypeInterfaceMethods() {
   if (!op.allResultTypesKnown())
     return;
-
-  SmallVector<OpMethodParameter, 4> paramList;
-  paramList.emplace_back("::mlir::MLIRContext *", "context");
-  paramList.emplace_back("::llvm::Optional<::mlir::Location>", "location");
-  paramList.emplace_back("::mlir::ValueRange", "operands");
-  paramList.emplace_back("::mlir::DictionaryAttr", "attributes");
-  paramList.emplace_back("::mlir::RegionRange", "regions");
-  paramList.emplace_back("::llvm::SmallVectorImpl<::mlir::Type>&",
-                         "inferredReturnTypes");
-  auto *method =
-      opClass.addMethodAndPrune("::mlir::LogicalResult", "inferReturnTypes",
-                                OpMethod::MP_Static, std::move(paramList));
-
+  // Generate 'inferReturnTypes' method declaration using the interface method
+  // declared in 'InferTypeOpInterface' op interface.
+  const auto *trait = dyn_cast<InterfaceOpTrait>(
+      op.getTrait("::mlir::InferTypeOpInterface::Trait"));
+  auto interface = trait->getOpInterface();
+  OpMethod *method = [&]() -> OpMethod * {
+    for (const InterfaceMethod &interfaceMethod : interface.getMethods()) {
+      if (interfaceMethod.getName() == "inferReturnTypes") {
+        return genOpInterfaceMethod(interfaceMethod, /*declaration=*/false);
+      }
+    }
+    assert(0 && "unable to find inferReturnTypes interface method");
+    return nullptr;
+  }();
   auto &body = method->body();
   body << "  inferredReturnTypes.resize(" << op.getNumResults() << ");\n";
 
@@ -1714,15 +1809,15 @@ void OpEmitter::genPrinter() {
     return;
 
   auto valueInit = def.getValueInit("printer");
-  CodeInit *codeInit = dyn_cast<CodeInit>(valueInit);
-  if (!codeInit)
+  StringInit *stringInit = dyn_cast<StringInit>(valueInit);
+  if (!stringInit)
     return;
 
   auto *method =
       opClass.addMethodAndPrune("void", "print", "::mlir::OpAsmPrinter &", "p");
   FmtContext fctx;
   fctx.addSubst("cppClass", opClass.getClassName());
-  auto printer = codeInit->getValue().ltrim().rtrim(" \t\v\f\r");
+  auto printer = stringInit->getValue().ltrim().rtrim(" \t\v\f\r");
   method->body() << "  " << tgfmt(printer, &fctx);
 }
 
@@ -1734,8 +1829,8 @@ void OpEmitter::genVerifier() {
        << "return ::mlir::failure();\n";
 
   auto *valueInit = def.getValueInit("verifier");
-  CodeInit *codeInit = dyn_cast<CodeInit>(valueInit);
-  bool hasCustomVerify = codeInit && !codeInit->getValue().empty();
+  StringInit *stringInit = dyn_cast<StringInit>(valueInit);
+  bool hasCustomVerify = stringInit && !stringInit->getValue().empty();
   populateSubstitutions(op, "this->getAttr", "this->getODSOperands",
                         "this->getODSResults", verifyCtx);
 
@@ -1759,7 +1854,7 @@ void OpEmitter::genVerifier() {
   if (hasCustomVerify) {
     FmtContext fctx;
     fctx.addSubst("cppClass", opClass.getClassName());
-    auto printer = codeInit->getValue().ltrim().rtrim(" \t\v\f\r");
+    auto printer = stringInit->getValue().ltrim().rtrim(" \t\v\f\r");
     body << "  " << tgfmt(printer, &fctx);
   } else {
     body << "  return ::mlir::success();\n";
@@ -2000,8 +2095,8 @@ void OpEmitter::genOpAsmInterface() {
   opClass.addTrait("::mlir::OpAsmOpInterface::Trait");
 
   // Generate the right accessor for the number of results.
-  auto *method = opClass.addMethodAndPrune("void", "getAsmResultNames",
-                                           "OpAsmSetValueNameFn", "setNameFn");
+  auto *method = opClass.addMethodAndPrune(
+      "void", "getAsmResultNames", "::mlir::OpAsmSetValueNameFn", "setNameFn");
   auto &body = method->body();
   for (int i = 0; i != numResults; ++i) {
     body << "  auto resultGroup" << i << " = getODSResults(" << i << ");\n"
@@ -2056,10 +2151,8 @@ OpOperandAdaptorEmitter::OpOperandAdaptorEmitter(const Operator &op)
   {
     auto *constructor = adaptor.addConstructorAndPrune(
         llvm::formatv("{0}&", op.getCppClassName()).str(), "op");
-    constructor->addMemberInitializer("odsOperands",
-                                      "op.getOperation()->getOperands()");
-    constructor->addMemberInitializer("odsAttrs",
-                                      "op.getOperation()->getAttrDictionary()");
+    constructor->addMemberInitializer("odsOperands", "op->getOperands()");
+    constructor->addMemberInitializer("odsAttrs", "op->getAttrDictionary()");
   }
 
   std::string sizeAttrInit =

@@ -455,17 +455,17 @@ LoopIdiomRecognize::isLegalStore(StoreInst *SI) {
   if (!SI->isUnordered())
     return LegalStoreKind::None;
 
-  // Don't convert stores of non-integral pointer types to memsets (which stores
-  // integers).
-  if (DL->isNonIntegralPointerType(SI->getValueOperand()->getType()))
-    return LegalStoreKind::None;
-
   // Avoid merging nontemporal stores.
   if (SI->getMetadata(LLVMContext::MD_nontemporal))
     return LegalStoreKind::None;
 
   Value *StoredVal = SI->getValueOperand();
   Value *StorePtr = SI->getPointerOperand();
+
+  // Don't convert stores of non-integral pointer types to memsets (which stores
+  // integers).
+  if (DL->isNonIntegralPointerType(StoredVal->getType()->getScalarType()))
+    return LegalStoreKind::None;
 
   // Reject stores that are so large that they overflow an unsigned.
   // When storing out scalable vectors we bail out for now, since the code
@@ -844,7 +844,7 @@ mayLoopAccessLocation(Value *Ptr, ModRefInfo Access, Loop *L,
   // Get the location that may be stored across the loop.  Since the access is
   // strided positively through memory, we say that the modified location starts
   // at the pointer and has infinite size.
-  LocationSize AccessSize = LocationSize::unknown();
+  LocationSize AccessSize = LocationSize::afterPointer();
 
   // If the loop iterates a fixed number of times, we can refine the access size
   // to be exactly the size of the memset, which is (BECount+1)*StoreSize
@@ -896,8 +896,8 @@ static const SCEV *getNumBytes(const SCEV *BECount, Type *IntPtr,
   // If we're going to need to zero extend the BE count, check if we can add
   // one to it prior to zero extending without overflow. Provided this is safe,
   // it allows better simplification of the +1.
-  if (DL->getTypeSizeInBits(BECount->getType()) <
-          DL->getTypeSizeInBits(IntPtr) &&
+  if (DL->getTypeSizeInBits(BECount->getType()).getFixedSize() <
+          DL->getTypeSizeInBits(IntPtr).getFixedSize() &&
       SE->isLoopEntryGuardedByCond(
           CurLoop, ICmpInst::ICMP_NE, BECount,
           SE->getNegativeSCEV(SE->getOne(BECount->getType())))) {
@@ -1717,11 +1717,13 @@ void LoopIdiomRecognize::transformLoopToCountable(
   // Step 1: Insert the CTLZ/CTTZ instruction at the end of the preheader block
   IRBuilder<> Builder(PreheaderBr);
   Builder.SetCurrentDebugLocation(DL);
-  Value *FFS, *Count, *CountPrev, *NewCount, *InitXNext;
 
   //   Count = BitWidth - CTLZ(InitX);
+  //   NewCount = Count;
   // If there are uses of CntPhi create:
-  //   CountPrev = BitWidth - CTLZ(InitX >> 1);
+  //   NewCount = BitWidth - CTLZ(InitX >> 1);
+  //   Count = NewCount + 1;
+  Value *InitXNext;
   if (IsCntPhiUsedOutsideLoop) {
     if (DefX->getOpcode() == Instruction::AShr)
       InitXNext =
@@ -1736,21 +1738,18 @@ void LoopIdiomRecognize::transformLoopToCountable(
       llvm_unreachable("Unexpected opcode!");
   } else
     InitXNext = InitX;
-  FFS = createFFSIntrinsic(Builder, InitXNext, DL, ZeroCheck, IntrinID);
-  Count = Builder.CreateSub(
-      ConstantInt::get(FFS->getType(),
-                       FFS->getType()->getIntegerBitWidth()),
+  Value *FFS = createFFSIntrinsic(Builder, InitXNext, DL, ZeroCheck, IntrinID);
+  Value *Count = Builder.CreateSub(
+      ConstantInt::get(FFS->getType(), FFS->getType()->getIntegerBitWidth()),
       FFS);
+  Value *NewCount = Count;
   if (IsCntPhiUsedOutsideLoop) {
-    CountPrev = Count;
-    Count = Builder.CreateAdd(
-        CountPrev,
-        ConstantInt::get(CountPrev->getType(), 1));
+    NewCount = Count;
+    Count = Builder.CreateAdd(Count, ConstantInt::get(Count->getType(), 1));
   }
 
-  NewCount = Builder.CreateZExtOrTrunc(
-                      IsCntPhiUsedOutsideLoop ? CountPrev : Count,
-                      cast<IntegerType>(CntInst->getType()));
+  NewCount = Builder.CreateZExtOrTrunc(NewCount,
+                                       cast<IntegerType>(CntInst->getType()));
 
   // If the counter's initial value is not zero, insert Add Inst.
   Value *CntInitVal = CntPhi->getIncomingValueForBlock(Preheader);

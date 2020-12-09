@@ -103,7 +103,7 @@ TEST(ParseConfiguration, MergeConfigurations) {
       UseColor: true
   )");
   ASSERT_TRUE(!!Options2);
-  ClangTidyOptions Options = Options1->mergeWith(*Options2, 0);
+  ClangTidyOptions Options = Options1->merge(*Options2, 0);
   EXPECT_EQ("check1,check2,check3,check4", *Options.Checks);
   EXPECT_EQ("filter2", *Options.HeaderFilterRegex);
   EXPECT_EQ("user2", *Options.User);
@@ -166,6 +166,10 @@ TEST(CheckOptionsValidation, MissingOptions) {
   ClangTidyOptions Options;
   ClangTidyContext Context(std::make_unique<DefaultOptionsProvider>(
       ClangTidyGlobalOptions(), Options));
+  ClangTidyDiagnosticConsumer DiagConsumer(Context);
+  DiagnosticsEngine DE(new DiagnosticIDs(), new DiagnosticOptions,
+                       &DiagConsumer, false);
+  Context.setDiagnosticsEngine(&DE);
   TestCheck TestCheck(&Context);
   CHECK_ERROR(TestCheck.getLocal("Opt"), MissingOptionError,
               "option not found 'test.Opt'");
@@ -191,6 +195,10 @@ TEST(CheckOptionsValidation, ValidIntOptions) {
 
   ClangTidyContext Context(std::make_unique<DefaultOptionsProvider>(
       ClangTidyGlobalOptions(), Options));
+  ClangTidyDiagnosticConsumer DiagConsumer(Context);
+  DiagnosticsEngine DE(new DiagnosticIDs(), new DiagnosticOptions,
+                       &DiagConsumer, false);
+  Context.setDiagnosticsEngine(&DE);
   TestCheck TestCheck(&Context);
 
 #define CHECK_ERROR_INT(Name, Expected)                                        \

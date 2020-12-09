@@ -1,6 +1,5 @@
 include "mlir/Dialect/Shape/IR/ShapeOps.td"
-
-def EqualBinaryOperands : Constraint<CPred<"$0 == $1">>;
+include "mlir/Dialect/StandardOps/IR/Ops.td"
 
 def AllInputShapesEq : Constraint<CPred< [{
   llvm::all_of($0, [&](mlir::Value val) {
@@ -8,11 +7,18 @@ def AllInputShapesEq : Constraint<CPred< [{
   })
 }]>>;
 
+def HasSingleElement : Constraint<CPred< [{
+  $0.size() == 1
+}]>>;
+
 // Canonicalization patterns.
 
-def CstrBroadcastableEqOps : Pat<(Shape_CstrBroadcastableOp:$op $lhs, $rhs),
-  (Shape_ConstWitnessOp ConstBoolAttrTrue),
-  [(EqualBinaryOperands $lhs, $rhs)]>;
+def AssumingAllOneOp : Pat<(Shape_AssumingAllOp $args),
+                           (replaceWithValue $args),
+                           [(HasSingleElement $args)]>;
+
+def CstrBroadcastableEqOps : Pat<(Shape_CstrBroadcastableOp:$op $x, $x),
+  (Shape_ConstWitnessOp ConstBoolAttrTrue)>;
 
 def CstrEqEqOps : Pat<(Shape_CstrEqOp:$op $shapes),
   (Shape_ConstWitnessOp ConstBoolAttrTrue),
@@ -26,3 +32,5 @@ def SizeToIndexToSizeCanonicalization : Pat<
   (Shape_IndexToSizeOp (Shape_SizeToIndexOp $arg)),
   (replaceWithValue $arg)>;
 
+def TensorCastConstShape : Pat <
+  (TensorCastOp (Shape_ConstShapeOp:$c $ty)), (replaceWithValue $c)>;

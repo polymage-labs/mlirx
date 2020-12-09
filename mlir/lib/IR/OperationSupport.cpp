@@ -13,9 +13,9 @@
 
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/Block.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
-#include "mlir/IR/StandardTypes.h"
 using namespace mlir;
 
 //===----------------------------------------------------------------------===//
@@ -31,6 +31,16 @@ NamedAttrList::NamedAttrList(const_iterator in_start, const_iterator in_end) {
 }
 
 ArrayRef<NamedAttribute> NamedAttrList::getAttrs() const { return attrs; }
+
+Optional<NamedAttribute> NamedAttrList::findDuplicate() const {
+  Optional<NamedAttribute> duplicate =
+      DictionaryAttr::findDuplicate(attrs, isSorted());
+  // DictionaryAttr::findDuplicate will sort the list, so reset the sorted
+  // state.
+  if (!isSorted())
+    dictionarySorted.setPointerAndInt(nullptr, true);
+  return duplicate;
+}
 
 DictionaryAttr NamedAttrList::getDictionary(MLIRContext *context) const {
   if (!isSorted()) {
@@ -148,6 +158,26 @@ void NamedAttrList::set(Identifier name, Attribute value) {
 void NamedAttrList::set(StringRef name, Attribute value) {
   assert(value && "setting null attribute not supported");
   return set(mlir::Identifier::get(name, value.getContext()), value);
+}
+
+Attribute
+NamedAttrList::eraseImpl(SmallVectorImpl<NamedAttribute>::iterator it) {
+  if (it == attrs.end())
+    return nullptr;
+
+  // Erasing does not affect the sorted property.
+  Attribute attr = it->second;
+  attrs.erase(it);
+  dictionarySorted.setPointer(nullptr);
+  return attr;
+}
+
+Attribute NamedAttrList::erase(Identifier name) {
+  return eraseImpl(findAttr(attrs, name, isSorted()));
+}
+
+Attribute NamedAttrList::erase(StringRef name) {
+  return eraseImpl(findAttr(attrs, name, isSorted()));
 }
 
 NamedAttrList &
@@ -352,14 +382,15 @@ MutableArrayRef<OpOperand> detail::OperandStorage::resize(Operation *owner,
 
 /// Returns the parent operation of this trailing result.
 Operation *detail::TrailingOpResult::getOwner() {
-  // We need to do some arithmetic to get the operation pointer. Move the
-  // trailing owner to the start of the array.
-  TrailingOpResult *trailingIt = this - trailingResultNumber;
+  // We need to do some arithmetic to get the operation pointer. Trailing
+  // results are stored in reverse order before the inline results of the
+  // operation, so move the trailing owner up to the start of the array.
+  TrailingOpResult *trailingIt = this + (trailingResultNumber + 1);
 
   // Move the owner past the inline op results to get to the operation.
-  auto *inlineResultIt = reinterpret_cast<InLineOpResult *>(trailingIt) -
+  auto *inlineResultIt = reinterpret_cast<InLineOpResult *>(trailingIt) +
                          OpResult::getMaxInlineResults();
-  return reinterpret_cast<Operation *>(inlineResultIt) - 1;
+  return reinterpret_cast<Operation *>(inlineResultIt);
 }
 
 //===----------------------------------------------------------------------===//

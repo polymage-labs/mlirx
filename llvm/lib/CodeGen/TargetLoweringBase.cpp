@@ -224,6 +224,10 @@ RTLIB::Libcall RTLIB::getFPEXT(EVT OpVT, EVT RetVT) {
   if (OpVT == MVT::f16) {
     if (RetVT == MVT::f32)
       return FPEXT_F16_F32;
+    if (RetVT == MVT::f64)
+      return FPEXT_F16_F64;
+    if (RetVT == MVT::f128)
+      return FPEXT_F16_F128;
   } else if (OpVT == MVT::f32) {
     if (RetVT == MVT::f64)
       return FPEXT_F32_F64;
@@ -285,7 +289,14 @@ RTLIB::Libcall RTLIB::getFPROUND(EVT OpVT, EVT RetVT) {
 /// getFPTOSINT - Return the FPTOSINT_*_* value for the given types, or
 /// UNKNOWN_LIBCALL if there is none.
 RTLIB::Libcall RTLIB::getFPTOSINT(EVT OpVT, EVT RetVT) {
-  if (OpVT == MVT::f32) {
+  if (OpVT == MVT::f16) {
+    if (RetVT == MVT::i32)
+      return FPTOSINT_F16_I32;
+    if (RetVT == MVT::i64)
+      return FPTOSINT_F16_I64;
+    if (RetVT == MVT::i128)
+      return FPTOSINT_F16_I128;
+  } else if (OpVT == MVT::f32) {
     if (RetVT == MVT::i32)
       return FPTOSINT_F32_I32;
     if (RetVT == MVT::i64)
@@ -327,7 +338,14 @@ RTLIB::Libcall RTLIB::getFPTOSINT(EVT OpVT, EVT RetVT) {
 /// getFPTOUINT - Return the FPTOUINT_*_* value for the given types, or
 /// UNKNOWN_LIBCALL if there is none.
 RTLIB::Libcall RTLIB::getFPTOUINT(EVT OpVT, EVT RetVT) {
-  if (OpVT == MVT::f32) {
+  if (OpVT == MVT::f16) {
+    if (RetVT == MVT::i32)
+      return FPTOUINT_F16_I32;
+    if (RetVT == MVT::i64)
+      return FPTOUINT_F16_I64;
+    if (RetVT == MVT::i128)
+      return FPTOUINT_F16_I128;
+  } else if (OpVT == MVT::f32) {
     if (RetVT == MVT::i32)
       return FPTOUINT_F32_I32;
     if (RetVT == MVT::i64)
@@ -370,6 +388,8 @@ RTLIB::Libcall RTLIB::getFPTOUINT(EVT OpVT, EVT RetVT) {
 /// UNKNOWN_LIBCALL if there is none.
 RTLIB::Libcall RTLIB::getSINTTOFP(EVT OpVT, EVT RetVT) {
   if (OpVT == MVT::i32) {
+    if (RetVT == MVT::f16)
+      return SINTTOFP_I32_F16;
     if (RetVT == MVT::f32)
       return SINTTOFP_I32_F32;
     if (RetVT == MVT::f64)
@@ -381,6 +401,8 @@ RTLIB::Libcall RTLIB::getSINTTOFP(EVT OpVT, EVT RetVT) {
     if (RetVT == MVT::ppcf128)
       return SINTTOFP_I32_PPCF128;
   } else if (OpVT == MVT::i64) {
+    if (RetVT == MVT::f16)
+      return SINTTOFP_I64_F16;
     if (RetVT == MVT::f32)
       return SINTTOFP_I64_F32;
     if (RetVT == MVT::f64)
@@ -392,6 +414,8 @@ RTLIB::Libcall RTLIB::getSINTTOFP(EVT OpVT, EVT RetVT) {
     if (RetVT == MVT::ppcf128)
       return SINTTOFP_I64_PPCF128;
   } else if (OpVT == MVT::i128) {
+    if (RetVT == MVT::f16)
+      return SINTTOFP_I128_F16;
     if (RetVT == MVT::f32)
       return SINTTOFP_I128_F32;
     if (RetVT == MVT::f64)
@@ -410,6 +434,8 @@ RTLIB::Libcall RTLIB::getSINTTOFP(EVT OpVT, EVT RetVT) {
 /// UNKNOWN_LIBCALL if there is none.
 RTLIB::Libcall RTLIB::getUINTTOFP(EVT OpVT, EVT RetVT) {
   if (OpVT == MVT::i32) {
+    if (RetVT == MVT::f16)
+      return UINTTOFP_I32_F16;
     if (RetVT == MVT::f32)
       return UINTTOFP_I32_F32;
     if (RetVT == MVT::f64)
@@ -421,6 +447,8 @@ RTLIB::Libcall RTLIB::getUINTTOFP(EVT OpVT, EVT RetVT) {
     if (RetVT == MVT::ppcf128)
       return UINTTOFP_I32_PPCF128;
   } else if (OpVT == MVT::i64) {
+    if (RetVT == MVT::f16)
+      return UINTTOFP_I64_F16;
     if (RetVT == MVT::f32)
       return UINTTOFP_I64_F32;
     if (RetVT == MVT::f64)
@@ -432,6 +460,8 @@ RTLIB::Libcall RTLIB::getUINTTOFP(EVT OpVT, EVT RetVT) {
     if (RetVT == MVT::ppcf128)
       return UINTTOFP_I64_PPCF128;
   } else if (OpVT == MVT::i128) {
+    if (RetVT == MVT::f16)
+      return UINTTOFP_I128_F16;
     if (RetVT == MVT::f32)
       return UINTTOFP_I128_F32;
     if (RetVT == MVT::f64)
@@ -444,6 +474,83 @@ RTLIB::Libcall RTLIB::getUINTTOFP(EVT OpVT, EVT RetVT) {
       return UINTTOFP_I128_PPCF128;
   }
   return UNKNOWN_LIBCALL;
+}
+
+RTLIB::Libcall RTLIB::getOUTLINE_ATOMIC(unsigned Opc, AtomicOrdering Order,
+                                        MVT VT) {
+  unsigned ModeN, ModelN;
+  switch (VT.SimpleTy) {
+  case MVT::i8:
+    ModeN = 0;
+    break;
+  case MVT::i16:
+    ModeN = 1;
+    break;
+  case MVT::i32:
+    ModeN = 2;
+    break;
+  case MVT::i64:
+    ModeN = 3;
+    break;
+  case MVT::i128:
+    ModeN = 4;
+    break;
+  default:
+    return UNKNOWN_LIBCALL;
+  }
+
+  switch (Order) {
+  case AtomicOrdering::Monotonic:
+    ModelN = 0;
+    break;
+  case AtomicOrdering::Acquire:
+    ModelN = 1;
+    break;
+  case AtomicOrdering::Release:
+    ModelN = 2;
+    break;
+  case AtomicOrdering::AcquireRelease:
+  case AtomicOrdering::SequentiallyConsistent:
+    ModelN = 3;
+    break;
+  default:
+    return UNKNOWN_LIBCALL;
+  }
+
+#define LCALLS(A, B)                                                           \
+  { A##B##_RELAX, A##B##_ACQ, A##B##_REL, A##B##_ACQ_REL }
+#define LCALL5(A)                                                              \
+  LCALLS(A, 1), LCALLS(A, 2), LCALLS(A, 4), LCALLS(A, 8), LCALLS(A, 16)
+  switch (Opc) {
+  case ISD::ATOMIC_CMP_SWAP: {
+    const Libcall LC[5][4] = {LCALL5(OUTLINE_ATOMIC_CAS)};
+    return LC[ModeN][ModelN];
+  }
+  case ISD::ATOMIC_SWAP: {
+    const Libcall LC[5][4] = {LCALL5(OUTLINE_ATOMIC_SWP)};
+    return LC[ModeN][ModelN];
+  }
+  case ISD::ATOMIC_LOAD_ADD: {
+    const Libcall LC[5][4] = {LCALL5(OUTLINE_ATOMIC_LDADD)};
+    return LC[ModeN][ModelN];
+  }
+  case ISD::ATOMIC_LOAD_OR: {
+    const Libcall LC[5][4] = {LCALL5(OUTLINE_ATOMIC_LDSET)};
+    return LC[ModeN][ModelN];
+  }
+  case ISD::ATOMIC_LOAD_CLR: {
+    const Libcall LC[5][4] = {LCALL5(OUTLINE_ATOMIC_LDCLR)};
+    return LC[ModeN][ModelN];
+  }
+  case ISD::ATOMIC_LOAD_XOR: {
+    const Libcall LC[5][4] = {LCALL5(OUTLINE_ATOMIC_LDEOR)};
+    return LC[ModeN][ModelN];
+  }
+  default:
+    return UNKNOWN_LIBCALL;
+  }
+#undef LCALLS
+#undef LCALL5
 }
 
 RTLIB::Libcall RTLIB::getSYNC(unsigned Opc, MVT VT) {
@@ -615,7 +722,7 @@ void TargetLoweringBase::initActions() {
             std::end(TargetDAGCombineArray), 0);
 
   for (MVT VT : MVT::fp_valuetypes()) {
-    MVT IntVT = MVT::getIntegerVT(VT.getSizeInBits().getFixedSize());
+    MVT IntVT = MVT::getIntegerVT(VT.getFixedSizeInBits());
     if (IntVT.isValid()) {
       setOperationAction(ISD::ATOMIC_SWAP, VT, Promote);
       AddPromotedToType(ISD::ATOMIC_SWAP, VT, IntVT);
@@ -680,6 +787,8 @@ void TargetLoweringBase::initActions() {
     setOperationAction(ISD::ADDCARRY, VT, Expand);
     setOperationAction(ISD::SUBCARRY, VT, Expand);
     setOperationAction(ISD::SETCCCARRY, VT, Expand);
+    setOperationAction(ISD::SADDO_CARRY, VT, Expand);
+    setOperationAction(ISD::SSUBO_CARRY, VT, Expand);
 
     // ADDC/ADDE/SUBC/SUBE default to expand.
     setOperationAction(ISD::ADDC, VT, Expand);
@@ -731,6 +840,8 @@ void TargetLoweringBase::initActions() {
     setOperationAction(ISD::VECREDUCE_UMIN, VT, Expand);
     setOperationAction(ISD::VECREDUCE_FMAX, VT, Expand);
     setOperationAction(ISD::VECREDUCE_FMIN, VT, Expand);
+    setOperationAction(ISD::VECREDUCE_SEQ_FADD, VT, Expand);
+    setOperationAction(ISD::VECREDUCE_SEQ_FMUL, VT, Expand);
   }
 
   // Most targets ignore the @llvm.prefetch intrinsic.
@@ -775,6 +886,8 @@ void TargetLoweringBase::initActions() {
   // On most systems, DEBUGTRAP and TRAP have no difference. The "Expand"
   // here is to inform DAG Legalizer to replace DEBUGTRAP with TRAP.
   setOperationAction(ISD::DEBUGTRAP, MVT::Other, Expand);
+
+  setOperationAction(ISD::UBSANTRAP, MVT::Other, Expand);
 }
 
 MVT TargetLoweringBase::getScalarShiftAmountTy(const DataLayout &DL,
@@ -862,7 +975,7 @@ TargetLoweringBase::getTypeConversion(LLVMContext &Context, EVT VT) const {
   EVT EltVT = VT.getVectorElementType();
 
   // Vectors with only one element are always scalarized.
-  if (NumElts == 1)
+  if (NumElts.isScalar())
     return LegalizeKind(TypeScalarizeVector, EltVT);
 
   if (VT.getVectorElementCount() == ElementCount::getScalable(1))
@@ -875,7 +988,7 @@ TargetLoweringBase::getTypeConversion(LLVMContext &Context, EVT VT) const {
     // Vectors with a number of elements that is not a power of two are always
     // widened, for example <3 x i8> -> <4 x i8>.
     if (!VT.isPow2VectorType()) {
-      NumElts = NumElts.NextPowerOf2();
+      NumElts = NumElts.coefficientNextPowerOf2();
       EVT NVT = EVT::getVectorVT(Context, EltVT, NumElts);
       return LegalizeKind(TypeWidenVector, NVT);
     }
@@ -924,7 +1037,7 @@ TargetLoweringBase::getTypeConversion(LLVMContext &Context, EVT VT) const {
   // If there is no wider legal type, split the vector.
   while (true) {
     // Round up to the next power of 2.
-    NumElts = NumElts.NextPowerOf2();
+    NumElts = NumElts.coefficientNextPowerOf2();
 
     // If there is no simple vector type with this many elements then there
     // cannot be a larger legal vector type.  Note that this assumes that
@@ -1299,7 +1412,7 @@ void TargetLoweringBase::computeRegisterProperties(
         MVT SVT = (MVT::SimpleValueType) nVT;
         // Promote vectors of integers to vectors with the same number
         // of elements, with a wider element type.
-        if (SVT.getScalarSizeInBits() > EltVT.getSizeInBits() &&
+        if (SVT.getScalarSizeInBits() > EltVT.getFixedSizeInBits() &&
             SVT.getVectorElementCount() == EC && isTypeLegal(SVT)) {
           TransformToType[i] = SVT;
           RegisterTypeForVT[i] = SVT;
@@ -1499,7 +1612,7 @@ unsigned TargetLoweringBase::getVectorTypeBreakdown(LLVMContext &Context, EVT VT
     TypeSize NewVTSize = NewVT.getSizeInBits();
     // Convert sizes such as i33 to i64.
     if (!isPowerOf2_32(NewVTSize.getKnownMinSize()))
-      NewVTSize = NewVTSize.NextPowerOf2();
+      NewVTSize = NewVTSize.coefficientNextPowerOf2();
     return NumVectorRegs*(NewVTSize/DestVT.getSizeInBits());
   }
 
@@ -1858,10 +1971,14 @@ Value *TargetLoweringBase::getIRStackGuard(IRBuilder<> &IRB) const {
 // Currently only support "standard" __stack_chk_guard.
 // TODO: add LOAD_STACK_GUARD support.
 void TargetLoweringBase::insertSSPDeclarations(Module &M) const {
-  if (!M.getNamedValue("__stack_chk_guard"))
-    new GlobalVariable(M, Type::getInt8PtrTy(M.getContext()), false,
-                       GlobalVariable::ExternalLinkage,
-                       nullptr, "__stack_chk_guard");
+  if (!M.getNamedValue("__stack_chk_guard")) {
+    auto *GV = new GlobalVariable(M, Type::getInt8PtrTy(M.getContext()), false,
+                                  GlobalVariable::ExternalLinkage, nullptr,
+                                  "__stack_chk_guard");
+    if (TM.getRelocationModel() == Reloc::Static &&
+        !TM.getTargetTriple().isWindowsGNUEnvironment())
+      GV->setDSOLocal(true);
+  }
 }
 
 // Currently only support "standard" __stack_chk_guard.

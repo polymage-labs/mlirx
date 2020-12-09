@@ -44,6 +44,10 @@ def warn_drv_avr_libc_not_found: Warning<
 def warn_drv_avr_family_linking_stdlibs_not_implemented: Warning<
   "support for linking stdlibs for microcontroller '%0' is not implemented">,
   InGroup<AVRRtlibLinkingQuirks>;
+def warn_drv_avr_linker_section_addresses_not_implemented: Warning<
+  "support for passing the data section address to the linker for "
+  "microcontroller '%0' is not implemented">,
+  InGroup<AVRRtlibLinkingQuirks>;
 def warn_drv_avr_stdlib_not_linked: Warning<
   "standard library not linked and so no interrupt vector table or "
   "compiler runtime routines will be linked">,
@@ -69,13 +73,13 @@ def err_drv_cuda_version_unsupported : Error<
   "install, pass a different GPU arch with --cuda-gpu-arch, or pass "
   "--no-cuda-version-check.">;
 def warn_drv_unknown_cuda_version: Warning<
-  "Unknown CUDA version %0. Assuming the latest supported version %1">,
+  "Unknown CUDA version. %0 Assuming the latest supported version %1">,
   InGroup<CudaUnknownVersion>;
 def err_drv_cuda_host_arch : Error<"unsupported architecture '%0' for host compilation.">;
 def err_drv_mix_cuda_hip : Error<"Mixed Cuda and HIP compilation is not supported.">;
 def err_drv_bad_target_id : Error<"Invalid target ID: %0 (A target ID is a processor name "
   "followed by an optional list of predefined features post-fixed by a plus or minus sign deliminated "
-  "by colon, e.g. 'gfx908:sram-ecc+:xnack-')">;
+  "by colon, e.g. 'gfx908:sramecc+:xnack-')">;
 def err_drv_bad_offload_arch_combo : Error<"Invalid offload arch combinations: %0 and %1 (For a specific "
   "processor, a feature should either exist in all offload archs, or not exist in any offload archs)">;
 def err_drv_invalid_thread_model_for_target : Error<
@@ -113,12 +117,12 @@ def err_drv_command_failure : Error<
   "unable to execute command: %0">;
 def err_drv_invalid_darwin_version : Error<
   "invalid Darwin version number: %0">;
+def err_drv_invalid_diagnotics_hotness_threshold : Error<
+  "invalid argument in '%0', only integer or 'auto' is supported">;
 def err_drv_missing_argument : Error<
   "argument to '%0' is missing (expected %1 value%s1)">;
 def err_drv_invalid_Xarch_argument_with_args : Error<
   "invalid Xarch argument: '%0', options requiring arguments are unsupported">;
-def err_drv_invalid_Xarch_argument_isdriver : Error<
-  "invalid Xarch argument: '%0', cannot change driver behavior inside Xarch argument">;
 def err_drv_Xopenmp_target_missing_triple : Error<
   "cannot deduce implicit triple value for -Xopenmp-target, specify triple using -Xopenmp-target=<triple>">;
 def err_drv_invalid_Xopenmp_target_with_args : Error<
@@ -213,6 +217,7 @@ def err_drv_dllexport_inlines_and_fallback : Error<
 
 def err_drv_invalid_value : Error<"invalid value '%1' in '%0'">;
 def err_drv_invalid_int_value : Error<"invalid integral value '%1' in '%0'">;
+def err_drv_invalid_value_with_suggestion : Error<"invalid value '%1' in '%0','%2'">;
 def err_drv_invalid_remap_file : Error<
     "invalid option '%0' not of the form <from-file>;<to-file>">;
 def err_drv_invalid_gcc_output_type : Error<
@@ -253,6 +258,7 @@ def err_drv_optimization_remark_format : Error<
   "unknown remark serializer format: '%0'">;
 def err_drv_no_neon_modifier : Error<"[no]neon is not accepted as modifier, please use [no]simd instead">;
 def err_drv_invalid_omp_target : Error<"OpenMP target is invalid: '%0'">;
+def err_drv_incompatible_omp_arch : Error<"OpenMP target architecture '%0' pointer size is incompatible with host '%1'">;
 def err_drv_omp_host_ir_file_not_found : Error<
   "The provided host compiler IR file '%0' is required to generate code for OpenMP target regions but cannot be found.">;
 def err_drv_omp_host_target_not_supported : Error<
@@ -487,6 +493,10 @@ def warn_drv_moutline_unsupported_opt : Warning<
   "The '%0' architecture does not support -moutline; flag ignored">,
   InGroup<OptionIgnored>;
 
+def warn_drv_moutline_atomics_unsupported_opt : Warning<
+  "The '%0' architecture does not support -moutline-atomics; flag ignored">,
+  InGroup<OptionIgnored>;
+
 def warn_drv_darwin_sdk_invalid_settings : Warning<
   "SDK settings were ignored as 'SDKSettings.json' could not be parsed">,
   InGroup<DiagGroup<"darwin-sdk-settings">>;
@@ -523,4 +533,9 @@ def err_drv_invalid_object_mode : Error<"OBJECT_MODE setting %0 is not recognize
 
 def err_drv_invalid_sve_vector_bits : Error<
   "'-msve-vector-bits' is not supported without SVE enabled">;
+
+def err_aix_default_altivec_abi : Error<
+  "The default Altivec ABI on AIX is not yet supported, use '-mabi=vec-extabi' for the extended Altivec ABI">;
+
+def err_aix_altivec : Error<"'-mabi=vec-extabi' and '-mabi=vec-default' require '-maltivec'">;
 }

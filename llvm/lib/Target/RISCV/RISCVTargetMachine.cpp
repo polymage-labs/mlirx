@@ -37,6 +37,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   RegisterTargetMachine<RISCVTargetMachine> Y(getTheRISCV64Target());
   auto PR = PassRegistry::getPassRegistry();
   initializeGlobalISel(*PR);
+  initializeRISCVMergeBaseOffsetOptPass(*PR);
   initializeRISCVExpandPseudoPass(*PR);
 }
 
@@ -75,13 +76,16 @@ RISCVTargetMachine::RISCVTargetMachine(const Target &T, const Triple &TT,
 const RISCVSubtarget *
 RISCVTargetMachine::getSubtargetImpl(const Function &F) const {
   Attribute CPUAttr = F.getFnAttribute("target-cpu");
+  Attribute TuneAttr = F.getFnAttribute("tune-cpu");
   Attribute FSAttr = F.getFnAttribute("target-features");
 
   std::string CPU =
       CPUAttr.isValid() ? CPUAttr.getValueAsString().str() : TargetCPU;
+  std::string TuneCPU =
+      TuneAttr.isValid() ? TuneAttr.getValueAsString().str() : CPU;
   std::string FS =
       FSAttr.isValid() ? FSAttr.getValueAsString().str() : TargetFS;
-  std::string Key = CPU + FS;
+  std::string Key = CPU + TuneCPU + FS;
   auto &I = SubtargetMap[Key];
   if (!I) {
     // This needs to be done before we create a new subtarget since any
@@ -98,7 +102,7 @@ RISCVTargetMachine::getSubtargetImpl(const Function &F) const {
       }
       ABIName = ModuleTargetABI->getString();
     }
-    I = std::make_unique<RISCVSubtarget>(TargetTriple, CPU, FS, ABIName, *this);
+    I = std::make_unique<RISCVSubtarget>(TargetTriple, CPU, TuneCPU, FS, ABIName, *this);
   }
   return I.get();
 }
@@ -179,5 +183,6 @@ void RISCVPassConfig::addPreEmitPass2() {
 }
 
 void RISCVPassConfig::addPreRegAlloc() {
-  addPass(createRISCVMergeBaseOffsetOptPass());
+  if (TM->getOptLevel() != CodeGenOpt::None)
+    addPass(createRISCVMergeBaseOffsetOptPass());
 }

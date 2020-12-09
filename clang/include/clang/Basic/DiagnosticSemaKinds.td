@@ -137,8 +137,9 @@ def err_vla_decl_has_static_storage : Error<
   "variable length array declaration cannot have 'static' storage duration">;
 def err_vla_decl_has_extern_linkage : Error<
   "variable length array declaration cannot have 'extern' linkage">;
-def ext_vla_folded_to_constant : Extension<
-  "variable length array folded to constant array as an extension">, InGroup<GNUFoldingConstant>;
+def ext_vla_folded_to_constant : ExtWarn<
+  "variable length array folded to constant array as an extension">,
+  InGroup<GNUFoldingConstant>;
 def err_vla_unsupported : Error<
   "variable length arrays are not supported for the current target">;
 def note_vla_unsupported : Note<
@@ -485,6 +486,8 @@ def err_decomp_decl_inaccessible_base : Error<
 def err_decomp_decl_inaccessible_field : Error<
   "cannot decompose %select{private|protected}0 member %1 of %3">,
   AccessControl;
+def err_decomp_decl_lambda : Error<
+  "cannot decompose lambda closure type">;
 def err_decomp_decl_anon_union_member : Error<
   "cannot decompose class type %0 because it has an anonymous "
   "%select{struct|union}1 member">;
@@ -1034,6 +1037,8 @@ def warn_objc_boxing_invalid_utf8_string : Warning<
   "string is ill-formed as UTF-8 and will become a null %0 when boxed">,
   InGroup<ObjCBoxing>;
 
+def err_objc_non_runtime_protocol_in_protocol_expr : Error<
+  "cannot use a protocol declared 'objc_non_runtime_protocol' in a @protocol expression">;
 def err_objc_direct_on_protocol : Error<
   "'objc_direct' attribute cannot be applied to %select{methods|properties}0 "
   "declared in an Objective-C protocol">;
@@ -1057,6 +1062,10 @@ def warn_objc_direct_property_ignored : Warning<
   InGroup<IgnoredAttributes>;
 def err_objc_direct_dynamic_property : Error<
   "direct property cannot be @dynamic">;
+def err_objc_direct_protocol_conformance : Error<
+  "%select{category %1|class extension}0 cannot conform to protocol %2 because "
+  "of direct members declared in interface %3">;
+def note_direct_member_here : Note<"direct member declared here">;
 
 def warn_conflicting_overriding_ret_types : Warning<
   "conflicting return type in "
@@ -1991,8 +2000,8 @@ def err_destructor_template : Error<
 
 // C++ initialization
 def err_init_conversion_failed : Error<
-  "cannot initialize %select{a variable|a parameter|return object|"
-  "statement expression result|an "
+  "cannot initialize %select{a variable|a parameter|template parameter|"
+  "return object|statement expression result|an "
   "exception object|a member subobject|an array element|a new value|a value|a "
   "base class|a constructor delegation|a vector element|a block element|a "
   "block element|a complex element|a lambda capture|a compound literal "
@@ -2134,7 +2143,7 @@ def warn_unsequenced_mod_use : Warning<
   "unsequenced modification and access to %0">, InGroup<Unsequenced>;
 
 def select_initialized_entity_kind : TextSubstitution<
-  "%select{copying variable|copying parameter|"
+  "%select{copying variable|copying parameter|initializing template parameter|"
   "returning object|initializing statement expression result|"
   "throwing object|copying member subobject|copying array element|"
   "allocating object|copying temporary|initializing base subobject|"
@@ -2443,7 +2452,7 @@ def err_for_range_decl_must_be_var : Error<
   "for range declaration must declare a variable">;
 def err_for_range_storage_class : Error<
   "loop variable %0 may not be declared %select{'extern'|'static'|"
-  "'__private_extern__'|'auto'|'register'|'constexpr'}1">;
+  "'__private_extern__'|'auto'|'register'|'constexpr'|'thread_local'}1">;
 def err_type_defined_in_for_range : Error<
   "types may not be defined in a for range declaration">;
 def err_for_range_deduction_failure : Error<
@@ -2855,7 +2864,7 @@ def err_attribute_sizeless_type : Error<
   "%0 attribute cannot be applied to sizeless type %1">;
 def err_attribute_argument_n_type : Error<
   "%0 attribute requires parameter %1 to be %select{int or bool|an integer "
-  "constant|a string|an identifier}2">;
+  "constant|a string|an identifier|a constant expression}2">;
 def err_attribute_argument_type : Error<
   "%0 attribute requires %select{int or bool|an integer "
   "constant|a string|an identifier}1">;
@@ -2925,8 +2934,10 @@ def err_attribute_invalid_size : Error<
   "vector size not an integral multiple of component size">;
 def err_attribute_zero_size : Error<"zero %0 size">;
 def err_attribute_size_too_large : Error<"%0 size too large">;
-def err_typecheck_vector_not_convertable_sizeless : Error<
-  "cannot convert between a fixed-length and a sizeless vector (%0 and %1)">;
+def err_typecheck_sve_ambiguous : Error<
+  "cannot combine fixed-length and sizeless SVE vectors in expression, result is ambiguous (%0 and %1)">;
+def err_typecheck_sve_gnu_ambiguous : Error<
+  "cannot combine GNU and SVE vectors in expression, result is ambiguous (%0 and %1)">;
 def err_typecheck_vector_not_convertable_implict_truncation : Error<
    "cannot convert between %select{scalar|vector}0 type %1 and vector type"
    " %2 as implicit conversion would cause truncation">;
@@ -3150,6 +3161,16 @@ def warn_cxx11_gnu_attribute_on_type : Warning<
 def warn_unhandled_ms_attribute_ignored : Warning<
   "__declspec attribute %0 is not supported">,
   InGroup<IgnoredAttributes>;
+def warn_attribute_has_no_effect_on_infinite_loop : Warning<
+  "attribute %0 has no effect when annotating an infinite loop">,
+   InGroup<IgnoredAttributes>;
+def note_attribute_has_no_effect_on_infinite_loop_here : Note<
+  "annotating the infinite loop here">;
+def warn_attribute_has_no_effect_on_if_constexpr : Warning<
+  "attribute %0 has no effect when annotating an 'if constexpr' statement">,
+   InGroup<IgnoredAttributes>;
+def note_attribute_has_no_effect_on_if_constexpr_here : Note<
+  "annotating the 'if constexpr' statement here">;
 def err_decl_attribute_invalid_on_stmt : Error<
   "%0 attribute cannot be applied to a statement">;
 def err_stmt_attribute_invalid_on_decl : Error<
@@ -4011,7 +4032,12 @@ def warn_attr_swift_name_subscript_getter_newValue
   : Warning<"%0 attribute for 'subscript' getter cannot have a 'newValue:' parameter">,
     InGroup<SwiftNameAttribute>;
 def warn_attr_swift_name_num_params
-  : Warning<"too %select{few|many}0 parameters in %1 attribute (expected %2; got %3)">,
+  : Warning<"too %select{few|many}0 parameters in the signature specified by "
+            "the %1 attribute (expected %2; got %3)">,
+    InGroup<SwiftNameAttribute>;
+def warn_attr_swift_name_decl_missing_params
+  : Warning<"%0 attribute cannot be applied to a %select{function|method}1 "
+            "with no parameters">,
     InGroup<SwiftNameAttribute>;
 
 def err_attr_swift_error_no_error_parameter : Error<
@@ -4020,6 +4046,13 @@ def err_attr_swift_error_no_error_parameter : Error<
 def err_attr_swift_error_return_type : Error<
   "%0 attribute with '%1' convention can only be applied to a "
   "%select{function|method}2 returning %select{an integral type|a pointer}3">;
+
+def err_swift_async_no_access : Error<
+  "first argument to 'swift_async' must be either 'none', 'swift_private', or "
+  "'not_swift_private'">;
+def err_swift_async_bad_block_type : Error<
+  "'swift_async' completion handler parameter must have block type returning"
+  " 'void', type here is %0">;
 
 def warn_ignored_objc_externally_retained : Warning<
   "'objc_externally_retained' can only be applied to local variables "
@@ -4099,6 +4132,8 @@ def err_ovl_diff_return_type : Error<
 def err_ovl_static_nonstatic_member : Error<
   "static and non-static member functions with the same parameter types "
   "cannot be overloaded">;
+
+let Deferrable = 1 in {
 
 def err_ovl_no_viable_function_in_call : Error<
   "no matching function for call to %0">;
@@ -4268,9 +4303,9 @@ def note_ovl_candidate_bad_arc_conv : Note<
     "cannot implicitly convert argument "
     "%diff{of type $ to $|type to parameter type}3,4 for "
     "%select{%ordinal6 argument|object argument}5 under ARC">;
-def note_ovl_candidate_bad_lvalue : Note<
+def note_ovl_candidate_bad_value_category : Note<
     "candidate %sub{select_ovl_candidate_kind}0,1,2 not viable: "
-    "expects an l-value for "
+    "expects an %select{lvalue|rvalue}5 for "
     "%select{%ordinal4 argument|object argument}3">;
 def note_ovl_candidate_bad_addrspace : Note<
     "candidate %sub{select_ovl_candidate_kind}0,1,2 not viable: "
@@ -4413,6 +4448,8 @@ def err_addr_ovl_not_func_ptrref : Error<
 def err_addr_ovl_no_qualifier : Error<
   "cannot form member pointer of type %0 without '&' and class name">;
 
+} // let Deferrable
+
 // C++11 Literal Operators
 def err_ovl_no_viable_literal_operator : Error<
   "no matching literal operator for call to %0"
@@ -4485,6 +4522,10 @@ def note_not_structural_rvalue_ref_field : Note<
 def note_not_structural_subobject : Note<
   "%0 is not a structural type because it has a "
   "%select{non-static data member|base class}1 of non-structural type %2">;
+def warn_cxx17_compat_template_nontype_parm_type : Warning<
+  "non-type template parameter of type %0 is incompatible with "
+  "C++ standards before C++20">,
+  DefaultIgnore, InGroup<CXXPre20Compat>;
 def warn_cxx14_compat_template_nontype_parm_auto_type : Warning<
   "non-type template parameters declared with %0 are incompatible with C++ "
   "standards before C++17">,
@@ -5133,7 +5174,8 @@ def err_unexpanded_parameter_pack : Error<
   "using declaration|friend declaration|qualifier|initializer|default argument|"
   "non-type template parameter type|exception type|partial specialization|"
   "__if_exists name|__if_not_exists name|lambda|block|type constraint|"
-  "requirement}0 contains%plural{0: an|:}1 unexpanded parameter pack"
+  "requirement|requires clause}0 "
+  "contains%plural{0: an|:}1 unexpanded parameter pack"
   "%plural{0:|1: %2|2:s %2 and %3|:s %2, %3, ...}1">;
 
 def err_pack_expansion_without_parameter_packs : Error<
@@ -5179,11 +5221,17 @@ def ext_undeclared_unqual_id_with_dependent_base : ExtWarn<
   "use of undeclared identifier %0; "
   "unqualified lookup into dependent bases of class template %1 is a Microsoft extension">,
   InGroup<MicrosoftTemplate>;
-def ext_found_via_dependent_bases_lookup : ExtWarn<"use of identifier %0 "
+def err_found_in_dependent_base : Error<
+  "explicit qualification required to use member %0 from dependent base class">;
+def ext_found_in_dependent_base : ExtWarn<"use of member %0 "
   "found via unqualified lookup into dependent bases of class templates is a "
   "Microsoft extension">, InGroup<MicrosoftTemplate>;
-def note_dependent_var_use : Note<"must qualify identifier to find this "
-    "declaration in dependent base class">;
+def err_found_later_in_class : Error<"member %0 used before its declaration">;
+def ext_found_later_in_class : ExtWarn<
+  "use of member %0 before its declaration is a Microsoft extension">,
+  InGroup<MicrosoftTemplate>;
+def note_dependent_member_use : Note<
+  "must qualify identifier to find this declaration in dependent base class">;
 def err_not_found_by_two_phase_lookup : Error<"call to function %0 that is neither "
     "visible in the template definition nor found by argument-dependent lookup">;
 def note_not_found_by_two_phase_lookup : Note<"%0 should be declared prior to the "
@@ -5472,8 +5520,6 @@ def warn_flag_enum_constant_out_of_range : Warning<
   "enumeration value %0 is out of range of flags in enumeration type %1">,
   InGroup<FlagEnum>;
 
-def warn_illegal_constant_array_size : Extension<
-  "size of static array must be an integer constant expression">;
 def err_vm_decl_in_file_scope : Error<
   "variably modified type declaration not allowed at file scope">;
 def err_vm_decl_has_extern_linkage : Error<
@@ -5626,9 +5672,8 @@ def err_incorrect_number_of_vector_initializers : Error<
 def warn_bitfield_width_exceeds_type_width: Warning<
   "width of bit-field %0 (%1 bits) exceeds the width of its type; value will "
   "be truncated to %2 bit%s2">, InGroup<BitFieldWidth>;
-def warn_anon_bitfield_width_exceeds_type_width : Warning<
-  "width of anonymous bit-field (%0 bits) exceeds width of its type; value "
-  "will be truncated to %1 bit%s1">, InGroup<BitFieldWidth>;
+def err_bitfield_too_wide : Error<
+  "%select{bit-field %1|anonymous bit-field}0 is too wide (%2 bits)">;
 def warn_bitfield_too_small_for_enum : Warning<
   "bit-field %0 is not wide enough to store all enumerators of %1">,
   InGroup<BitFieldEnumConversion>, DefaultIgnore;
@@ -7528,6 +7573,11 @@ def err_incomplete_object_call : Error<
 def warn_condition_is_assignment : Warning<"using the result of an "
   "assignment as a condition without parentheses">,
   InGroup<Parentheses>;
+def warn_free_nonheap_object
+  : Warning<"attempt to call %0 on non-heap object %1">,
+    InGroup<DiagGroup<"free-nonheap-object">>,
+    DefaultIgnore; // FIXME: add to -Wall after sufficient testing
+
 // Completely identical except off by default.
 def warn_condition_is_idiomatic_assignment : Warning<"using the result "
   "of an assignment as a condition without parentheses">,
@@ -8118,7 +8168,7 @@ def err_global_call_not_config : Error<
   "call to global function %0 not configured">;
 def err_ref_bad_target : Error<
   "reference to %select{__device__|__global__|__host__|__host__ __device__}0 "
-  "function %1 in %select{__device__|__global__|__host__|__host__ __device__}2 function">;
+  "%select{function|variable}1 %2 in %select{__device__|__global__|__host__|__host__ __device__}3 function">;
 def err_ref_bad_target_global_initializer : Error<
   "reference to %select{__device__|__global__|__host__|__host__ __device__}0 "
   "function %1 in global initializer">;
@@ -8151,10 +8201,6 @@ def err_dynamic_var_init : Error<
     "__device__, __constant__, and __shared__ variables.">;
 def err_shared_var_init : Error<
     "initialization is not supported for __shared__ variables.">;
-def err_device_static_local_var : Error<
-    "within a %select{__device__|__global__|__host__|__host__ __device__}0 "
-    "function, only __shared__ variables or const variables without device "
-    "memory qualifier may be marked 'static'">;
 def err_cuda_vla : Error<
     "cannot use variable-length arrays in "
     "%select{__device__|__global__|__host__|__host__ __device__}0 functions">;
@@ -8162,7 +8208,7 @@ def err_cuda_extern_shared : Error<"__shared__ variable %0 cannot be 'extern'">;
 def err_cuda_host_shared : Error<
     "__shared__ local variables not allowed in "
     "%select{__device__|__global__|__host__|__host__ __device__}0 functions">;
-def err_cuda_nonglobal_constant : Error<"__constant__ variables must be global">;
+def err_cuda_nonstatic_constdev: Error<"__constant__ and __device__ are not allowed on non-static local variables">;
 def err_cuda_ovl_target : Error<
   "%select{__device__|__global__|__host__|__host__ __device__}0 function %1 "
   "cannot overload %select{__device__|__global__|__host__|__host__ __device__}2 function %3">;
@@ -8416,7 +8462,7 @@ let CategoryName = "Inline Assembly Issue" in {
   def err_asm_invalid_output_size : Error<
     "invalid output size for constraint '%0'">;
   def err_invalid_asm_cast_lvalue : Error<
-    "invalid use of a cast in a inline asm context requiring an l-value: "
+    "invalid use of a cast in a inline asm context requiring an lvalue: "
     "remove the cast or build with -fheinous-gnu-extensions">;
   def err_invalid_asm_value_for_constraint
       : Error <"value '%0' out of range for constraint '%1'">;
@@ -8429,7 +8475,7 @@ let CategoryName = "Inline Assembly Issue" in {
   def warn_asm_label_on_auto_decl : Warning<
     "ignored asm label '%0' on automatic variable">;
   def warn_invalid_asm_cast_lvalue : Warning<
-    "invalid use of a cast in an inline asm context requiring an l-value: "
+    "invalid use of a cast in an inline asm context requiring an lvalue: "
     "accepted due to -fheinous-gnu-extensions, but clang may remove support "
     "for this in the future">;
   def warn_asm_mismatched_size_modifier : Warning<
@@ -8617,6 +8663,8 @@ def err_ambiguous_member_multiple_subobjects : Error<
 def err_ambiguous_member_multiple_subobject_types : Error<
   "member %0 found in multiple base classes of different types">;
 def note_ambiguous_member_found : Note<"member found by ambiguous name lookup">;
+def note_ambiguous_member_type_found : Note<
+  "member type %0 found by ambiguous name lookup">;
 def err_ambiguous_reference : Error<"reference to %0 is ambiguous">;
 def note_ambiguous_candidate : Note<"candidate found by name lookup is %q0">;
 def err_ambiguous_tag_hiding : Error<"a type named %0 is hidden by a "
@@ -9059,6 +9107,10 @@ def err_ret_local_block : Error<
 def note_local_var_initializer : Note<
   "%select{via initialization of|binding reference}0 variable "
   "%select{%2 |}1here">;
+def note_lambda_capture_initializer : Note<
+  "%select{implicitly |}2captured%select{| by reference}3"
+  "%select{%select{ due to use|}2 here|"
+  " via initialization of lambda capture %0}1">;
 def note_init_with_default_member_initalizer : Note<
   "initializing field %0 with default member initializer">;
 
@@ -9475,6 +9527,8 @@ def err_mips_builtin_requires_msa : Error<
   "this builtin requires 'msa' ASE, please use -mmsa">;
 def err_ppc_builtin_only_on_pwr7 : Error<
   "this builtin is only valid on POWER7 or later CPUs">;
+def err_ppc_invalid_use_mma_type : Error<
+  "invalid use of PPC MMA type">;
 def err_x86_builtin_invalid_rounding : Error<
   "invalid rounding argument">;
 def err_x86_builtin_invalid_scale : Error<
@@ -9511,7 +9565,7 @@ def err_selector_element_not_lvalue : Error<
 def err_selector_element_type : Error<
   "selector element type %0 is not a valid object">;
 def err_selector_element_const_type : Error<
-  "selector element of type %0 cannot be a constant l-value expression">;
+  "selector element of type %0 cannot be a constant lvalue expression">;
 def err_collection_expr_type : Error<
   "the type %0 is not a pointer to a fast-enumerable object">;
 def warn_collection_expr_type : Warning<
@@ -9567,7 +9621,7 @@ def err_nsreturns_retained_attribute_mismatch : Error<
 def err_nserrordomain_invalid_decl : Error<
   "domain argument %select{|%1 }0does not refer to global constant">;
 def err_nserrordomain_wrong_type : Error<
-  "domain argument %0 does not point to an NSString constant">;
+  "domain argument %0 does not point to an NSString or CFString constant">;
 
 def warn_nsconsumed_attribute_mismatch : Warning<
   err_nsconsumed_attribute_mismatch.Text>, InGroup<NSConsumedMismatch>;
@@ -9908,6 +9962,8 @@ def err_omp_bit_fields_forbidden_in_clause : Error<
   "bit fields cannot be used to specify storage in a '%0' clause">;
 def err_array_section_does_not_specify_contiguous_storage : Error<
   "array section does not specify contiguous storage">;
+def err_array_section_does_not_specify_length : Error<
+  "array section does not specify length for outermost dimension">;
 def err_omp_union_type_not_allowed : Error<
   "mapping of union members is not allowed">;
 def err_omp_expected_access_to_data_field : Error<
@@ -10118,22 +10174,22 @@ def err_omp_atomic_write_not_expression_statement : Error<
   " where x is a lvalue expression with scalar type">;
 def err_omp_atomic_update_not_expression_statement : Error<
   "the statement for 'atomic update' must be an expression statement of form '++x;', '--x;', 'x++;', 'x--;', 'x binop= expr;', 'x = x binop expr' or 'x = expr binop x',"
-  " where x is an l-value expression with scalar type">;
+  " where x is an lvalue expression with scalar type">;
 def err_omp_atomic_not_expression_statement : Error<
   "the statement for 'atomic' must be an expression statement of form '++x;', '--x;', 'x++;', 'x--;', 'x binop= expr;', 'x = x binop expr' or 'x = expr binop x',"
-  " where x is an l-value expression with scalar type">;
+  " where x is an lvalue expression with scalar type">;
 def note_omp_atomic_update: Note<
   "%select{expected an expression statement|expected built-in binary or unary operator|expected unary decrement/increment operation|"
   "expected expression of scalar type|expected assignment expression|expected built-in binary operator|"
   "expected one of '+', '*', '-', '/', '&', '^', '%|', '<<', or '>>' built-in operations|expected in right hand side of expression}0">;
 def err_omp_atomic_capture_not_expression_statement : Error<
   "the statement for 'atomic capture' must be an expression statement of form 'v = ++x;', 'v = --x;', 'v = x++;', 'v = x--;', 'v = x binop= expr;', 'v = x = x binop expr' or 'v = x = expr binop x',"
-  " where x and v are both l-value expressions with scalar type">;
+  " where x and v are both lvalue expressions with scalar type">;
 def err_omp_atomic_capture_not_compound_statement : Error<
   "the statement for 'atomic capture' must be a compound statement of form '{v = x; x binop= expr;}', '{x binop= expr; v = x;}',"
   " '{v = x; x = x binop expr;}', '{v = x; x = expr binop x;}', '{x = x binop expr; v = x;}', '{x = expr binop x; v = x;}' or '{v = x; x = expr;}',"
   " '{v = x; x++;}', '{v = x; ++x;}', '{++x; v = x;}', '{x++; v = x;}', '{v = x; x--;}', '{v = x; --x;}', '{--x; v = x;}', '{x--; v = x;}'"
-  " where x is an l-value expression with scalar type">;
+  " where x is an lvalue expression with scalar type">;
 def note_omp_atomic_capture: Note<
   "%select{expected assignment expression|expected compound statement|expected exactly two expression statements|expected in right hand side of the first expression}0">;
 def err_omp_atomic_several_clauses : Error<

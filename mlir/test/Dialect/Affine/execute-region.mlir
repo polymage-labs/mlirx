@@ -22,7 +22,7 @@ func @arbitrary_bound(%n : index) {
   return
 }
 
-func @powi(index) -> index
+func @powi(index) -> index attributes {sym_visibility = "private"}
 
 // CHECK-LABEL: func @arbitrary_mem_access
 func @arbitrary_mem_access(%I: memref<128xi32>, %M: memref<1024xf32>) {
@@ -79,7 +79,7 @@ func @test_more_symbol_validity(%A: memref<100xf32>, %pos : index) {
   return
 }
 
-func @external() -> (index)
+func @external() -> (index) attributes {sym_visibility = "private"}
 
 // CHECK-LABEL: func @search
 func @search(%A : memref<?x?xi32>, %S : memref<?xi32>, %key : i32) {

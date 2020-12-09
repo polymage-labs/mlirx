@@ -79,7 +79,7 @@ relative ordering of values is important. For example:
 initialization being the opposite.
 
 This attribute is only supported for C++ and Objective-C++ and is ignored in
-other language modes.
+other language modes. Currently, this attribute is not implemented on z/OS.
   }];
 }
 
@@ -377,7 +377,7 @@ that appears to be capable of returning to its caller.
 }
 
 def NoMergeDocs : Documentation {
-  let Category = DocCatFunction;
+  let Category = DocCatStmt;
   let Content = [{
 If a statement is marked ``nomerge`` and contains call expressions, those call
 expressions inside the statement will not be merged during optimization. This 
@@ -1724,13 +1724,24 @@ It isn't allowed to annotate a single statement with both ``likely`` and
 statement with the same likelihood attribute will result in a diagnostic and
 the attributes are ignored on both branches.
 
+In a ``switch`` statement it's allowed to annotate multiple ``case`` labels
+or the ``default`` label with the same likelihood attribute. This makes
+* all labels without an attribute have a neutral likelihood,
+* all labels marked ``[[likely]]`` have an equally positive likelihood, and
+* all labels marked ``[[unlikely]]`` have an equally negative likelihood.
+The neutral likelihood is the more likely of path execution than the negative
+likelihood. The positive likelihood is the more likely of path of execution
+than the neutral likelihood.
+
 These attributes have no effect on the generated code when using
 PGO (Profile-Guided Optimization) or at optimization level 0.
 
-In Clang, the attributes will be ignored if they're not placed on the
-substatement of an ``if`` or ``else`` statement. The C++ Standard recommends
-to honor them on every statement in the path of execution, but that can be
-confusing:
+In Clang, the attributes will be ignored if they're not placed on
+* the ``case`` or ``default`` label of a ``switch`` statement,
+* or on the substatement of an ``if`` or ``else`` statement,
+* or on the substatement of an ``for`` or ``while`` statement.
+The C++ Standard recommends to honor them on every statement in the
+path of execution, but that can be confusing:
 
 .. code-block:: c++
 
@@ -1759,8 +1770,7 @@ confusing:
   }
 
 
-At the moment the attribute only has effect when used in an ``if`` or ``else``
-statement.
+Below are some example usages of the likelihood attributes and their effects:
 
 .. code-block:: c++
 
@@ -1801,6 +1811,61 @@ statement.
   if (b)
     [[likely]] int i = 5; // Issues a diagnostic since the attribute
                           // isn't allowed on a declaration.
+
+  switch (i) {
+    [[likely]] case 1:    // This value is likely
+      ...
+      break;
+
+    [[unlikely]] case 2:  // This value is unlikely
+      ...
+      [[fallthrough]];
+
+    case 3:               // No likelihood attribute
+      ...
+      [[likely]] break;   // No effect
+
+    case 4: [[likely]] {  // attribute on substatement has no effect
+      ...
+      break;
+      }
+
+    [[unlikely]] default: // All other values are unlikely
+      ...
+      break;
+  }
+
+  switch (i) {
+    [[likely]] case 0:    // This value and code path is likely
+      ...
+      [[fallthrough]];
+
+    case 1:               // No likelihood attribute, code path is neutral
+      break;              // falling through has no effect on the likelihood
+
+    case 2:               // No likelihood attribute, code path is neutral
+      [[fallthrough]];
+
+    [[unlikely]] default: // This value and code path are both unlikely
+      break;
+  }
+
+  for(int i = 0; i != size; ++i) [[likely]] {
+    ...               // The loop is the likely path of execution
+  }
+
+  for(const auto &E : Elements) [[likely]] {
+    ...               // The loop is the likely path of execution
+  }
+
+  while(i != size) [[unlikely]] {
+    ...               // The loop is the unlikely path of execution
+  }                   // The generated code will optimize to skip the loop body
+
+  while(true) [[unlikely]] {
+    ...               // The attribute has no effect
+  }                   // Clang elides the comparison and generates an infinite
+                      // loop
 
   }];
 }
@@ -1854,7 +1919,7 @@ Clang supports the ``__attribute__((preserve_access_index))``
 attribute for the BPF target. This attribute may be attached to a
 struct or union declaration, where if -g is specified, it enables
 preserving struct or union member access debuginfo indices of this
-struct or union, similar to clang ``__builtin_preserve_acceess_index()``.
+struct or union, similar to clang ``__builtin_preserve_access_index()``.
   }];
 }
 
@@ -3443,6 +3508,29 @@ a caller of ``fetch_or_zero`` can provide null.
   }];
 }
 
+def TypeNullableResultDocs : Documentation {
+  let Category = NullabilityDocs;
+  let Content = [{
+The ``_Nullable_result`` nullability qualifier means that a value of the
+``_Nullable_result`` pointer can be ``nil``, just like ``_Nullable``. Where this
+attribute differs from ``_Nullable`` is when it's used on a parameter to a
+completion handler in a Swift async method. For instance, here:
+
+  .. code-block:: objc
+
+    -(void)fetchSomeDataWithID:(int)identifier
+             completionHandler:(void (^)(Data *_Nullable_result result, NSError *error))completionHandler;
+
+This method asynchronously calls ``completionHandler`` when the data is
+available, or calls it with an error. ``_Nullable_result`` indicates to the
+Swift importer that this is the uncommon case where ``result`` can get ``nil``
+even if no error has occured, and will therefore import it as a Swift optional
+type. Otherwise, if ``result`` was annotated with ``_Nullable``, the Swift
+importer will assume that ``result`` will always be non-nil unless an error
+occured.
+}];
+}
+
 def TypeNullUnspecifiedDocs : Documentation {
   let Category = NullabilityDocs;
   let Content = [{
@@ -3529,9 +3617,10 @@ def NSErrorDomainDocs : Documentation {
 In Cocoa frameworks in Objective-C, one can group related error codes in enums
 and categorize these enums with error domains.
 
-The ``ns_error_domain`` attribute indicates a global ``NSString`` constant
-representing the error domain that an error code belongs to. For pointer
-uniqueness and code size this is a constant symbol, not a literal.
+The ``ns_error_domain`` attribute indicates a global ``NSString`` or
+``CFString`` constant representing the error domain that an error code belongs
+to. For pointer uniqueness and code size this is a constant symbol, not a
+literal.
 
 The domain and error code need to be used together. The ``ns_error_domain``
 attribute links error codes to their domain at the source level.
@@ -3560,6 +3649,40 @@ def SwiftDocs : DocumentationCategory<"Customizing Swift Import"> {
 Clang supports additional attributes for customizing how APIs are imported into
 Swift.
   }];
+}
+
+def SwiftAsyncNameDocs : Documentation {
+  let Category = SwiftDocs;
+  let Heading = "swift_async_name";
+  let Content = [{
+The ``swift_async_name`` attribute provides the name of the ``async`` overload for
+the given declaration in Swift. If this attribute is absent, the name is
+transformed according to the algorithm built into the Swift compiler.
+
+The argument is a string literal that contains the Swift name of the function or
+method. The name may be a compound Swift name. The function or method with such
+an attribute must have more than zero parameters, as its last parameter is
+assumed to be a callback that's eliminated in the Swift ``async`` name.
+
+  .. code-block:: objc
+
+    @interface URL
+    + (void) loadContentsFrom:(URL *)url callback:(void (^)(NSData *))data __attribute__((__swift_async_name__("URL.loadContentsFrom(_:)")))
+    @end
+  }];
+}
+
+def SwiftAttrDocs : Documentation {
+  let Category = SwiftDocs;
+  let Heading = "swift_attr";
+  let Content = [{
+The ``swift_attr`` provides a Swift-specific annotation for the declaration
+to which the attribute appertains to. It can be used on any declaration
+in Clang. This kind of annotation is ignored by Clang as it doesn't have any
+semantic meaning in languages supported by Clang. The Swift compiler can
+interpret these annotations according to its own rules when importing C or
+Objective-C declarations.
+}];
 }
 
 def SwiftBridgeDocs : Documentation {
@@ -4277,6 +4400,37 @@ optimizations like C++'s named return value optimization (NRVO).
   }];
 }
 
+def SwiftAsyncDocs : Documentation {
+  let Category = SwiftDocs;
+  let Heading = "swift_async";
+  let Content = [{
+The ``swift_async`` attribute specifies if and how a particular function or
+Objective-C method is imported into a swift async method. For instance:
+
+.. code-block:: objc
+
+  @interface MyClass : NSObject
+  -(void)notActuallyAsync:(int)p1 withCompletionHandler:(void (^)())handler
+      __attribute__((swift_async(none)));
+
+  -(void)actuallyAsync:(int)p1 callThisAsync:(void (^)())fun
+      __attribute__((swift_async(swift_private, 1)));
+  @end
+
+Here, ``notActuallyAsync:withCompletionHandler`` would have been imported as
+``async`` (because it's last parameter's selector piece is
+``withCompletionHandler``) if not for the ``swift_async(none)`` attribute.
+Conversely, ``actuallyAsync:callThisAsync`` wouldn't have been imported as
+``async`` if not for the ``swift_async`` attribute because it doesn't match the
+naming convention.
+
+When using ``swift_async`` to enable importing, the first argument to the
+attribute is either ``swift_private`` or ``not_swift_private`` to indicate
+whether the function/method is private to the current framework, and the second
+argument is the index of the completion handler parameter.
+  }];
+}
+
 def SuppressDocs : Documentation {
   let Category = DocCatStmt;
   let Content = [{
@@ -4617,6 +4771,22 @@ methods defined in the block are considered to be declared as direct unless
 they have been previously declared as non-direct in any interface of the class.
 This includes the implicit method definitions introduced by synthesized
 properties, including auto-synthesized properties.
+  }];
+}
+
+def ObjCNonRuntimeProtocolDocs : Documentation {
+  let Category = DocCatDecl;
+  let Content = [{
+The ``objc_non_runtime_protocol`` attribute can be used to mark that an
+Objective-C protocol is only used during static type-checking and doesn't need
+to be represented dynamically. This avoids several small code-size and run-time
+overheads associated with handling the protocol's metadata. A non-runtime
+protocol cannot be used as the operand of a ``@protocol`` expression, and
+dynamic attempts to find it with ``objc_getProtocol`` will fail.
+
+If a non-runtime protocol inherits from any ordinary protocols, classes and
+derived protocols that declare conformance to the non-runtime protocol will
+dynamically list their conformance to those bare protocols.
   }];
 }
 

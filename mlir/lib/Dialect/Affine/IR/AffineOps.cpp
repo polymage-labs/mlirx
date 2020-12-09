@@ -9,7 +9,7 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/IR/AffineValueMap.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
-#include "mlir/IR/Function.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/OpImplementation.h"
@@ -43,7 +43,7 @@ struct AffineInlinerInterface : public DialectInlinerInterface {
 
   /// Returns true if the given region 'src' can be inlined into the region
   /// 'dest' that is attached to an operation registered to the current dialect.
-  bool isLegalToInline(Region *dest, Region *src,
+  bool isLegalToInline(Region *dest, Region *src, bool wouldBeCloned,
                        BlockAndValueMapping &valueMapping) const final {
     // Conservatively don't allow inlining into affine structures.
     return false;
@@ -51,7 +51,7 @@ struct AffineInlinerInterface : public DialectInlinerInterface {
 
   /// Returns true if the given operation 'op', that is registered to this
   /// dialect, can be inlined into the given region, false otherwise.
-  bool isLegalToInline(Operation *op, Region *region,
+  bool isLegalToInline(Operation *op, Region *region, bool wouldBeCloned,
                        BlockAndValueMapping &valueMapping) const final {
     // Always allow inlining affine operations into the top-level region of a
     // function. There are some edge cases when inlining *into* affine
@@ -201,6 +201,11 @@ static bool isDimOpValidSymbol(DimOp dimOp, Region *region) {
   if (isTopLevelValue(dimOp.memrefOrTensor()))
     return true;
 
+  // Conservatively handle remaining BlockArguments as non-valid symbols.
+  // E.g. scf.for iterArgs.
+  if (dimOp.memrefOrTensor().isa<BlockArgument>())
+    return false;
+
   // The dim op is also okay if its operand memref/tensor is a view/subview
   // whose corresponding size is a valid symbol.
   Optional<int64_t> index = dimOp.getConstantIndex();
@@ -293,6 +298,33 @@ bool mlir::isValidSymbol(Value value, Region *region) {
 // `region` provides the polyhedral symbol scope. Returns false otherwise.
 static bool isValidAffineIndexOperand(Value value, Region *region) {
   return isValidDim(value, region) || isValidSymbol(value, region);
+}
+
+/// Prints dimension and symbol list.
+static void printDimAndSymbolList(Operation::operand_iterator begin,
+                                  Operation::operand_iterator end,
+                                  unsigned numDims, OpAsmPrinter &printer) {
+  OperandRange operands(begin, end);
+  printer << '(' << operands.take_front(numDims) << ')';
+  if (operands.size() > numDims)
+    printer << '[' << operands.drop_front(numDims) << ']';
+}
+
+/// Parses dimension and symbol list and returns true if parsing failed.
+ParseResult mlir::parseDimAndSymbolList(OpAsmParser &parser,
+                                        SmallVectorImpl<Value> &operands,
+                                        unsigned &numDims) {
+  SmallVector<OpAsmParser::OperandType, 8> opInfos;
+  if (parser.parseOperandList(opInfos, OpAsmParser::Delimiter::Paren))
+    return failure();
+  // Store number of dimensions for validation by caller.
+  numDims = opInfos.size();
+
+  // Parse the optional symbol operands.
+  auto indexTy = parser.getBuilder().getIndexType();
+  return failure(parser.parseOperandList(
+                     opInfos, OpAsmParser::Delimiter::OptionalSquare) ||
+                 parser.resolveOperands(opInfos, indexTy, operands));
 }
 
 /// Utility function to verify that a set of operands are valid dimension and
@@ -599,7 +631,7 @@ AffineApplyNormalizer::AffineApplyNormalizer(AffineMap map,
       auto affineApply = t.getDefiningOp<AffineApplyOp>();
       if (affineApply) {
         // a. Compose affine.apply operations.
-        LLVM_DEBUG(affineApply.getOperation()->print(
+        LLVM_DEBUG(affineApply->print(
             dbgs() << "\nCompose AffineApplyOp recursively: "));
         AffineMap affineApplyMap = affineApply.getAffineMap();
         SmallVector<Value, 8> affineApplyOperands(
@@ -2098,7 +2130,7 @@ void AffineLoadOp::build(OpBuilder &builder, OperationState &result,
 void AffineLoadOp::build(OpBuilder &builder, OperationState &result,
                          Value memref, ValueRange indices) {
   auto memrefType = memref.getType().cast<MemRefType>();
-  auto rank = memrefType.getRank();
+  int64_t rank = memrefType.getRank();
   // Create identity map for memrefs with at least one dimension or () -> ()
   // for zero-dimensional memrefs.
   auto map =
@@ -2214,7 +2246,7 @@ void AffineStoreOp::build(OpBuilder &builder, OperationState &result,
                           Value valueToStore, Value memref,
                           ValueRange indices) {
   auto memrefType = memref.getType().cast<MemRefType>();
-  auto rank = memrefType.getRank();
+  int64_t rank = memrefType.getRank();
   // Create identity map for memrefs with at least one dimension or () -> ()
   // for zero-dimensional memrefs.
   auto map =
@@ -3052,6 +3084,38 @@ static LogicalResult verify(AffineYieldOp op) {
 // AffineVectorLoadOp
 //===----------------------------------------------------------------------===//
 
+void AffineVectorLoadOp::build(OpBuilder &builder, OperationState &result,
+                               VectorType resultType, AffineMap map,
+                               ValueRange operands) {
+  assert(operands.size() == 1 + map.getNumInputs() && "inconsistent operands");
+  result.addOperands(operands);
+  if (map)
+    result.addAttribute(getMapAttrName(), AffineMapAttr::get(map));
+  result.types.push_back(resultType);
+}
+
+void AffineVectorLoadOp::build(OpBuilder &builder, OperationState &result,
+                               VectorType resultType, Value memref,
+                               AffineMap map, ValueRange mapOperands) {
+  assert(map.getNumInputs() == mapOperands.size() && "inconsistent index info");
+  result.addOperands(memref);
+  result.addOperands(mapOperands);
+  result.addAttribute(getMapAttrName(), AffineMapAttr::get(map));
+  result.types.push_back(resultType);
+}
+
+void AffineVectorLoadOp::build(OpBuilder &builder, OperationState &result,
+                               VectorType resultType, Value memref,
+                               ValueRange indices) {
+  auto memrefType = memref.getType().cast<MemRefType>();
+  int64_t rank = memrefType.getRank();
+  // Create identity map for memrefs with at least one dimension or () -> ()
+  // for zero-dimensional memrefs.
+  auto map =
+      rank ? builder.getMultiDimIdentityMap(rank) : builder.getEmptyAffineMap();
+  build(builder, result, resultType, memref, map, indices);
+}
+
 static ParseResult parseAffineVectorLoadOp(OpAsmParser &parser,
                                            OperationState &result) {
   auto &builder = parser.getBuilder();
@@ -3114,6 +3178,29 @@ static LogicalResult verify(AffineVectorLoadOp op) {
 //===----------------------------------------------------------------------===//
 // AffineVectorStoreOp
 //===----------------------------------------------------------------------===//
+
+void AffineVectorStoreOp::build(OpBuilder &builder, OperationState &result,
+                                Value valueToStore, Value memref, AffineMap map,
+                                ValueRange mapOperands) {
+  assert(map.getNumInputs() == mapOperands.size() && "inconsistent index info");
+  result.addOperands(valueToStore);
+  result.addOperands(memref);
+  result.addOperands(mapOperands);
+  result.addAttribute(getMapAttrName(), AffineMapAttr::get(map));
+}
+
+// Use identity map.
+void AffineVectorStoreOp::build(OpBuilder &builder, OperationState &result,
+                                Value valueToStore, Value memref,
+                                ValueRange indices) {
+  auto memrefType = memref.getType().cast<MemRefType>();
+  int64_t rank = memrefType.getRank();
+  // Create identity map for memrefs with at least one dimension or () -> ()
+  // for zero-dimensional memrefs.
+  auto map =
+      rank ? builder.getMultiDimIdentityMap(rank) : builder.getEmptyAffineMap();
+  build(builder, result, valueToStore, memref, map, indices);
+}
 
 static ParseResult parseAffineVectorStoreOp(OpAsmParser &parser,
                                             OperationState &result) {

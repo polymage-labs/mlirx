@@ -95,6 +95,7 @@ enum NodeType : unsigned {
 
   // Predicated instructions with the result of inactive lanes provided by the
   // last operand.
+  FABS_MERGE_PASSTHRU,
   FCEIL_MERGE_PASSTHRU,
   FFLOOR_MERGE_PASSTHRU,
   FNEARBYINT_MERGE_PASSTHRU,
@@ -105,6 +106,8 @@ enum NodeType : unsigned {
   FROUNDEVEN_MERGE_PASSTHRU,
   FSQRT_MERGE_PASSTHRU,
   FTRUNC_MERGE_PASSTHRU,
+  FP_ROUND_MERGE_PASSTHRU,
+  FP_EXTEND_MERGE_PASSTHRU,
   UINT_TO_FP_MERGE_PASSTHRU,
   SINT_TO_FP_MERGE_PASSTHRU,
   FCVTZU_MERGE_PASSTHRU,
@@ -222,6 +225,10 @@ enum NodeType : unsigned {
   SRHADD,
   URHADD,
 
+  // Absolute difference
+  UABD,
+  SABD,
+
   // Vector across-lanes min/max
   // Only the lower result lane is defined.
   SMINV,
@@ -238,9 +245,6 @@ enum NodeType : unsigned {
   ORV_PRED,
   EORV_PRED,
   ANDV_PRED,
-
-  // Vector bitwise negation
-  NOT,
 
   // Vector bitwise insertion
   BIT,
@@ -769,9 +773,7 @@ public:
   /// illegal as the original, thus leading to an infinite legalisation loop.
   /// NOTE: Once BUILD_VECTOR is legal or can be custom lowered for all legal
   /// vector types this override can be removed.
-  bool mergeStoresAfterLegalization(EVT VT) const override {
-    return !useSVEForFixedLengthVectors();
-  }
+  bool mergeStoresAfterLegalization(EVT VT) const override;
 
 private:
   /// Keep a pointer to the AArch64Subtarget around so that we can
@@ -802,6 +804,9 @@ private:
                           SDValue ThisVal) const;
 
   SDValue LowerSTORE(SDValue Op, SelectionDAG &DAG) const;
+
+  SDValue LowerMGATHER(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerMSCATTER(SDValue Op, SelectionDAG &DAG) const;
 
   SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const;
 
@@ -928,8 +933,10 @@ private:
   SDValue LowerFixedLengthVectorIntExtendToSVE(SDValue Op,
                                                SelectionDAG &DAG) const;
   SDValue LowerFixedLengthVectorLoadToSVE(SDValue Op, SelectionDAG &DAG) const;
-  SDValue LowerFixedLengthReductionToSVE(unsigned Opcode, SDValue ScalarOp,
-                                         SelectionDAG &DAG) const;
+  SDValue LowerVECREDUCE_SEQ_FADD(SDValue ScalarOp, SelectionDAG &DAG) const;
+  SDValue LowerPredReductionToSVE(SDValue ScalarOp, SelectionDAG &DAG) const;
+  SDValue LowerReductionToSVE(unsigned Opcode, SDValue ScalarOp,
+                              SelectionDAG &DAG) const;
   SDValue LowerFixedLengthVectorSelectToSVE(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerFixedLengthVectorSetccToSVE(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerFixedLengthVectorStoreToSVE(SDValue Op, SelectionDAG &DAG) const;
@@ -974,6 +981,7 @@ private:
     return TargetLowering::getInlineAsmMemConstraint(ConstraintCode);
   }
 
+  bool shouldRemoveExtendFromGSIndex(EVT VT) const override;
   bool isVectorLoadExtDesirable(SDValue ExtVal) const override;
   bool isUsedByReturnOnly(SDNode *N, SDValue &Chain) const override;
   bool mayBeEmittedAsTailCall(const CallInst *CI) const override;
@@ -1000,7 +1008,6 @@ private:
   bool shouldLocalize(const MachineInstr &MI,
                       const TargetTransformInfo *TTI) const override;
 
-  bool useSVEForFixedLengthVectors() const;
   // Normally SVE is only used for byte size vectors that do not fit within a
   // NEON vector. This changes when OverrideNEON is true, allowing SVE to be
   // used for 64bit and 128bit vectors as well.

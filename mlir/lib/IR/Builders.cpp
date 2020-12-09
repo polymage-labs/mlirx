@@ -9,15 +9,15 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
+#include "mlir/IR/BlockAndValueMapping.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/IR/Matchers.h"
-#include "mlir/IR/Module.h"
-#include "mlir/IR/StandardTypes.h"
+#include "mlir/IR/SymbolTable.h"
 #include "llvm/Support/raw_ostream.h"
-using namespace mlir;
 
-Builder::Builder(ModuleOp module) : context(module.getContext()) {}
+using namespace mlir;
 
 Identifier Builder::getIdentifier(StringRef str) {
   return Identifier::get(str, context);
@@ -460,4 +460,24 @@ LogicalResult OpBuilder::tryFold(Operation *op,
     insert(cst);
 
   return success();
+}
+
+Operation *OpBuilder::clone(Operation &op, BlockAndValueMapping &mapper) {
+  Operation *newOp = op.clone(mapper);
+  // The `insert` call below handles the notification for inserting `newOp`
+  // itself. But if `newOp` has any regions, we need to notify the listener
+  // about any ops that got inserted inside those regions as part of cloning.
+  if (listener) {
+    auto walkFn = [&](Operation *walkedOp) {
+      listener->notifyOperationInserted(walkedOp);
+    };
+    for (Region &region : newOp->getRegions())
+      region.walk(walkFn);
+  }
+  return insert(newOp);
+}
+
+Operation *OpBuilder::clone(Operation &op) {
+  BlockAndValueMapping mapper;
+  return clone(op, mapper);
 }

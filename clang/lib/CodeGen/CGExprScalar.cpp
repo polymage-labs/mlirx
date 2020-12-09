@@ -529,14 +529,7 @@ public:
     if (Version <= CGF.CGM.getTarget().getPlatformMinVersion())
       return llvm::ConstantInt::get(Builder.getInt1Ty(), 1);
 
-    Optional<unsigned> Min = Version.getMinor(), SMin = Version.getSubminor();
-    llvm::Value *Args[] = {
-        llvm::ConstantInt::get(CGF.CGM.Int32Ty, Version.getMajor()),
-        llvm::ConstantInt::get(CGF.CGM.Int32Ty, Min ? *Min : 0),
-        llvm::ConstantInt::get(CGF.CGM.Int32Ty, SMin ? *SMin : 0),
-    };
-
-    return CGF.EmitBuiltinAvailable(Args);
+    return CGF.EmitBuiltinAvailable(Version);
   }
 
   Value *VisitArraySubscriptExpr(ArraySubscriptExpr *E);
@@ -2241,8 +2234,12 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
   case CK_IntegralToFloating:
   case CK_FloatingToIntegral:
   case CK_FloatingCast:
+  case CK_FixedPointToFloating:
+  case CK_FloatingToFixedPoint: {
+    CodeGenFunction::CGFPOptionsRAII FPOptsRAII(CGF, CE);
     return EmitScalarConversion(Visit(E), E->getType(), DestTy,
                                 CE->getExprLoc());
+  }
   case CK_BooleanToSignedIntegral: {
     ScalarConversionOpts Opts;
     Opts.TreatBooleanAsSigned = true;
@@ -2253,8 +2250,10 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
     return EmitIntToBoolConversion(Visit(E));
   case CK_PointerToBoolean:
     return EmitPointerToBoolConversion(Visit(E), E->getType());
-  case CK_FloatingToBoolean:
+  case CK_FloatingToBoolean: {
+    CodeGenFunction::CGFPOptionsRAII FPOptsRAII(CGF, CE);
     return EmitFloatToBoolConversion(Visit(E));
+  }
   case CK_MemberPointerToBoolean: {
     llvm::Value *MemPtr = Visit(E);
     const MemberPointerType *MPT = E->getType()->getAs<MemberPointerType>();
@@ -2551,6 +2550,7 @@ ScalarExprEmitter::EmitScalarPrePostIncDec(const UnaryOperator *E, LValue LV,
   } else if (type->isRealFloatingType()) {
     // Add the inc/dec to the real part.
     llvm::Value *amt;
+    CodeGenFunction::CGFPOptionsRAII FPOptsRAII(CGF, E);
 
     if (type->isHalfType() && !CGF.getContext().getLangOpts().NativeHalfType) {
       // Another special case: half FP increment should be done via float
@@ -3002,6 +3002,7 @@ LValue ScalarExprEmitter::EmitCompoundAssignLValue(
   else
     OpInfo.LHS = EmitLoadOfLValue(LHSLV, E->getExprLoc());
 
+  CodeGenFunction::CGFPOptionsRAII FPOptsRAII(CGF, OpInfo.FPFeatures);
   SourceLocation Loc = E->getExprLoc();
   OpInfo.LHS =
       EmitScalarConversion(OpInfo.LHS, LHSTy, E->getComputationLHSType(), Loc);
@@ -3161,6 +3162,7 @@ Value *ScalarExprEmitter::EmitRem(const BinOpInfo &Ops) {
 Value *ScalarExprEmitter::EmitOverflowCheckedBinOp(const BinOpInfo &Ops) {
   unsigned IID;
   unsigned OpID = 0;
+  SanitizerHandler OverflowKind;
 
   bool isSigned = Ops.Ty->isSignedIntegerOrEnumerationType();
   switch (Ops.Opcode) {
@@ -3169,18 +3171,21 @@ Value *ScalarExprEmitter::EmitOverflowCheckedBinOp(const BinOpInfo &Ops) {
     OpID = 1;
     IID = isSigned ? llvm::Intrinsic::sadd_with_overflow :
                      llvm::Intrinsic::uadd_with_overflow;
+    OverflowKind = SanitizerHandler::AddOverflow;
     break;
   case BO_Sub:
   case BO_SubAssign:
     OpID = 2;
     IID = isSigned ? llvm::Intrinsic::ssub_with_overflow :
                      llvm::Intrinsic::usub_with_overflow;
+    OverflowKind = SanitizerHandler::SubOverflow;
     break;
   case BO_Mul:
   case BO_MulAssign:
     OpID = 3;
     IID = isSigned ? llvm::Intrinsic::smul_with_overflow :
                      llvm::Intrinsic::umul_with_overflow;
+    OverflowKind = SanitizerHandler::MulOverflow;
     break;
   default:
     llvm_unreachable("Unsupported operation for overflow detection");
@@ -3210,7 +3215,7 @@ Value *ScalarExprEmitter::EmitOverflowCheckedBinOp(const BinOpInfo &Ops) {
                               : SanitizerKind::UnsignedIntegerOverflow;
       EmitBinOpCheck(std::make_pair(NotOverflow, Kind), Ops);
     } else
-      CGF.EmitTrapCheck(Builder.CreateNot(overflow));
+      CGF.EmitTrapCheck(Builder.CreateNot(overflow), OverflowKind);
     return result;
   }
 

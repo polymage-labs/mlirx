@@ -66,9 +66,9 @@ using llvm::object::coff_section;
 static ExitOnError exitOnErr;
 
 static Timer totalPdbLinkTimer("PDB Emission (Cumulative)", Timer::root());
-Timer lld::coff::loadGHashTimer("Global Type Hashing", totalPdbLinkTimer);
-Timer lld::coff::mergeGHashTimer("GHash Type Merging", totalPdbLinkTimer);
 static Timer addObjectsTimer("Add Objects", totalPdbLinkTimer);
+Timer lld::coff::loadGHashTimer("Global Type Hashing", addObjectsTimer);
+Timer lld::coff::mergeGHashTimer("GHash Type Merging", addObjectsTimer);
 static Timer typeMergingTimer("Type Merging", addObjectsTimer);
 static Timer symbolMergingTimer("Symbol Merging", addObjectsTimer);
 static Timer publicsLayoutTimer("Publics Stream Layout", totalPdbLinkTimer);
@@ -146,6 +146,8 @@ private:
   uint64_t globalSymbols = 0;
   uint64_t moduleSymbols = 0;
   uint64_t publicSymbols = 0;
+  uint64_t nbTypeRecords = 0;
+  uint64_t nbTypeRecordsBytes = 0;
 };
 
 class DebugSHandler {
@@ -334,8 +336,8 @@ static void translateIdSymbols(MutableArrayRef<uint8_t> &recordData,
     // in both cases we just need the second type index.
     if (!ti->isSimple() && !ti->isNoneType()) {
       if (config->debugGHashes) {
-        auto idToType = source->funcIdToType.find(*ti);
-        if (idToType == source->funcIdToType.end()) {
+        auto idToType = tMerger.funcIdToType.find(*ti);
+        if (idToType == tMerger.funcIdToType.end()) {
           warn(formatv("S_[GL]PROC32_ID record in {0} refers to PDB item "
                        "index {1:X} which is not a LF_[M]FUNC_ID record",
                        source->file->getName(), ti->getIndex()));
@@ -497,6 +499,9 @@ void PDBLinker::mergeSymbolRecords(TpiSource *source,
   ArrayRef<uint8_t> symsBuffer;
   cantFail(symData.readBytes(0, symData.getLength(), symsBuffer));
   SmallVector<SymbolScope, 4> scopes;
+
+  if (symsBuffer.empty())
+    warn("empty symbols subsection in " + file->getName());
 
   // Iterate every symbol to check if any need to be realigned, and if so, how
   // much space we need to allocate for them.
@@ -970,6 +975,13 @@ void PDBLinker::addObjectsToPDB() {
     addTypeInfo(builder.getIpiBuilder(), tMerger.getIDTable());
   }
   t2.stop();
+
+  if (config->showSummary) {
+    for_each(TpiSource::instances, [&](TpiSource *source) {
+      nbTypeRecords += source->nbTypeRecords;
+      nbTypeRecordsBytes += source->nbTypeRecordsBytes;
+    });
+  }
 }
 
 void PDBLinker::addPublicsToPDB() {
@@ -1009,6 +1021,8 @@ void PDBLinker::printStats() {
         "Input OBJ files (expanded from all cmd-line inputs)");
   print(TpiSource::countTypeServerPDBs(), "PDB type server dependencies");
   print(TpiSource::countPrecompObjs(), "Precomp OBJ dependencies");
+  print(nbTypeRecords, "Input type records");
+  print(nbTypeRecordsBytes, "Input type records bytes");
   print(builder.getTpiBuilder().getRecordCount(), "Merged TPI records");
   print(builder.getIpiBuilder().getRecordCount(), "Merged IPI records");
   print(pdbStrTab.size(), "Output PDB strings");

@@ -2034,12 +2034,10 @@ MigrateSourceAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
 
 namespace {
 struct EditEntry {
-  const FileEntry *File;
-  unsigned Offset;
-  unsigned RemoveLen;
+  const FileEntry *File = nullptr;
+  unsigned Offset = 0;
+  unsigned RemoveLen = 0;
   std::string Text;
-
-  EditEntry() : File(), Offset(), RemoveLen() {}
 };
 } // end anonymous namespace
 
@@ -2056,12 +2054,8 @@ template<> struct DenseMapInfo<EditEntry> {
     return Entry;
   }
   static unsigned getHashValue(const EditEntry& Val) {
-    llvm::FoldingSetNodeID ID;
-    ID.AddPointer(Val.File);
-    ID.AddInteger(Val.Offset);
-    ID.AddInteger(Val.RemoveLen);
-    ID.AddString(Val.Text);
-    return ID.ComputeHash();
+    return (unsigned)llvm::hash_combine(Val.File, Val.Offset, Val.RemoveLen,
+                                        Val.Text);
   }
   static bool isEqual(const EditEntry &LHS, const EditEntry &RHS) {
     return LHS.File == RHS.File &&

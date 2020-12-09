@@ -35,24 +35,6 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
         self.init_llgs_test()
         server = self.connect_to_debug_monitor()
 
-    def start_no_ack_mode(self):
-        server = self.connect_to_debug_monitor()
-        self.assertIsNotNone(server)
-
-        self.add_no_ack_remote_stream()
-        self.expect_gdbremote_sequence()
-
-    @debugserver_test
-    @skipIfDarwinEmbedded # <rdar://problem/34539270> lldb-server tests not updated to work on ios etc yet
-    def test_start_no_ack_mode_debugserver(self):
-        self.init_debugserver_test()
-        self.start_no_ack_mode()
-
-    @llgs_test
-    def test_start_no_ack_mode_llgs(self):
-        self.init_llgs_test()
-        self.start_no_ack_mode()
-
     def thread_suffix_supported(self):
         server = self.connect_to_debug_monitor()
         self.assertIsNotNone(server)
@@ -99,13 +81,7 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
         self.list_threads_in_stop_reply_supported()
 
     def c_packet_works(self):
-        launch_args = self.install_and_create_launch_args()
-
-        server = self.connect_to_debug_monitor()
-        self.assertIsNotNone(server)
-
-        self.add_no_ack_remote_stream()
-        self.add_verified_launch_packets(launch_args)
+        procs = self.prep_debug_monitor_and_inferior()
         self.test_sequence.add_log_lines(
             ["read packet: $c#63",
              "send packet: $W00#00"],
@@ -127,16 +103,8 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
         self.c_packet_works()
 
     def inferior_print_exit(self):
-        launch_args = self.install_and_create_launch_args()
-
-        server = self.connect_to_debug_monitor()
-        self.assertIsNotNone(server)
-
-        # build launch args
-        launch_args += ["hello, world"]
-
-        self.add_no_ack_remote_stream()
-        self.add_verified_launch_packets(launch_args)
+        procs = self.prep_debug_monitor_and_inferior(
+                inferior_args=["hello, world"])
         self.test_sequence.add_log_lines(
             ["read packet: $vCont;c#a8",
              {"type": "output_match", "regex": self.maybe_strict_output_regex(r"hello, world\r\n")},
@@ -162,16 +130,7 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
         self.inferior_print_exit()
 
     def first_launch_stop_reply_thread_matches_first_qC(self):
-        launch_args = self.install_and_create_launch_args()
-
-        server = self.connect_to_debug_monitor()
-        self.assertIsNotNone(server)
-
-        # build launch args
-        launch_args += ["hello, world"]
-
-        self.add_no_ack_remote_stream()
-        self.add_verified_launch_packets(launch_args)
+        procs = self.prep_debug_monitor_and_inferior()
         self.test_sequence.add_log_lines(["read packet: $qC#00",
                                           {"direction": "send",
                                            "regex": r"^\$QC([0-9a-fA-F]+)#",
@@ -227,7 +186,6 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
         self.set_inferior_startup_attach()
         self.attach_commandline_continue_app_exits()
 
-    @expectedFailureNetBSD
     @llgs_test
     def test_attach_commandline_continue_app_exits_llgs(self):
         self.init_llgs_test()
@@ -236,14 +194,7 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
         self.attach_commandline_continue_app_exits()
 
     def qRegisterInfo_returns_one_valid_result(self):
-        launch_args = self.install_and_create_launch_args()
-
-        server = self.connect_to_debug_monitor()
-        self.assertIsNotNone(server)
-
-        # Build the expected protocol stream
-        self.add_no_ack_remote_stream()
-        self.add_verified_launch_packets(launch_args)
+        self.prep_debug_monitor_and_inferior()
         self.test_sequence.add_log_lines(
             ["read packet: $qRegisterInfo0#00",
              {"direction": "send", "regex": r"^\$(.+);#[0-9A-Fa-f]{2}", "capture": {1: "reginfo_0"}}],
@@ -272,14 +223,7 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
         self.qRegisterInfo_returns_one_valid_result()
 
     def qRegisterInfo_returns_all_valid_results(self):
-        launch_args = self.install_and_create_launch_args()
-
-        server = self.connect_to_debug_monitor()
-        self.assertIsNotNone(server)
-
-        # Build the expected protocol stream.
-        self.add_no_ack_remote_stream()
-        self.add_verified_launch_packets(launch_args)
+        self.prep_debug_monitor_and_inferior()
         self.add_register_info_collection_packets()
 
         # Run the stream.
@@ -304,14 +248,7 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
         self.qRegisterInfo_returns_all_valid_results()
 
     def qRegisterInfo_contains_required_generics(self):
-        launch_args = self.install_and_create_launch_args()
-
-        server = self.connect_to_debug_monitor()
-        self.assertIsNotNone(server)
-
-        # Build the expected protocol stream
-        self.add_no_ack_remote_stream()
-        self.add_verified_launch_packets(launch_args)
+        self.prep_debug_monitor_and_inferior()
         self.add_register_info_collection_packets()
 
         # Run the packet stream.
@@ -352,14 +289,7 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
         self.qRegisterInfo_contains_required_generics()
 
     def qRegisterInfo_contains_at_least_one_register_set(self):
-        launch_args = self.install_and_create_launch_args()
-
-        server = self.connect_to_debug_monitor()
-        self.assertIsNotNone(server)
-
-        # Build the expected protocol stream
-        self.add_no_ack_remote_stream()
-        self.add_verified_launch_packets(launch_args)
+        self.prep_debug_monitor_and_inferior()
         self.add_register_info_collection_packets()
 
         # Run the packet stream.
@@ -409,14 +339,7 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
         return " avx " in cpuinfo
 
     def qRegisterInfo_contains_avx_registers(self):
-        launch_args = self.install_and_create_launch_args()
-
-        server = self.connect_to_debug_monitor()
-        self.assertIsNotNone(server)
-
-        # Build the expected protocol stream
-        self.add_no_ack_remote_stream()
-        self.add_verified_launch_packets(launch_args)
+        self.prep_debug_monitor_and_inferior()
         self.add_register_info_collection_packets()
 
         # Run the packet stream.
@@ -434,7 +357,7 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
             "Advanced Vector Extensions" in register_sets)
 
     @expectedFailureAll(oslist=["windows"]) # no avx for now.
-    @expectedFailureNetBSD
+    @expectedFailureAll(oslist=["netbsd"])
     @llgs_test
     def test_qRegisterInfo_contains_avx_registers_llgs(self):
         self.init_llgs_test()
@@ -480,7 +403,6 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
         self.qThreadInfo_contains_thread()
 
     @expectedFailureAll(oslist=["windows"]) # expect one more thread stopped
-    @expectedFailureNetBSD
     @llgs_test
     def test_qThreadInfo_contains_thread_attach_llgs(self):
         self.init_llgs_test()
@@ -540,7 +462,6 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
         self.qThreadInfo_matches_qC()
 
     @expectedFailureAll(oslist=["windows"]) # expect one more thread stopped
-    @expectedFailureNetBSD
     @llgs_test
     def test_qThreadInfo_matches_qC_attach_llgs(self):
         self.init_llgs_test()
@@ -588,9 +509,15 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
             p_response = context.get("p_response")
             self.assertIsNotNone(p_response)
 
+            # Skip erraneous (unsupported) registers.
+            # TODO: remove this once we make unsupported registers disappear.
+            if p_response.startswith("E") and len(p_response) == 3:
+                continue
+
             if "dynamic_size_dwarf_expr_bytes" in reg_info:
                 self.updateRegInfoBitsize(reg_info, byte_order)
-            self.assertEqual(len(p_response), 2 * int(reg_info["bitsize"]) / 8)
+            self.assertEqual(len(p_response), 2 * int(reg_info["bitsize"]) / 8,
+                             reg_info)
 
             # Increment loop
             reg_index += 1
@@ -604,7 +531,7 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
         self.set_inferior_startup_launch()
         self.p_returns_correct_data_size_for_each_qRegisterInfo()
 
-    @expectedFailureNetBSD
+    @expectedFailureAll(oslist=["netbsd"])
     @llgs_test
     def test_p_returns_correct_data_size_for_each_qRegisterInfo_launch_llgs(
             self):
@@ -622,7 +549,7 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
         self.set_inferior_startup_attach()
         self.p_returns_correct_data_size_for_each_qRegisterInfo()
 
-    @expectedFailureNetBSD
+    @expectedFailureAll(oslist=["netbsd"])
     @llgs_test
     def test_p_returns_correct_data_size_for_each_qRegisterInfo_attach_llgs(
             self):
@@ -688,7 +615,6 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
         self.Hg_switches_to_3_threads()
 
     @expectedFailureAll(oslist=["windows"]) # expecting one more thread
-    @expectedFailureNetBSD
     @llgs_test
     def test_Hg_switches_to_3_threads_attach_llgs(self):
         self.init_llgs_test()
@@ -819,6 +745,7 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
         self.Hc_then_Csignal_signals_correct_thread(self.TARGET_EXC_BAD_ACCESS)
 
     @skipIfWindows # no SIGSEGV support
+    @expectedFailureAll(oslist=["freebsd"], bugnumber="llvm.org/pr48419")
     @expectedFailureNetBSD
     @llgs_test
     def test_Hc_then_Csignal_signals_correct_thread_launch_llgs(self):
@@ -916,6 +843,7 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
         self.qMemoryRegionInfo_is_supported()
 
     @llgs_test
+    @expectedFailureAll(oslist=["freebsd"])
     def test_qMemoryRegionInfo_is_supported_llgs(self):
         self.init_llgs_test()
         self.build()
@@ -980,6 +908,7 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
         self.qMemoryRegionInfo_reports_code_address_as_executable()
 
     @skipIfWindows # No pty support to test any inferior output
+    @expectedFailureAll(oslist=["freebsd"])
     @llgs_test
     def test_qMemoryRegionInfo_reports_code_address_as_executable_llgs(self):
         self.init_llgs_test()
@@ -1046,6 +975,7 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
         self.qMemoryRegionInfo_reports_stack_address_as_readable_writeable()
 
     @skipIfWindows # No pty support to test any inferior output
+    @expectedFailureAll(oslist=["freebsd"])
     @llgs_test
     def test_qMemoryRegionInfo_reports_stack_address_as_readable_writeable_llgs(
             self):
@@ -1112,6 +1042,7 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase, DwarfOpcod
         self.qMemoryRegionInfo_reports_heap_address_as_readable_writeable()
 
     @skipIfWindows # No pty support to test any inferior output
+    @expectedFailureAll(oslist=["freebsd"])
     @llgs_test
     def test_qMemoryRegionInfo_reports_heap_address_as_readable_writeable_llgs(
             self):

@@ -41,6 +41,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <forward_list>
 #include <memory>
 #include <string>
 #include <system_error>
@@ -93,6 +94,11 @@ static cl::opt<bool> PrintExternalCommands(
     cl::desc("Print any external commands that are to be executed "
              "instead of actually executing them - for testing purposes.\n"),
     cl::init(false), cl::cat(ClangOffloadBundlerCategory));
+
+static cl::opt<unsigned>
+    BundleAlignment("bundle-align",
+                    cl::desc("Alignment of bundle for binary files"),
+                    cl::init(1), cl::cat(ClangOffloadBundlerCategory));
 
 /// Magic string that marks the existence of offloading data.
 #define OFFLOAD_BUNDLER_MAGIC_STR "__CLANG_OFFLOAD_BUNDLE__"
@@ -223,6 +229,9 @@ class BinaryFileHandler final : public FileHandler {
   StringMap<BundleInfo>::iterator CurBundleInfo;
   StringMap<BundleInfo>::iterator NextBundleInfo;
 
+  /// Current bundle target to be written.
+  std::string CurWriteBundleTarget;
+
 public:
   BinaryFileHandler() : FileHandler() {}
 
@@ -337,10 +346,12 @@ public:
     unsigned Idx = 0;
     for (auto &T : TargetNames) {
       MemoryBuffer &MB = *Inputs[Idx++];
+      HeaderSize = alignTo(HeaderSize, BundleAlignment);
       // Bundle offset.
       Write8byteIntegerToBuffer(OS, HeaderSize);
       // Size of the bundle (adds to the next bundle's offset)
       Write8byteIntegerToBuffer(OS, MB.getBufferSize());
+      BundlesInfo[T] = BundleInfo(MB.getBufferSize(), HeaderSize);
       HeaderSize += MB.getBufferSize();
       // Size of the triple
       Write8byteIntegerToBuffer(OS, T.size());
@@ -351,6 +362,7 @@ public:
   }
 
   Error WriteBundleStart(raw_fd_ostream &OS, StringRef TargetTriple) final {
+    CurWriteBundleTarget = TargetTriple.str();
     return Error::success();
   }
 
@@ -359,6 +371,8 @@ public:
   }
 
   Error WriteBundle(raw_fd_ostream &OS, MemoryBuffer &Input) final {
+    auto BI = BundlesInfo[CurWriteBundleTarget];
+    OS.seek(BI.Offset);
     OS.write(Input.getBufferStart(), Input.getBufferSize());
     return Error::success();
   }
@@ -381,7 +395,7 @@ public:
     if (std::error_code EC =
             sys::fs::createTemporaryFile("clang-offload-bundler", "tmp", File))
       return createFileError(File, EC);
-    Files.push_back(File);
+    Files.push_front(File);
 
     if (Contents) {
       std::error_code EC;
@@ -390,11 +404,11 @@ public:
         return createFileError(File, EC);
       OS.write(Contents->data(), Contents->size());
     }
-    return Files.back();
+    return Files.front();
   }
 
 private:
-  SmallVector<SmallString<128u>, 4u> Files;
+  std::forward_list<SmallString<128u>> Files;
 };
 
 } // end anonymous namespace
@@ -1012,7 +1026,9 @@ int main(int argc, const char **argv) {
 
   // Save the current executable directory as it will be useful to find other
   // tools.
-  BundlerExecutable = sys::fs::getMainExecutable(argv[0], &BundlerExecutable);
+  BundlerExecutable = argv[0];
+  if (!llvm::sys::fs::exists(BundlerExecutable))
+    BundlerExecutable = sys::fs::getMainExecutable(argv[0], &BundlerExecutable);
 
   if (llvm::Error Err = Unbundle ? UnbundleFiles() : BundleFiles()) {
     reportError(std::move(Err));

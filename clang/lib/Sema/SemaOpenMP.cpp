@@ -48,7 +48,7 @@ using namespace llvm::omp;
 static const Expr *checkMapClauseExpressionBase(
     Sema &SemaRef, Expr *E,
     OMPClauseMappableExprCommon::MappableExprComponentList &CurComponents,
-    OpenMPClauseKind CKind, bool NoDiagnose);
+    OpenMPClauseKind CKind, OpenMPDirectiveKind DKind, bool NoDiagnose);
 
 namespace {
 /// Default data sharing attributes, which can be applied to directive.
@@ -1896,27 +1896,27 @@ enum class FunctionEmissionStatus {
 };
 } // anonymous namespace
 
-Sema::DeviceDiagBuilder Sema::diagIfOpenMPDeviceCode(SourceLocation Loc,
-                                                     unsigned DiagID) {
+Sema::SemaDiagnosticBuilder Sema::diagIfOpenMPDeviceCode(SourceLocation Loc,
+                                                         unsigned DiagID) {
   assert(LangOpts.OpenMP && LangOpts.OpenMPIsDevice &&
          "Expected OpenMP device compilation.");
 
   FunctionDecl *FD = getCurFunctionDecl();
-  DeviceDiagBuilder::Kind Kind = DeviceDiagBuilder::K_Nop;
+  SemaDiagnosticBuilder::Kind Kind = SemaDiagnosticBuilder::K_Nop;
   if (FD) {
     FunctionEmissionStatus FES = getEmissionStatus(FD);
     switch (FES) {
     case FunctionEmissionStatus::Emitted:
-      Kind = DeviceDiagBuilder::K_Immediate;
+      Kind = SemaDiagnosticBuilder::K_Immediate;
       break;
     case FunctionEmissionStatus::Unknown:
       Kind = isOpenMPDeviceDelayedContext(*this)
-                 ? DeviceDiagBuilder::K_Deferred
-                 : DeviceDiagBuilder::K_Immediate;
+                 ? SemaDiagnosticBuilder::K_Deferred
+                 : SemaDiagnosticBuilder::K_Immediate;
       break;
     case FunctionEmissionStatus::TemplateDiscarded:
     case FunctionEmissionStatus::OMPDiscarded:
-      Kind = DeviceDiagBuilder::K_Nop;
+      Kind = SemaDiagnosticBuilder::K_Nop;
       break;
     case FunctionEmissionStatus::CUDADiscarded:
       llvm_unreachable("CUDADiscarded unexpected in OpenMP device compilation");
@@ -1924,30 +1924,30 @@ Sema::DeviceDiagBuilder Sema::diagIfOpenMPDeviceCode(SourceLocation Loc,
     }
   }
 
-  return DeviceDiagBuilder(Kind, Loc, DiagID, getCurFunctionDecl(), *this);
+  return SemaDiagnosticBuilder(Kind, Loc, DiagID, getCurFunctionDecl(), *this);
 }
 
-Sema::DeviceDiagBuilder Sema::diagIfOpenMPHostCode(SourceLocation Loc,
-                                                   unsigned DiagID) {
+Sema::SemaDiagnosticBuilder Sema::diagIfOpenMPHostCode(SourceLocation Loc,
+                                                       unsigned DiagID) {
   assert(LangOpts.OpenMP && !LangOpts.OpenMPIsDevice &&
          "Expected OpenMP host compilation.");
   FunctionEmissionStatus FES = getEmissionStatus(getCurFunctionDecl());
-  DeviceDiagBuilder::Kind Kind = DeviceDiagBuilder::K_Nop;
+  SemaDiagnosticBuilder::Kind Kind = SemaDiagnosticBuilder::K_Nop;
   switch (FES) {
   case FunctionEmissionStatus::Emitted:
-    Kind = DeviceDiagBuilder::K_Immediate;
+    Kind = SemaDiagnosticBuilder::K_Immediate;
     break;
   case FunctionEmissionStatus::Unknown:
-    Kind = DeviceDiagBuilder::K_Deferred;
+    Kind = SemaDiagnosticBuilder::K_Deferred;
     break;
   case FunctionEmissionStatus::TemplateDiscarded:
   case FunctionEmissionStatus::OMPDiscarded:
   case FunctionEmissionStatus::CUDADiscarded:
-    Kind = DeviceDiagBuilder::K_Nop;
+    Kind = SemaDiagnosticBuilder::K_Nop;
     break;
   }
 
-  return DeviceDiagBuilder(Kind, Loc, DiagID, getCurFunctionDecl(), *this);
+  return SemaDiagnosticBuilder(Kind, Loc, DiagID, getCurFunctionDecl(), *this);
 }
 
 static OpenMPDefaultmapClauseKind
@@ -3339,12 +3339,15 @@ class DSAAttrChecker final : public StmtVisitor<DSAAttrChecker, void> {
 
   void VisitSubCaptures(OMPExecutableDirective *S) {
     // Check implicitly captured variables.
-    if (!S->hasAssociatedStmt() || !S->getAssociatedStmt() ||
-        S->getDirectiveKind() == OMPD_atomic ||
+    if (!S->hasAssociatedStmt() || !S->getAssociatedStmt())
+      return;
+    if (S->getDirectiveKind() == OMPD_atomic ||
         S->getDirectiveKind() == OMPD_critical ||
         S->getDirectiveKind() == OMPD_section ||
-        S->getDirectiveKind() == OMPD_master)
+        S->getDirectiveKind() == OMPD_master) {
+      Visit(S->getAssociatedStmt());
       return;
+    }
     visitSubCaptures(S->getInnermostCapturedStmt());
     // Try to capture inner this->member references to generate correct mappings
     // and diagnostics.
@@ -3637,6 +3640,7 @@ public:
     if (isOpenMPTargetExecutionDirective(DKind)) {
       OMPClauseMappableExprCommon::MappableExprComponentList CurComponents;
       if (!checkMapClauseExpressionBase(SemaRef, E, CurComponents, OMPC_map,
+                                        Stack->getCurrentDirective(),
                                         /*NoDiagnose=*/true))
         return;
       const auto *VD = cast<ValueDecl>(
@@ -3686,7 +3690,8 @@ public:
       // Skip analysis of arguments of implicitly defined map clause for target
       // directives.
       if (C && !((isa<OMPFirstprivateClause>(C) || isa<OMPMapClause>(C)) &&
-                 C->isImplicit())) {
+                 C->isImplicit() &&
+                 !isOpenMPTaskingDirective(Stack->getCurrentDirective()))) {
         for (Stmt *CC : C->children()) {
           if (CC)
             Visit(CC);
@@ -4194,6 +4199,7 @@ static OMPCapturedExprDecl *buildCaptureDecl(Sema &S, IdentifierInfo *Id,
   if (!WithInit)
     CED->addAttr(OMPCaptureNoInitAttr::CreateImplicit(C));
   S.CurContext->addHiddenDecl(CED);
+  Sema::TentativeAnalysisScope Trap(S);
   S.AddInitializerToDecl(CED, Init, /*DirectInit=*/false);
   return CED;
 }
@@ -5836,7 +5842,8 @@ Sema::DeclGroupPtrTy Sema::ActOnOpenMPDeclareSimdDirective(
       NewStep = PerformOpenMPImplicitIntegerConversion(Step->getExprLoc(), Step)
                     .get();
       if (NewStep)
-        NewStep = VerifyIntegerConstantExpression(NewStep).get();
+        NewStep =
+            VerifyIntegerConstantExpression(NewStep, /*FIXME*/ AllowFold).get();
     }
     NewSteps.push_back(NewStep);
   }
@@ -5900,8 +5907,10 @@ void Sema::ActOnStartOfFunctionDefinitionInOpenMPDeclareVariantScope(
   TypeSourceInfo *TInfo = GetTypeForDeclarator(D, S);
   QualType FType = TInfo->getType();
 
-  bool IsConstexpr = D.getDeclSpec().getConstexprSpecifier() == CSK_constexpr;
-  bool IsConsteval = D.getDeclSpec().getConstexprSpecifier() == CSK_consteval;
+  bool IsConstexpr =
+      D.getDeclSpec().getConstexprSpecifier() == ConstexprSpecKind::Constexpr;
+  bool IsConsteval =
+      D.getDeclSpec().getConstexprSpecifier() == ConstexprSpecKind::Consteval;
 
   for (auto *Candidate : Lookup) {
     auto *CandidateDecl = Candidate->getUnderlyingDecl();
@@ -5921,7 +5930,6 @@ void Sema::ActOnStartOfFunctionDefinitionInOpenMPDeclareVariantScope(
       continue;
 
     QualType UDeclTy = UDecl->getType();
-    // TODO: Verify types for templates eventually.
     if (!UDeclTy->isDependentType()) {
       QualType NewType = Context.mergeFunctionTypes(
           FType, UDeclTy, /* OfBlockPointer */ false,
@@ -5938,7 +5946,7 @@ void Sema::ActOnStartOfFunctionDefinitionInOpenMPDeclareVariantScope(
       llvm::omp::TraitProperty::implementation_extension_disable_implicit_base);
   // If no base was found we create a declaration that we use as base.
   if (Bases.empty() && UseImplicitBase) {
-    D.setFunctionDefinitionKind(FDK_Declaration);
+    D.setFunctionDefinitionKind(FunctionDefinitionKind::Declaration);
     Decl *BaseD = HandleDeclarator(S, D, TemplateParamLists);
     BaseD->setImplicit(true);
     if (auto *BaseTemplD = dyn_cast<FunctionTemplateDecl>(BaseD))
@@ -6009,6 +6017,8 @@ ExprResult Sema::ActOnOpenMPCall(ExprResult Call, Scope *Scope,
   TargetOMPContext OMPCtx(Context, std::move(DiagUnknownTrait),
                           getCurFunctionDecl());
 
+  QualType CalleeFnType = CalleeFnDecl->getType();
+
   SmallVector<Expr *, 4> Exprs;
   SmallVector<VariantMatchInfo, 4> VMIs;
   while (CalleeFnDecl) {
@@ -6061,8 +6071,19 @@ ExprResult Sema::ActOnOpenMPCall(ExprResult Call, Scope *Scope,
       }
       NewCall = BuildCallExpr(Scope, BestExpr, LParenLoc, ArgExprs, RParenLoc,
                               ExecConfig);
-      if (NewCall.isUsable())
-        break;
+      if (NewCall.isUsable()) {
+        if (CallExpr *NCE = dyn_cast<CallExpr>(NewCall.get())) {
+          FunctionDecl *NewCalleeFnDecl = NCE->getDirectCallee();
+          QualType NewType = Context.mergeFunctionTypes(
+              CalleeFnType, NewCalleeFnDecl->getType(),
+              /* OfBlockPointer */ false,
+              /* Unqualified */ false, /* AllowCXX */ true);
+          if (!NewType.isNull())
+            break;
+          // Don't use the call if the function type was not compatible.
+          NewCall = nullptr;
+        }
+      }
     }
 
     VMIs.erase(VMIs.begin() + BestIdx);
@@ -7563,6 +7584,7 @@ std::pair<Expr *, Expr *> OpenMPIterationSpaceChecker::buildMinMaxValues(
   if (!Diff.isUsable())
     return std::make_pair(nullptr, nullptr);
 
+  Sema::TentativeAnalysisScope Trap(SemaRef);
   Diff = SemaRef.ActOnFinishFullExpr(Diff.get(), /*DiscardedValue=*/false);
   if (!Diff.isUsable())
     return std::make_pair(nullptr, nullptr);
@@ -12800,7 +12822,8 @@ ExprResult Sema::VerifyPositiveIntegerConstantInClause(Expr *E,
       E->isInstantiationDependent() || E->containsUnexpandedParameterPack())
     return E;
   llvm::APSInt Result;
-  ExprResult ICE = VerifyIntegerConstantExpression(E, &Result);
+  ExprResult ICE =
+      VerifyIntegerConstantExpression(E, &Result, /*FIXME*/ AllowFold);
   if (ICE.isInvalid())
     return ExprError();
   if ((StrictlyPositive && !Result.isStrictlyPositive()) ||
@@ -16794,11 +16817,14 @@ namespace {
 class MapBaseChecker final : public StmtVisitor<MapBaseChecker, bool> {
   Sema &SemaRef;
   OpenMPClauseKind CKind = OMPC_unknown;
+  OpenMPDirectiveKind DKind = OMPD_unknown;
   OMPClauseMappableExprCommon::MappableExprComponentList &Components;
+  bool IsNonContiguous = false;
   bool NoDiagnose = false;
   const Expr *RelevantExpr = nullptr;
   bool AllowUnitySizeArraySection = true;
   bool AllowWholeSizeArraySection = true;
+  bool AllowAnotherPtr = true;
   SourceLocation ELoc;
   SourceRange ERange;
 
@@ -16823,7 +16849,7 @@ public:
     assert(!RelevantExpr && "RelevantExpr is expected to be nullptr");
     RelevantExpr = DRE;
     // Record the component.
-    Components.emplace_back(DRE, DRE->getDecl());
+    Components.emplace_back(DRE, DRE->getDecl(), IsNonContiguous);
     return true;
   }
 
@@ -16895,7 +16921,7 @@ public:
     AllowWholeSizeArraySection = false;
 
     // Record the component.
-    Components.emplace_back(ME, FD);
+    Components.emplace_back(ME, FD, IsNonContiguous);
     return RelevantExpr || Visit(E);
   }
 
@@ -16933,7 +16959,7 @@ public:
     }
 
     // Record the component - we don't have any declaration associated.
-    Components.emplace_back(AE, nullptr);
+    Components.emplace_back(AE, nullptr, IsNonContiguous);
 
     return RelevantExpr || Visit(E);
   }
@@ -16972,6 +16998,13 @@ public:
       // pointer. Otherwise, only unitary sections are accepted.
       if (NotWhole || IsPointer)
         AllowWholeSizeArraySection = false;
+    } else if (DKind == OMPD_target_update &&
+               SemaRef.getLangOpts().OpenMP >= 50) {
+      if (IsPointer && !AllowAnotherPtr)
+        SemaRef.Diag(ELoc, diag::err_omp_section_length_undefined)
+            << /*array of unknown bound */ 1;
+      else
+        IsNonContiguous = true;
     } else if (AllowUnitySizeArraySection && NotUnity) {
       // A unity or whole array section is not allowed and that is not
       // compatible with the properties of the current array section.
@@ -16980,6 +17013,9 @@ public:
         << OASE->getSourceRange();
       return false;
     }
+
+    if (IsPointer)
+      AllowAnotherPtr = false;
 
     if (const auto *TE = dyn_cast<CXXThisExpr>(E)) {
       Expr::EvalResult ResultR;
@@ -17006,14 +17042,14 @@ public:
     }
 
     // Record the component - we don't have any declaration associated.
-    Components.emplace_back(OASE, nullptr);
+    Components.emplace_back(OASE, nullptr, /*IsNonContiguous=*/false);
     return RelevantExpr || Visit(E);
   }
   bool VisitOMPArrayShapingExpr(OMPArrayShapingExpr *E) {
     Expr *Base = E->getBase();
 
     // Record the component - we don't have any declaration associated.
-    Components.emplace_back(E, nullptr);
+    Components.emplace_back(E, nullptr, IsNonContiguous);
 
     return Visit(Base->IgnoreParenImpCasts());
   }
@@ -17026,7 +17062,7 @@ public:
     }
     if (!RelevantExpr) {
       // Record the component if haven't found base decl.
-      Components.emplace_back(UO, nullptr);
+      Components.emplace_back(UO, nullptr, /*IsNonContiguous=*/false);
     }
     return RelevantExpr || Visit(UO->getSubExpr()->IgnoreParenImpCasts());
   }
@@ -17042,7 +17078,7 @@ public:
     // know the other subtree is just an offset)
     Expr *LE = BO->getLHS()->IgnoreParenImpCasts();
     Expr *RE = BO->getRHS()->IgnoreParenImpCasts();
-    Components.emplace_back(BO, nullptr);
+    Components.emplace_back(BO, nullptr, false);
     assert((LE->getType().getTypePtr() == BO->getType().getTypePtr() ||
             RE->getType().getTypePtr() == BO->getType().getTypePtr()) &&
            "Either LHS or RHS have base decl inside");
@@ -17053,12 +17089,12 @@ public:
   bool VisitCXXThisExpr(CXXThisExpr *CTE) {
     assert(!RelevantExpr && "RelevantExpr is expected to be nullptr");
     RelevantExpr = CTE;
-    Components.emplace_back(CTE, nullptr);
+    Components.emplace_back(CTE, nullptr, IsNonContiguous);
     return true;
   }
   bool VisitCXXOperatorCallExpr(CXXOperatorCallExpr *COCE) {
     assert(!RelevantExpr && "RelevantExpr is expected to be nullptr");
-    Components.emplace_back(COCE, nullptr);
+    Components.emplace_back(COCE, nullptr, IsNonContiguous);
     return true;
   }
   bool VisitStmt(Stmt *) {
@@ -17069,10 +17105,10 @@ public:
     return RelevantExpr;
   }
   explicit MapBaseChecker(
-      Sema &SemaRef, OpenMPClauseKind CKind,
+      Sema &SemaRef, OpenMPClauseKind CKind, OpenMPDirectiveKind DKind,
       OMPClauseMappableExprCommon::MappableExprComponentList &Components,
       bool NoDiagnose, SourceLocation &ELoc, SourceRange &ERange)
-      : SemaRef(SemaRef), CKind(CKind), Components(Components),
+      : SemaRef(SemaRef), CKind(CKind), DKind(DKind), Components(Components),
         NoDiagnose(NoDiagnose), ELoc(ELoc), ERange(ERange) {}
 };
 } // namespace
@@ -17084,13 +17120,30 @@ public:
 static const Expr *checkMapClauseExpressionBase(
     Sema &SemaRef, Expr *E,
     OMPClauseMappableExprCommon::MappableExprComponentList &CurComponents,
-    OpenMPClauseKind CKind, bool NoDiagnose) {
+    OpenMPClauseKind CKind, OpenMPDirectiveKind DKind, bool NoDiagnose) {
   SourceLocation ELoc = E->getExprLoc();
   SourceRange ERange = E->getSourceRange();
-  MapBaseChecker Checker(SemaRef, CKind, CurComponents, NoDiagnose, ELoc,
+  MapBaseChecker Checker(SemaRef, CKind, DKind, CurComponents, NoDiagnose, ELoc,
                          ERange);
-  if (Checker.Visit(E->IgnoreParens()))
+  if (Checker.Visit(E->IgnoreParens())) {
+    // Check if the highest dimension array section has length specified
+    if (SemaRef.getLangOpts().OpenMP >= 50 && !CurComponents.empty() &&
+        (CKind == OMPC_to || CKind == OMPC_from)) {
+      auto CI = CurComponents.rbegin();
+      auto CE = CurComponents.rend();
+      for (; CI != CE; ++CI) {
+        const auto *OASE =
+            dyn_cast<OMPArraySectionExpr>(CI->getAssociatedExpression());
+        if (!OASE)
+          continue;
+        if (OASE && OASE->getLength())
+          break;
+        SemaRef.Diag(ELoc, diag::err_array_section_does_not_specify_length)
+            << ERange;
+      }
+    }
     return Checker.getFoundBase();
+  }
   return nullptr;
 }
 
@@ -17501,6 +17554,7 @@ static void checkMappableExpressionList(
     auto &DeclNames = SemaRef.getASTContext().DeclarationNames;
     MapperId.setName(DeclNames.getIdentifier(
         &SemaRef.getASTContext().Idents.get("default")));
+    MapperId.setLoc(StartLoc);
   }
 
   // Iterators to find the current unresolved mapper expression.
@@ -17567,7 +17621,8 @@ static void checkMappableExpressionList(
     // Obtain the array or member expression bases if required. Also, fill the
     // components array with all the components identified in the process.
     const Expr *BE = checkMapClauseExpressionBase(
-        SemaRef, SimpleExpr, CurComponents, CKind, /*NoDiagnose=*/false);
+        SemaRef, SimpleExpr, CurComponents, CKind, DSAS->getCurrentDirective(),
+        /*NoDiagnose=*/false);
     if (!BE)
       continue;
 
@@ -18867,8 +18922,8 @@ OMPClause *Sema::ActOnOpenMPUseDevicePtrClause(ArrayRef<Expr *> VarList,
     // only need a component.
     MVLI.VarBaseDeclarations.push_back(D);
     MVLI.VarComponents.resize(MVLI.VarComponents.size() + 1);
-    MVLI.VarComponents.back().push_back(
-        OMPClauseMappableExprCommon::MappableComponent(SimpleRefExpr, D));
+    MVLI.VarComponents.back().emplace_back(SimpleRefExpr, D,
+                                           /*IsNonContiguous=*/false);
   }
 
   if (MVLI.ProcessedVarList.empty())
@@ -18919,8 +18974,8 @@ OMPClause *Sema::ActOnOpenMPUseDeviceAddrClause(ArrayRef<Expr *> VarList,
     if (VD && (isa<OMPArraySectionExpr>(RefExpr->IgnoreParenImpCasts()) ||
                isa<ArraySubscriptExpr>(RefExpr->IgnoreParenImpCasts())))
       Component = DefaultFunctionArrayLvalueConversion(SimpleRefExpr).get();
-    MVLI.VarComponents.back().push_back(
-        OMPClauseMappableExprCommon::MappableComponent(Component, D));
+    MVLI.VarComponents.back().emplace_back(Component, D,
+                                           /*IsNonContiguous=*/false);
   }
 
   if (MVLI.ProcessedVarList.empty())
@@ -18986,7 +19041,8 @@ OMPClause *Sema::ActOnOpenMPIsDevicePtrClause(ArrayRef<Expr *> VarList,
 
     // Store the components in the stack so that they can be used to check
     // against other clauses later on.
-    OMPClauseMappableExprCommon::MappableComponent MC(SimpleRefExpr, D);
+    OMPClauseMappableExprCommon::MappableComponent MC(
+        SimpleRefExpr, D, /*IsNonContiguous=*/false);
     DSAStack->addMappableExpressionComponents(
         D, MC, /*WhereFoundClauseKind=*/OMPC_is_device_ptr);
 

@@ -38,7 +38,6 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Operator.h"
-#include "llvm/Support/AlignOf.h"
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -181,7 +180,7 @@ public:
   }
 
   uint64_t getScalarValueSizeInBits() const {
-    return getValueType().getScalarType().getSizeInBits().getFixedSize();
+    return getValueType().getScalarType().getFixedSizeInBits();
   }
 
   // Forwarding methods - These forward to the corresponding methods in SDNode.
@@ -523,6 +522,7 @@ BEGIN_TWO_BYTE_PACK()
   class StoreSDNodeBitfields {
     friend class StoreSDNode;
     friend class MaskedStoreSDNode;
+    friend class MaskedScatterSDNode;
 
     uint16_t : NumLSBaseSDNodeBits;
 
@@ -1748,6 +1748,32 @@ public:
   }
 };
 
+/// This SDNode is used for PSEUDO_PROBE values, which are the function guid and
+/// the index of the basic block being probed. A pseudo probe serves as a place
+/// holder and will be removed at the end of compilation. It does not have any
+/// operand because we do not want the instruction selection to deal with any.
+class PseudoProbeSDNode : public SDNode {
+  friend class SelectionDAG;
+  uint64_t Guid;
+  uint64_t Index;
+  uint32_t Attributes;
+
+  PseudoProbeSDNode(unsigned Opcode, unsigned Order, const DebugLoc &Dl,
+                    SDVTList VTs, uint64_t Guid, uint64_t Index, uint32_t Attr)
+      : SDNode(Opcode, Order, Dl, VTs), Guid(Guid), Index(Index),
+        Attributes(Attr) {}
+
+public:
+  uint64_t getGuid() const { return Guid; }
+  uint64_t getIndex() const { return Index; }
+  uint32_t getAttributes() const { return Attributes; }
+
+  // Methods to support isa and dyn_cast
+  static bool classof(const SDNode *N) {
+    return N->getOpcode() == ISD::PSEUDO_PROBE;
+  }
+};
+
 class JumpTableSDNode : public SDNode {
   friend class SelectionDAG;
 
@@ -1907,6 +1933,33 @@ public:
   /// If passed a non-null UndefElements bitvector, it will resize it to match
   /// the vector width and set the bits where elements are undef.
   SDValue getSplatValue(BitVector *UndefElements = nullptr) const;
+
+  /// Find the shortest repeating sequence of values in the build vector.
+  ///
+  /// e.g. { u, X, u, X, u, u, X, u } -> { X }
+  ///      { X, Y, u, Y, u, u, X, u } -> { X, Y }
+  ///
+  /// Currently this must be a power-of-2 build vector.
+  /// The DemandedElts mask indicates the elements that must be present,
+  /// undemanded elements in Sequence may be null (SDValue()). If passed a
+  /// non-null UndefElements bitvector, it will resize it to match the original
+  /// vector width and set the bits where elements are undef. If result is
+  /// false, Sequence will be empty.
+  bool getRepeatedSequence(const APInt &DemandedElts,
+                           SmallVectorImpl<SDValue> &Sequence,
+                           BitVector *UndefElements = nullptr) const;
+
+  /// Find the shortest repeating sequence of values in the build vector.
+  ///
+  /// e.g. { u, X, u, X, u, u, X, u } -> { X }
+  ///      { X, Y, u, Y, u, u, X, u } -> { X, Y }
+  ///
+  /// Currently this must be a power-of-2 build vector.
+  /// If passed a non-null UndefElements bitvector, it will resize it to match
+  /// the original vector width and set the bits where elements are undef.
+  /// If result is false, Sequence will be empty.
+  bool getRepeatedSequence(SmallVectorImpl<SDValue> &Sequence,
+                           BitVector *UndefElements = nullptr) const;
 
   /// Returns the demanded splatted constant or null if this is not a constant
   /// splat.
@@ -2363,6 +2416,9 @@ public:
   ISD::MemIndexType getIndexType() const {
     return static_cast<ISD::MemIndexType>(LSBaseSDNodeBits.AddressingMode);
   }
+  void setIndexType(ISD::MemIndexType IndexType) {
+    LSBaseSDNodeBits.AddressingMode = IndexType;
+  }
   bool isIndexScaled() const {
     return (getIndexType() == ISD::SIGNED_SCALED) ||
            (getIndexType() == ISD::UNSIGNED_SCALED);
@@ -2414,9 +2470,16 @@ public:
 
   MaskedScatterSDNode(unsigned Order, const DebugLoc &dl, SDVTList VTs,
                       EVT MemVT, MachineMemOperand *MMO,
-                      ISD::MemIndexType IndexType)
+                      ISD::MemIndexType IndexType, bool IsTrunc)
       : MaskedGatherScatterSDNode(ISD::MSCATTER, Order, dl, VTs, MemVT, MMO,
-                                  IndexType) {}
+                                  IndexType) {
+    StoreSDNodeBits.IsTruncating = IsTrunc;
+  }
+
+  /// Return true if the op does a truncation before store.
+  /// For integers this is the same as doing a TRUNCATE and storing the result.
+  /// For floats, it is the same as doing an FP_ROUND and storing the result.
+  bool isTruncatingStore() const { return StoreSDNodeBits.IsTruncating; }
 
   const SDValue &getValue() const { return getOperand(1); }
 
@@ -2564,9 +2627,9 @@ template <> struct GraphTraits<SDNode*> {
 ///
 /// This needs to be a union because the largest node differs on 32 bit systems
 /// with 4 and 8 byte pointer alignment, respectively.
-using LargestSDNode = AlignedCharArrayUnion<AtomicSDNode, TargetIndexSDNode,
-                                            BlockAddressSDNode,
-                                            GlobalAddressSDNode>;
+using LargestSDNode =
+    std::aligned_union_t<1, AtomicSDNode, TargetIndexSDNode, BlockAddressSDNode,
+                         GlobalAddressSDNode, PseudoProbeSDNode>;
 
 /// The SDNode class with the greatest alignment requirement.
 using MostAlignedSDNode = GlobalAddressSDNode;

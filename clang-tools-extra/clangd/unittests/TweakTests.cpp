@@ -215,26 +215,26 @@ TEST_F(ExtractVariableTest, Test) {
         int x = [[1]], y = [[a + 1]], a = [[1]], z = a + 1;
       // if without else
       if([[1]])
-        a = [[1]];
+        a = [[1]] + 1;
       // if with else
       if(a < [[3]])
         if(a == [[4]])
-          a = [[5]];
+          a = [[5]] + 1;
         else
-          a = [[5]];
+          a = [[5]] + 1;
       else if (a < [[4]])
-        a = [[4]];
+        a = [[4]] + 1;
       else
-        a = [[5]];
+        a = [[5]] + 1;
       // for loop
-      for(a = [[1]]; a > [[[[3]] + [[4]]]]; a++)
-        a = [[2]];
+      for(a = [[1]] + 1; a > [[[[3]] + [[4]]]]; a++)
+        a = [[2]] + 1;
       // while
       while(a < [[1]])
-        a = [[1]];
+        a = [[1]] + 1;
       // do while
       do
-        a = [[1]];
+        a = [[1]] + 1;
       while(a < [[3]]);
     }
   )cpp";
@@ -291,6 +291,7 @@ TEST_F(ExtractVariableTest, Test) {
       xyz([[a *= 5]]);
       // Variable DeclRefExpr
       a = [[b]];
+      a = [[xyz()]];
       // statement expression
       [[xyz()]];
       while (a)
@@ -304,138 +305,137 @@ TEST_F(ExtractVariableTest, Test) {
   EXPECT_UNAVAILABLE(UnavailableCases);
 
   // vector of pairs of input and output strings
-  const std::vector<std::pair<std::string, std::string>>
-      InputOutputs = {
-          // extraction from variable declaration/assignment
-          {R"cpp(void varDecl() {
+  const std::vector<std::pair<std::string, std::string>> InputOutputs = {
+      // extraction from variable declaration/assignment
+      {R"cpp(void varDecl() {
                    int a = 5 * (4 + (3 [[- 1)]]);
                  })cpp",
-           R"cpp(void varDecl() {
+       R"cpp(void varDecl() {
                    auto dummy = (3 - 1); int a = 5 * (4 + dummy);
                  })cpp"},
-          // FIXME: extraction from switch case
-          /*{R"cpp(void f(int a) {
-                   if(1)
-                     while(a < 1)
-                       switch (1) {
-                           case 1:
-                             a = [[1 + 2]];
-                             break;
-                           default:
-                             break;
-                       }
-                 })cpp",
-           R"cpp(void f(int a) {
-                   auto dummy = 1 + 2; if(1)
-                     while(a < 1)
-                       switch (1) {
-                           case 1:
-                             a = dummy;
-                             break;
-                           default:
-                             break;
-                       }
-                 })cpp"},*/
-          // Macros
-          {R"cpp(#define PLUS(x) x++
+      // FIXME: extraction from switch case
+      /*{R"cpp(void f(int a) {
+               if(1)
+                 while(a < 1)
+                   switch (1) {
+                       case 1:
+                         a = [[1 + 2]];
+                         break;
+                       default:
+                         break;
+                   }
+             })cpp",
+       R"cpp(void f(int a) {
+               auto dummy = 1 + 2; if(1)
+                 while(a < 1)
+                   switch (1) {
+                       case 1:
+                         a = dummy;
+                         break;
+                       default:
+                         break;
+                   }
+             })cpp"},*/
+      // Macros
+      {R"cpp(#define PLUS(x) x++
                  void f(int a) {
                    int y = PLUS([[1+a]]);
                  })cpp",
-           /*FIXME: It should be extracted like this.
-            R"cpp(#define PLUS(x) x++
-                  void f(int a) {
-                    auto dummy = 1+a; int y = PLUS(dummy);
-                  })cpp"},*/
-           R"cpp(#define PLUS(x) x++
+       /*FIXME: It should be extracted like this.
+        R"cpp(#define PLUS(x) x++
+              void f(int a) {
+                auto dummy = 1+a; int y = PLUS(dummy);
+              })cpp"},*/
+       R"cpp(#define PLUS(x) x++
                  void f(int a) {
                    auto dummy = PLUS(1+a); int y = dummy;
                  })cpp"},
-          // ensure InsertionPoint isn't inside a macro
-          {R"cpp(#define LOOP(x) while (1) {a = x;}
+      // ensure InsertionPoint isn't inside a macro
+      {R"cpp(#define LOOP(x) while (1) {a = x;}
                  void f(int a) {
                    if(1)
                     LOOP(5 + [[3]])
                  })cpp",
-            R"cpp(#define LOOP(x) while (1) {a = x;}
+       R"cpp(#define LOOP(x) while (1) {a = x;}
                  void f(int a) {
                    auto dummy = 3; if(1)
                     LOOP(5 + dummy)
                  })cpp"},
-          {R"cpp(#define LOOP(x) do {x;} while(1);
+      {R"cpp(#define LOOP(x) do {x;} while(1);
                  void f(int a) {
                    if(1)
                     LOOP(5 + [[3]])
                  })cpp",
-           R"cpp(#define LOOP(x) do {x;} while(1);
+       R"cpp(#define LOOP(x) do {x;} while(1);
                  void f(int a) {
                    auto dummy = 3; if(1)
                     LOOP(5 + dummy)
                  })cpp"},
-          // attribute testing
-          {R"cpp(void f(int a) {
-                    [ [gsl::suppress("type")] ] for (;;) a = [[1]];
+      // attribute testing
+      {R"cpp(void f(int a) {
+                    [ [gsl::suppress("type")] ] for (;;) a = [[1]] + 1;
                  })cpp",
-           R"cpp(void f(int a) {
-                    auto dummy = 1; [ [gsl::suppress("type")] ] for (;;) a = dummy;
+       R"cpp(void f(int a) {
+                    auto dummy = 1; [ [gsl::suppress("type")] ] for (;;) a = dummy + 1;
                  })cpp"},
-          // MemberExpr
-          {R"cpp(class T {
+      // MemberExpr
+      {R"cpp(class T {
                    T f() {
                      return [[T().f()]].f();
                    }
                  };)cpp",
-           R"cpp(class T {
+       R"cpp(class T {
                    T f() {
                      auto dummy = T().f(); return dummy.f();
                    }
                  };)cpp"},
-          // Function DeclRefExpr
-          {R"cpp(int f() {
+      // Function DeclRefExpr
+      {R"cpp(int f() {
                    return [[f]]();
                  })cpp",
-           R"cpp(int f() {
+       R"cpp(int f() {
                    auto dummy = f(); return dummy;
                  })cpp"},
-          // FIXME: Wrong result for \[\[clang::uninitialized\]\] int b = [[1]];
-          // since the attr is inside the DeclStmt and the bounds of
-          // DeclStmt don't cover the attribute.
+      // FIXME: Wrong result for \[\[clang::uninitialized\]\] int b = [[1]];
+      // since the attr is inside the DeclStmt and the bounds of
+      // DeclStmt don't cover the attribute.
 
-          // Binary subexpressions
-          {R"cpp(void f() {
+      // Binary subexpressions
+      {R"cpp(void f() {
                    int x = 1 + [[2 + 3 + 4]] + 5;
                  })cpp",
-           R"cpp(void f() {
+       R"cpp(void f() {
                    auto dummy = 2 + 3 + 4; int x = 1 + dummy + 5;
                  })cpp"},
-          {R"cpp(void f() {
+      {R"cpp(void f() {
                    int x = [[1 + 2 + 3]] + 4 + 5;
                  })cpp",
-           R"cpp(void f() {
+       R"cpp(void f() {
                    auto dummy = 1 + 2 + 3; int x = dummy + 4 + 5;
                  })cpp"},
-          {R"cpp(void f() {
+      {R"cpp(void f() {
                    int x = 1 + 2 + [[3 + 4 + 5]];
                  })cpp",
-           R"cpp(void f() {
+       R"cpp(void f() {
                    auto dummy = 3 + 4 + 5; int x = 1 + 2 + dummy;
                  })cpp"},
-          // Non-associative operations have no special support
-          {R"cpp(void f() {
+      // Non-associative operations have no special support
+      {R"cpp(void f() {
                    int x = 1 - [[2 - 3 - 4]] - 5;
                  })cpp",
-           R"cpp(void f() {
+       R"cpp(void f() {
                    auto dummy = 1 - 2 - 3 - 4; int x = dummy - 5;
                  })cpp"},
-          // A mix of associative operators isn't associative.
-          {R"cpp(void f() {
+      // A mix of associative operators isn't associative.
+      {R"cpp(void f() {
                    int x = 0 + 1 * [[2 + 3]] * 4 + 5;
                  })cpp",
-           R"cpp(void f() {
+       R"cpp(void f() {
                    auto dummy = 1 * 2 + 3 * 4; int x = 0 + dummy + 5;
                  })cpp"},
-          // Overloaded operators are supported, we assume associativity
-          // as if they were built-in.
-          {R"cpp(struct S {
+      // Overloaded operators are supported, we assume associativity
+      // as if they were built-in.
+      {R"cpp(struct S {
                    S(int);
                  };
                  S operator+(S, S);
@@ -443,7 +443,7 @@ TEST_F(ExtractVariableTest, Test) {
                  void f() {
                    S x = S(1) + [[S(2) + S(3) + S(4)]] + S(5);
                  })cpp",
-           R"cpp(struct S {
+       R"cpp(struct S {
                    S(int);
                  };
                  S operator+(S, S);
@@ -451,25 +451,25 @@ TEST_F(ExtractVariableTest, Test) {
                  void f() {
                    auto dummy = S(2) + S(3) + S(4); S x = S(1) + dummy + S(5);
                  })cpp"},
-          // Don't try to analyze across macro boundaries
-          // FIXME: it'd be nice to do this someday (in a safe way)
-          {R"cpp(#define ECHO(X) X
+      // Don't try to analyze across macro boundaries
+      // FIXME: it'd be nice to do this someday (in a safe way)
+      {R"cpp(#define ECHO(X) X
                  void f() {
                    int x = 1 + [[ECHO(2 + 3) + 4]] + 5;
                  })cpp",
-           R"cpp(#define ECHO(X) X
+       R"cpp(#define ECHO(X) X
                  void f() {
                    auto dummy = 1 + ECHO(2 + 3) + 4; int x = dummy + 5;
                  })cpp"},
-          {R"cpp(#define ECHO(X) X
+      {R"cpp(#define ECHO(X) X
                  void f() {
                    int x = 1 + [[ECHO(2) + ECHO(3) + 4]] + 5;
                  })cpp",
-           R"cpp(#define ECHO(X) X
+       R"cpp(#define ECHO(X) X
                  void f() {
                    auto dummy = 1 + ECHO(2) + ECHO(3) + 4; int x = dummy + 5;
                  })cpp"},
-      };
+  };
   for (const auto &IO : InputOutputs) {
     EXPECT_EQ(IO.second, apply(IO.first)) << IO.first;
   }
@@ -559,8 +559,7 @@ TEST_F(ExpandAutoTypeTest, Test) {
   EXPECT_THAT(apply("au^to x = &ns::Func;"),
               StartsWith("fail: Could not expand type of function pointer"));
   // lambda types are not replaced
-  EXPECT_THAT(apply("au^to x = []{};"),
-              StartsWith("fail: Could not expand type of lambda expression"));
+  EXPECT_UNAVAILABLE("au^to x = []{};");
   // inline namespaces
   EXPECT_EQ(apply("au^to x = inl_ns::Visible();"),
             "Visible x = inl_ns::Visible();");
@@ -572,6 +571,8 @@ TEST_F(ExpandAutoTypeTest, Test) {
             R"cpp(const char * x = "test";)cpp");
 
   EXPECT_UNAVAILABLE("dec^ltype(au^to) x = 10;");
+  // expanding types in structured bindings is syntactically invalid.
+  EXPECT_UNAVAILABLE("const ^auto &[x,y] = (int[]){1,2};");
 
   // FIXME: Auto-completion in a template requires disabling delayed template
   // parsing.
@@ -593,6 +594,8 @@ TEST_F(ExtractFunctionTest, FunctionTest) {
   EXPECT_EQ(apply("auto lam = [](){ [[int x;]] }; "), "unavailable");
   // Partial statements aren't extracted.
   EXPECT_THAT(apply("int [[x = 0]];"), "unavailable");
+  // FIXME: Support hoisting.
+  EXPECT_THAT(apply(" [[int a = 5;]] a++; "), "unavailable");
 
   // Ensure that end of Zone and Beginning of PostZone being adjacent doesn't
   // lead to break being included in the extraction zone.
@@ -600,12 +603,14 @@ TEST_F(ExtractFunctionTest, FunctionTest) {
   // FIXME: ExtractFunction should be unavailable inside loop construct
   // initializer/condition.
   EXPECT_THAT(apply(" for([[int i = 0;]];);"), HasSubstr("extracted"));
-  // Don't extract because needs hoisting.
-  EXPECT_THAT(apply(" [[int a = 5;]] a++; "), StartsWith("fail"));
   // Extract certain return
   EXPECT_THAT(apply(" if(true) [[{ return; }]] "), HasSubstr("extracted"));
   // Don't extract uncertain return
-  EXPECT_THAT(apply(" if(true) [[if (false) return;]] "), StartsWith("fail"));
+  EXPECT_THAT(apply(" if(true) [[if (false) return;]] "),
+              StartsWith("unavailable"));
+  EXPECT_THAT(
+      apply("#define RETURN_IF_ERROR(x) if (x) return\nRETU^RN_IF_ERROR(4);"),
+      StartsWith("unavailable"));
 
   FileName = "a.c";
   EXPECT_THAT(apply(" for([[int i = 0;]];);"), HasSubstr("unavailable"));
@@ -720,7 +725,7 @@ TEST_F(ExtractFunctionTest, ControlFlow) {
 
 TEST_F(ExtractFunctionTest, ExistingReturnStatement) {
   Context = File;
-  const char* Before = R"cpp(
+  const char *Before = R"cpp(
     bool lucky(int N);
     int getNum(bool Superstitious, int Min, int Max) {
       if (Superstitious) [[{
@@ -735,7 +740,7 @@ TEST_F(ExtractFunctionTest, ExistingReturnStatement) {
   )cpp";
   // FIXME: min/max should be by value.
   // FIXME: avoid emitting redundant braces
-  const char* After = R"cpp(
+  const char *After = R"cpp(
     bool lucky(int N);
     int extracted(int &Min, int &Max) {
 {
@@ -2518,6 +2523,12 @@ public:
   EXPECT_UNAVAILABLE(Header + "void fun() { ::ban::fo^o(); }");
   EXPECT_AVAILABLE(Header + "void fun() { banana::fo^o(); }");
 
+  // Do not offer code action on typo-corrections.
+  EXPECT_UNAVAILABLE(Header + "/*error-ok*/c^c C;");
+
+  // NestedNameSpecifier, but no namespace.
+  EXPECT_UNAVAILABLE(Header + "class Foo {}; class F^oo foo;");
+
   // Check that we do not trigger in header files.
   FileName = "test.h";
   ExtraArgs.push_back("-xc++-header"); // .h file is treated a C by default.
@@ -2791,7 +2802,106 @@ using one::two::ff;using one::two::ee;
 
 void fun() {
   ff();
-})cpp"}};
+})cpp"},
+            // using alias; insert using for the spelled name.
+            {R"cpp(
+#include "test.hpp"
+
+void fun() {
+  one::u^u u;
+})cpp",
+             R"cpp(
+#include "test.hpp"
+
+using one::uu;
+
+void fun() {
+  uu u;
+})cpp"},
+            // using namespace.
+            {R"cpp(
+#include "test.hpp"
+using namespace one;
+namespace {
+two::c^c C;
+})cpp",
+             R"cpp(
+#include "test.hpp"
+using namespace one;
+namespace {using two::cc;
+
+cc C;
+})cpp"},
+            // Type defined in main file, make sure using is after that.
+            {R"cpp(
+namespace xx {
+  struct yy {};
+}
+
+x^x::yy X;
+)cpp",
+             R"cpp(
+namespace xx {
+  struct yy {};
+}
+
+using xx::yy;
+
+yy X;
+)cpp"},
+            // Type defined in main file via "using", insert after that.
+            {R"cpp(
+#include "test.hpp"
+
+namespace xx {
+  using yy = one::two::cc;
+}
+
+x^x::yy X;
+)cpp",
+             R"cpp(
+#include "test.hpp"
+
+namespace xx {
+  using yy = one::two::cc;
+}
+
+using xx::yy;
+
+yy X;
+)cpp"},
+            // Using must come after function definition.
+            {R"cpp(
+namespace xx {
+  void yy();
+}
+
+void fun() {
+  x^x::yy();
+}
+)cpp",
+             R"cpp(
+namespace xx {
+  void yy();
+}
+
+using xx::yy;
+
+void fun() {
+  yy();
+}
+)cpp"},
+            // Existing using with non-namespace part.
+            {R"cpp(
+#include "test.hpp"
+using one::two::ee::ee_one;
+one::t^wo::cc c;
+)cpp",
+             R"cpp(
+#include "test.hpp"
+using one::two::cc;using one::two::ee::ee_one;
+cc c;
+)cpp"}};
   llvm::StringMap<std::string> EditedFiles;
   for (const auto &Case : Cases) {
     for (const auto &SubCase : expandCases(Case.TestSource)) {
@@ -2799,7 +2909,7 @@ void fun() {
 namespace one {
 void oo() {}
 namespace two {
-enum ee {};
+enum ee {ee_one};
 void ff() {}
 class cc {
 public:
@@ -2807,6 +2917,7 @@ public:
   static void mm() {}
 };
 }
+using uu = two::cc;
 })cpp";
       EXPECT_EQ(apply(SubCase, &EditedFiles), Case.ExpectedSource);
     }
@@ -2977,6 +3088,24 @@ TEST_F(PopulateSwitchTest, Test) {
             namespace ns { enum Enum {A}; }
             void function() { switch (ns::A) {case ns::A:break;} }
           )"",
+      },
+      {
+          // Duplicated constant names
+          Function,
+          R""(enum Enum {A,B,b=B}; ^switch (A) {})"",
+          R""(enum Enum {A,B,b=B}; switch (A) {case A:case B:break;})"",
+      },
+      {
+          // Duplicated constant names all in switch
+          Function,
+          R""(enum Enum {A,B,b=B}; ^switch (A) {case A:case B:break;})"",
+          "unavailable",
+      },
+      {
+          // Enum is dependent type
+          File,
+          R""(template<typename T> void f() {enum Enum {A}; ^switch (A) {}})"",
+          "unavailable",
       },
   };
 

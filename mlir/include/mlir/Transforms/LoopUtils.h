@@ -22,6 +22,7 @@
 
 namespace mlir {
 class AffineForOp;
+class AffineMap;
 class FuncOp;
 class LoopLikeOpInterface;
 struct MemRefRegion;

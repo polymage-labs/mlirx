@@ -18,10 +18,12 @@
 let TargetPrefix = "ppc" in {  // All intrinsics start with "llvm.ppc.".
   // dcba/dcbf/dcbi/dcbst/dcbt/dcbz/dcbzl(PPC970) instructions.
   def int_ppc_dcba  : Intrinsic<[], [llvm_ptr_ty], []>;
-  def int_ppc_dcbf  : GCCBuiltin<"__builtin_dcbf">,
-                      Intrinsic<[], [llvm_ptr_ty], []>;
-  def int_ppc_dcbfl : Intrinsic<[], [llvm_ptr_ty], []>;
-  def int_ppc_dcbflp: Intrinsic<[], [llvm_ptr_ty], []>;
+  def int_ppc_dcbf : GCCBuiltin<"__builtin_dcbf">,
+                      Intrinsic<[], [llvm_ptr_ty], [IntrArgMemOnly]>;
+  def int_ppc_dcbfl : Intrinsic<[], [llvm_ptr_ty], [IntrArgMemOnly]>;
+  def int_ppc_dcbflp : Intrinsic<[], [llvm_ptr_ty], [IntrArgMemOnly]>;
+  def int_ppc_dcbfps : Intrinsic<[], [llvm_ptr_ty], [IntrArgMemOnly]>;
+  def int_ppc_dcbstps : Intrinsic<[], [llvm_ptr_ty], [IntrArgMemOnly]>;
   def int_ppc_dcbi  : Intrinsic<[], [llvm_ptr_ty], []>;
   def int_ppc_dcbst : Intrinsic<[], [llvm_ptr_ty], []>;
   def int_ppc_dcbt  : Intrinsic<[], [llvm_ptr_ty],
@@ -67,6 +69,14 @@ let TargetPrefix = "ppc" in {  // All intrinsics start with "llvm.ppc.".
   def int_ppc_divdeu : GCCBuiltin<"__builtin_divdeu">,
                        Intrinsic<[llvm_i64_ty], [llvm_i64_ty, llvm_i64_ty],
                                  [IntrNoMem]>;
+
+  // Generate a random number
+  def int_ppc_darn : GCCBuiltin<"__builtin_darn">,
+                     Intrinsic<[llvm_i64_ty], [], [IntrNoMem]>;
+  def int_ppc_darnraw : GCCBuiltin<"__builtin_darn_raw">,
+                     Intrinsic<[llvm_i64_ty], [], [IntrNoMem]>;
+  def int_ppc_darn32 : GCCBuiltin<"__builtin_darn_32">,
+                     Intrinsic<[llvm_i32_ty], [], [IntrNoMem]>;
 
   // Bit permute doubleword
   def int_ppc_bpermd : GCCBuiltin<"__builtin_bpermd">,
@@ -139,6 +149,28 @@ let TargetPrefix = "ppc" in {  // All PPC intrinsics start with "llvm.ppc.".
                               list<IntrinsicProperty> properties>
     : GCCBuiltin<!strconcat("__builtin_vsx_", GCCIntSuffix)>,
       Intrinsic<ret_types, param_types, properties>;
+}
+
+//===----------------------------------------------------------------------===//
+// PowerPC MMA Intrinsic Multi Class Definitions.
+//
+
+multiclass PowerPC_MMA_ACC_Intrinsic<list<LLVMType> args> {
+  def NAME: Intrinsic<[llvm_v512i1_ty], args, [IntrNoMem]>;
+  def pp : Intrinsic<[llvm_v512i1_ty], !listconcat([llvm_v512i1_ty], args),
+                     [IntrNoMem]>;
+  def pn : Intrinsic<[llvm_v512i1_ty], !listconcat([llvm_v512i1_ty], args),
+                     [IntrNoMem]>;
+  def np : Intrinsic<[llvm_v512i1_ty], !listconcat([llvm_v512i1_ty], args),
+                     [IntrNoMem]>;
+  def nn : Intrinsic<[llvm_v512i1_ty], !listconcat([llvm_v512i1_ty], args),
+                     [IntrNoMem]>;
+}
+
+multiclass PowerPC_MMA_ACC_PP_Intrinsic<list<LLVMType> args> {
+  def NAME: Intrinsic<[llvm_v512i1_ty], args, [IntrNoMem]>;
+  def pp : Intrinsic<[llvm_v512i1_ty], !listconcat([llvm_v512i1_ty], args),
+                     [IntrNoMem]>;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1057,6 +1089,15 @@ def int_ppc_altivec_vrldmi :
                             [llvm_v2i64_ty, llvm_v2i64_ty, llvm_v2i64_ty],
                             [IntrNoMem]>;
 
+def int_ppc_altivec_vrlqnm :
+      PowerPC_Vec_Intrinsic<"vrlqnm", [llvm_v1i128_ty],
+                           [llvm_v1i128_ty, llvm_v1i128_ty],
+                            [IntrNoMem]>;
+def int_ppc_altivec_vrlqmi :
+      PowerPC_Vec_Intrinsic<"vrlqmi", [llvm_v1i128_ty],
+                            [llvm_v1i128_ty, llvm_v1i128_ty, llvm_v1i128_ty],
+                            [IntrNoMem]>;
+
 // Vector Divide Extended Intrinsics.
 def int_ppc_altivec_vdivesw : PowerPC_Vec_WWW_Intrinsic<"vdivesw">;
 def int_ppc_altivec_vdiveuw : PowerPC_Vec_WWW_Intrinsic<"vdiveuw">;
@@ -1249,6 +1290,16 @@ def int_ppc_vsx_xxinsertw :
 def int_ppc_vsx_xvtlsbb :
       PowerPC_VSX_Intrinsic<"xvtlsbb", [llvm_i32_ty],
                             [llvm_v16i8_ty, llvm_i32_ty], [IntrNoMem]>;
+def int_ppc_vsx_xvtdivdp :
+      PowerPC_VSX_Intrinsic<"xvtdivdp", [llvm_i32_ty],
+                            [llvm_v2f64_ty, llvm_v2f64_ty], [IntrNoMem]>;
+def int_ppc_vsx_xvtdivsp :
+      PowerPC_VSX_Intrinsic<"xvtdivsp", [llvm_i32_ty],
+                            [llvm_v4f32_ty, llvm_v4f32_ty], [IntrNoMem]>;
+def int_ppc_vsx_xvtsqrtdp :
+      PowerPC_VSX_Intrinsic<"xvtsqrtdp", [llvm_i32_ty], [llvm_v2f64_ty], [IntrNoMem]>;
+def int_ppc_vsx_xvtsqrtsp :
+      PowerPC_VSX_Intrinsic<"xvtsqrtsp", [llvm_i32_ty], [llvm_v4f32_ty], [IntrNoMem]>;
 def int_ppc_vsx_xxeval :
       PowerPC_VSX_Intrinsic<"xxeval", [llvm_v2i64_ty],
                            [llvm_v2i64_ty, llvm_v2i64_ty,
@@ -1352,5 +1403,96 @@ def int_ppc_cfence : Intrinsic<[], [llvm_anyint_ty], []>;
 // PowerPC set FPSCR Intrinsic Definitions.
 def int_ppc_setrnd : GCCBuiltin<"__builtin_setrnd">,
       Intrinsic<[llvm_double_ty], [llvm_i32_ty], []>;
+}
 
+let TargetPrefix = "ppc" in {
+  def int_ppc_mma_assemble_acc :
+        Intrinsic<[llvm_v512i1_ty],
+                  [llvm_v16i8_ty, llvm_v16i8_ty, llvm_v16i8_ty, llvm_v16i8_ty],
+                  [IntrNoMem]>;
+
+  def int_ppc_mma_disassemble_acc :
+        Intrinsic<[llvm_v16i8_ty, llvm_v16i8_ty, llvm_v16i8_ty, llvm_v16i8_ty],
+                  [llvm_v512i1_ty], [IntrNoMem]>;
+
+  def int_ppc_mma_assemble_pair :
+        Intrinsic<[llvm_v256i1_ty],
+                  [llvm_v16i8_ty, llvm_v16i8_ty], [IntrNoMem]>;
+
+  def int_ppc_mma_disassemble_pair :
+        Intrinsic<[llvm_v16i8_ty, llvm_v16i8_ty],
+                  [llvm_v256i1_ty], [IntrNoMem]>;
+
+  def int_ppc_mma_xxmtacc :
+        Intrinsic<[llvm_v512i1_ty], [llvm_v512i1_ty], [IntrNoMem]>;
+
+  def int_ppc_mma_xxmfacc :
+        Intrinsic<[llvm_v512i1_ty], [llvm_v512i1_ty], [IntrNoMem]>;
+
+  def int_ppc_mma_xxsetaccz :
+        Intrinsic<[llvm_v512i1_ty], [], [IntrNoMem]>;
+
+  def int_ppc_mma_lxvp :
+        Intrinsic<[llvm_v256i1_ty], [llvm_ptr_ty],
+                  [IntrReadMem, IntrArgMemOnly]>;
+
+  def int_ppc_mma_stxvp :
+        Intrinsic<[], [llvm_v256i1_ty, llvm_ptr_ty],
+                  [IntrWriteMem, IntrArgMemOnly]>;
+
+  // MMA Reduced-Precision: Outer Product Intrinsic Definitions.
+  defm int_ppc_mma_xvi4ger8 :
+        PowerPC_MMA_ACC_PP_Intrinsic<[llvm_v16i8_ty, llvm_v16i8_ty]>;
+  defm int_ppc_mma_pmxvi4ger8 :
+        PowerPC_MMA_ACC_PP_Intrinsic<[llvm_v16i8_ty, llvm_v16i8_ty, llvm_i32_ty,
+                                      llvm_i32_ty, llvm_i32_ty]>;
+
+  defm int_ppc_mma_xvi8ger4 :
+       PowerPC_MMA_ACC_PP_Intrinsic<[llvm_v16i8_ty, llvm_v16i8_ty]>;
+  defm int_ppc_mma_pmxvi8ger4 :
+       PowerPC_MMA_ACC_PP_Intrinsic<[llvm_v16i8_ty, llvm_v16i8_ty, llvm_i32_ty,
+                                     llvm_i32_ty, llvm_i32_ty]>;
+
+  defm int_ppc_mma_xvi16ger2s :
+       PowerPC_MMA_ACC_PP_Intrinsic<[llvm_v16i8_ty, llvm_v16i8_ty]>;
+  defm int_ppc_mma_pmxvi16ger2s :
+       PowerPC_MMA_ACC_PP_Intrinsic<[llvm_v16i8_ty, llvm_v16i8_ty, llvm_i32_ty,
+                                     llvm_i32_ty, llvm_i32_ty]>;
+
+  defm int_ppc_mma_xvf16ger2 :
+       PowerPC_MMA_ACC_Intrinsic<[llvm_v16i8_ty, llvm_v16i8_ty]>;
+  defm int_ppc_mma_pmxvf16ger2 :
+       PowerPC_MMA_ACC_Intrinsic<[llvm_v16i8_ty, llvm_v16i8_ty, llvm_i32_ty,
+                                  llvm_i32_ty, llvm_i32_ty]>;
+  defm int_ppc_mma_xvf32ger :
+       PowerPC_MMA_ACC_Intrinsic<[llvm_v16i8_ty, llvm_v16i8_ty]>;
+  defm int_ppc_mma_pmxvf32ger :
+       PowerPC_MMA_ACC_Intrinsic<[llvm_v16i8_ty, llvm_v16i8_ty, llvm_i32_ty,
+                                  llvm_i32_ty]>;
+  defm int_ppc_mma_xvf64ger :
+       PowerPC_MMA_ACC_Intrinsic<[llvm_v256i1_ty, llvm_v16i8_ty]>;
+  defm int_ppc_mma_pmxvf64ger :
+       PowerPC_MMA_ACC_Intrinsic<[llvm_v256i1_ty, llvm_v16i8_ty, llvm_i32_ty,
+                                  llvm_i32_ty]>;
+
+  // MMA Reduced-Precision: bfloat16 Outer Product Intrinsic Definitions.
+  defm int_ppc_mma_xvbf16ger2 :
+         PowerPC_MMA_ACC_Intrinsic<[llvm_v16i8_ty, llvm_v16i8_ty]>;
+  defm int_ppc_mma_pmxvbf16ger2 :
+         PowerPC_MMA_ACC_Intrinsic<
+           [llvm_v16i8_ty, llvm_v16i8_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty]>;
+
+  // MMA Reduced-Precision: Missing Integer-based Outer Product Operations.
+  defm int_ppc_mma_xvi16ger2 :
+         PowerPC_MMA_ACC_PP_Intrinsic<[llvm_v16i8_ty, llvm_v16i8_ty]>;
+  defm int_ppc_mma_pmxvi16ger2 :
+         PowerPC_MMA_ACC_PP_Intrinsic<[llvm_v16i8_ty, llvm_v16i8_ty, llvm_i32_ty,
+                                       llvm_i32_ty, llvm_i32_ty]>;
+  def int_ppc_mma_xvi8ger4spp :
+        Intrinsic<[llvm_v512i1_ty],
+                  [llvm_v512i1_ty, llvm_v16i8_ty, llvm_v16i8_ty], [IntrNoMem]>;
+  def int_ppc_mma_pmxvi8ger4spp :
+        Intrinsic<[llvm_v512i1_ty],
+                  [llvm_v512i1_ty, llvm_v16i8_ty, llvm_v16i8_ty, llvm_i32_ty,
+                   llvm_i32_ty, llvm_i32_ty], [IntrNoMem]>;
 }

@@ -226,13 +226,13 @@ static cl::alias MachOm("m", cl::desc("Alias for --macho"), cl::NotHidden,
                         cl::Grouping, cl::aliasopt(MachOOpt));
 
 cl::opt<std::string> objdump::MCPU(
-    "mcpu", cl::desc("Target a specific cpu type (-mcpu=help for details)"),
+    "mcpu", cl::desc("Target a specific cpu type (--mcpu=help for details)"),
     cl::value_desc("cpu-name"), cl::init(""), cl::cat(ObjdumpCat));
 
-cl::list<std::string> objdump::MAttrs("mattr", cl::CommaSeparated,
-                                      cl::desc("Target specific attributes"),
-                                      cl::value_desc("a1,+a2,-a3,..."),
-                                      cl::cat(ObjdumpCat));
+cl::list<std::string> objdump::MAttrs(
+    "mattr", cl::CommaSeparated,
+    cl::desc("Target specific attributes (--mattr=help for details)"),
+    cl::value_desc("a1,+a2,-a3,..."), cl::cat(ObjdumpCat));
 
 cl::opt<bool> objdump::NoShowRawInsn(
     "no-show-raw-insn",
@@ -352,6 +352,10 @@ static cl::opt<bool>
     Wide("wide", cl::desc("Ignored for compatibility with GNU objdump"),
          cl::cat(ObjdumpCat));
 static cl::alias WideShort("w", cl::Grouping, cl::aliasopt(Wide));
+
+cl::opt<std::string> objdump::Prefix("prefix",
+                                     cl::desc("Add prefix to absolute paths"),
+                                     cl::cat(ObjdumpCat));
 
 enum DebugVarsFormat {
   DVDisabled,
@@ -1029,6 +1033,13 @@ void SourcePrinter::printSourceLine(formatted_raw_ostream &OS,
       reportWarning(Warning, ObjectFilename);
       WarnedNoDebugInfo = true;
     }
+  }
+
+  if (!Prefix.empty() && sys::path::is_absolute_gnu(LineInfo.FileName)) {
+    SmallString<128> FilePath;
+    sys::path::append(FilePath, Prefix, LineInfo.FileName);
+
+    LineInfo.FileName = std::string(FilePath);
   }
 
   if (PrintLines)
@@ -1737,8 +1748,8 @@ static void disassembleObject(const Target *TheTarget, const ObjectFile *Obj,
   // the output.
   StringSet<> FoundDisasmSymbolSet;
   for (std::pair<const SectionRef, SectionSymbolsTy> &SecSyms : AllSymbols)
-    stable_sort(SecSyms.second);
-  stable_sort(AbsoluteSymbols);
+    llvm::stable_sort(SecSyms.second);
+  llvm::stable_sort(AbsoluteSymbols);
 
   std::unique_ptr<DWARFContext> DICtx;
   LiveVariablePrinter LVP(*Ctx.getRegisterInfo(), *STI);
@@ -1852,23 +1863,6 @@ static void disassembleObject(const Target *TheTarget, const ObjectFile *Obj,
         if (!SegmentName.empty())
           outs() << SegmentName << ",";
         outs() << SectionName << ":\n";
-      }
-
-      if (Obj->isELF() && Obj->getArch() == Triple::amdgcn) {
-        if (Symbols[SI].Type == ELF::STT_AMDGPU_HSA_KERNEL) {
-          // skip amd_kernel_code_t at the begining of kernel symbol (256 bytes)
-          Start += 256;
-        }
-        if (SI == SE - 1 ||
-            Symbols[SI + 1].Type == ELF::STT_AMDGPU_HSA_KERNEL) {
-          // cut trailing zeroes at the end of kernel
-          // cut up to 256 bytes
-          const uint64_t EndAlign = 256;
-          const auto Limit = End - (std::min)(EndAlign, End - Start);
-          while (End > Limit &&
-            *reinterpret_cast<const support::ulittle32_t*>(&Bytes[End - 4]) == 0)
-            End -= 4;
-        }
       }
 
       outs() << '\n';
@@ -2977,6 +2971,10 @@ int main(int argc, char **argv) {
   // Defaults to a.out if no filenames specified.
   if (InputFilenames.empty())
     InputFilenames.push_back("a.out");
+
+  // Removes trailing separators from prefix.
+  while (!Prefix.empty() && sys::path::is_separator(Prefix.back()))
+    Prefix.pop_back();
 
   if (AllHeaders)
     ArchiveHeaders = FileHeaders = PrivateHeaders = Relocations =

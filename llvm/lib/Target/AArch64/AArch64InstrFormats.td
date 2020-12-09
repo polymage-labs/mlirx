@@ -914,6 +914,13 @@ def imm0_1 : Operand<i64>, ImmLeaf<i64, [{
   let ParserMatchClass = Imm0_1Operand;
 }
 
+// timm0_1 - as above, but use TargetConstant (TImmLeaf)
+def timm0_1 : Operand<i64>, TImmLeaf<i64, [{
+  return ((uint64_t)Imm) < 2;
+}]> {
+  let ParserMatchClass = Imm0_1Operand;
+}
+
 // imm0_15 predicate - True if the immediate is in the range [0,15]
 def imm0_15 : Operand<i64>, ImmLeaf<i64, [{
   return ((uint64_t)Imm) < 16;
@@ -10596,14 +10603,14 @@ multiclass SIMDThreeSameVectorComplexHSD<bit U, bits<3> opcode, Operand rottype,
               [(set (v4f16 V64:$dst), (OpNode (v4f16 V64:$Rd),
                                               (v4f16 V64:$Rn),
                                               (v4f16 V64:$Rm),
-                                              (rottype i32:$rot)))]>;
+                                              (i32 rottype:$rot)))]>;
 
   def v8f16 : BaseSIMDThreeSameVectorComplex<1, U, 0b01, opcode, V128, rottype,
               asm, ".8h",
               [(set (v8f16 V128:$dst), (OpNode (v8f16 V128:$Rd),
                                                (v8f16 V128:$Rn),
                                                (v8f16 V128:$Rm),
-                                               (rottype i32:$rot)))]>;
+                                               (i32 rottype:$rot)))]>;
   }
 
   let Predicates = [HasComplxNum, HasNEON] in {
@@ -10612,21 +10619,21 @@ multiclass SIMDThreeSameVectorComplexHSD<bit U, bits<3> opcode, Operand rottype,
               [(set (v2f32 V64:$dst), (OpNode (v2f32 V64:$Rd),
                                               (v2f32 V64:$Rn),
                                               (v2f32 V64:$Rm),
-                                              (rottype i32:$rot)))]>;
+                                              (i32 rottype:$rot)))]>;
 
   def v4f32 : BaseSIMDThreeSameVectorComplex<1, U, 0b10, opcode, V128, rottype,
               asm, ".4s",
               [(set (v4f32 V128:$dst), (OpNode (v4f32 V128:$Rd),
                                                (v4f32 V128:$Rn),
                                                (v4f32 V128:$Rm),
-                                               (rottype i32:$rot)))]>;
+                                               (i32 rottype:$rot)))]>;
 
   def v2f64 : BaseSIMDThreeSameVectorComplex<1, U, 0b11, opcode, V128, rottype,
               asm, ".2d",
               [(set (v2f64 V128:$dst), (OpNode (v2f64 V128:$Rd),
                                                (v2f64 V128:$Rn),
                                                (v2f64 V128:$Rm),
-                                               (rottype i32:$rot)))]>;
+                                               (i32 rottype:$rot)))]>;
   }
 }
 
@@ -10668,14 +10675,14 @@ multiclass SIMDThreeSameVectorTiedComplexHSD<bit U, bits<3> opcode,
               [(set (v4f16 V64:$dst), (OpNode (v4f16 V64:$Rd),
                                               (v4f16 V64:$Rn),
                                               (v4f16 V64:$Rm),
-                                              (rottype i32:$rot)))]>;
+                                              (i32 rottype:$rot)))]>;
 
   def v8f16 : BaseSIMDThreeSameVectorTiedComplex<1, U, 0b01, opcode, V128,
               rottype, asm, ".8h",
               [(set (v8f16 V128:$dst), (OpNode (v8f16 V128:$Rd),
                                                (v8f16 V128:$Rn),
                                                (v8f16 V128:$Rm),
-                                               (rottype i32:$rot)))]>;
+                                               (i32 rottype:$rot)))]>;
   }
 
   let Predicates = [HasComplxNum, HasNEON] in {
@@ -10684,21 +10691,21 @@ multiclass SIMDThreeSameVectorTiedComplexHSD<bit U, bits<3> opcode,
               [(set (v2f32 V64:$dst), (OpNode (v2f32 V64:$Rd),
                                               (v2f32 V64:$Rn),
                                               (v2f32 V64:$Rm),
-                                              (rottype i32:$rot)))]>;
+                                              (i32 rottype:$rot)))]>;
 
   def v4f32 : BaseSIMDThreeSameVectorTiedComplex<1, U, 0b10, opcode, V128,
               rottype, asm, ".4s",
               [(set (v4f32 V128:$dst), (OpNode (v4f32 V128:$Rd),
                                                (v4f32 V128:$Rn),
                                                (v4f32 V128:$Rm),
-                                               (rottype i32:$rot)))]>;
+                                               (i32 rottype:$rot)))]>;
 
   def v2f64 : BaseSIMDThreeSameVectorTiedComplex<1, U, 0b11, opcode, V128,
               rottype, asm, ".2d",
               [(set (v2f64 V128:$dst), (OpNode (v2f64 V128:$Rd),
                                                (v2f64 V128:$Rn),
                                                (v2f64 V128:$Rm),
-                                               (rottype i32:$rot)))]>;
+                                               (i32 rottype:$rot)))]>;
   }
 }
 

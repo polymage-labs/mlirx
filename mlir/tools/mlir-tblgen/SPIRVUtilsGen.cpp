@@ -27,6 +27,8 @@
 #include "llvm/TableGen/Record.h"
 #include "llvm/TableGen/TableGenBackend.h"
 
+#include <list>
+
 using llvm::ArrayRef;
 using llvm::formatv;
 using llvm::raw_ostream;
@@ -560,9 +562,7 @@ static void emitArgumentSerialization(const Operator &op, ArrayRef<SMLoc> loc,
   if (areOperandsAheadOfAttrs) {
     if (op.getNumOperands() != 0) {
       os << tabs
-         << formatv(
-                "for (Value operand : {0}.getOperation()->getOperands()) {{\n",
-                opVar);
+         << formatv("for (Value operand : {0}->getOperands()) {{\n", opVar);
       os << tabs << "  auto id = getValueID(operand);\n";
       os << tabs << "  assert(id && \"use before def!\");\n";
       os << tabs << formatv("  {0}.push_back(id);\n", operands);
@@ -1031,7 +1031,7 @@ emitExtendedSetDeserializationDispatch(const RecordKeeper &recordKeeper,
   // raw_string_ostream needs a string&, use a vector to store all the string
   // that are captured by reference within raw_string_ostream.
   StringMap<raw_string_ostream> extensionSets;
-  SmallVector<std::string, 1> extensionSetNames;
+  std::list<std::string> extensionSetNames;
 
   initExtendedSetDeserializationDispatch(extensionSetName, instructionID, words,
                                          os);

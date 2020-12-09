@@ -57,20 +57,23 @@ public:
     CortexA76,
     CortexA77,
     CortexA78,
+    CortexR82,
     CortexX1,
     ExynosM3,
     Falkor,
     Kryo,
     NeoverseE1,
     NeoverseN1,
+    NeoverseN2,
+    NeoverseV1,
     Saphira,
     ThunderX2T99,
     ThunderX,
     ThunderXT81,
     ThunderXT83,
     ThunderXT88,
-    TSV110,
-    ThunderX3T110
+    ThunderX3T110,
+    TSV110
   };
 
 protected:
@@ -83,6 +86,9 @@ protected:
   bool HasV8_4aOps = false;
   bool HasV8_5aOps = false;
   bool HasV8_6aOps = false;
+
+  bool HasV8_0rOps = false;
+  bool HasCONTEXTIDREL2 = false;
 
   bool HasFPARMv8 = false;
   bool HasNEON = false;
@@ -125,7 +131,6 @@ protected:
 
   // ARMv8.4 extensions
   bool HasNV = false;
-  bool HasRASv8_4 = false;
   bool HasMPAM = false;
   bool HasDIT = false;
   bool HasTRACEV8_4 = false;
@@ -191,6 +196,7 @@ protected:
   // Enable 64-bit vectorization in SLP.
   unsigned MinVectorRegisterBitWidth = 64;
 
+  bool OutlineAtomics = false;
   bool UseAA = false;
   bool PredictableSelectIsExpensive = false;
   bool BalanceFPOps = false;
@@ -306,6 +312,7 @@ public:
   bool hasV8_3aOps() const { return HasV8_3aOps; }
   bool hasV8_4aOps() const { return HasV8_4aOps; }
   bool hasV8_5aOps() const { return HasV8_5aOps; }
+  bool hasV8_0rOps() const { return HasV8_0rOps; }
 
   bool hasZeroCycleRegMove() const { return HasZeroCycleRegMove; }
 
@@ -343,6 +350,7 @@ public:
   bool hasSHA3() const { return HasSHA3; }
   bool hasSHA2() const { return HasSHA2; }
   bool hasAES() const { return HasAES; }
+  bool hasCONTEXTIDREL2() const { return HasCONTEXTIDREL2; }
   bool balanceFPOps() const { return BalanceFPOps; }
   bool predictableSelectIsExpensive() const {
     return PredictableSelectIsExpensive;
@@ -465,6 +473,8 @@ public:
 
   bool useAA() const override { return UseAA; }
 
+  bool outlineAtomics() const { return OutlineAtomics; }
+
   bool hasVH() const { return HasVH; }
   bool hasPAN() const { return HasPAN; }
   bool hasLOR() const { return HasLOR; }
@@ -479,7 +489,6 @@ public:
   bool hasComplxNum() const { return HasComplxNum; }
 
   bool hasNV() const { return HasNV; }
-  bool hasRASv8_4() const { return HasRASv8_4; }
   bool hasMPAM() const { return HasMPAM; }
   bool hasDIT() const { return HasDIT; }
   bool hasTRACEV8_4() const { return HasTRACEV8_4; }
@@ -550,6 +559,7 @@ public:
   // implied by the architecture.
   unsigned getMaxSVEVectorSizeInBits() const;
   unsigned getMinSVEVectorSizeInBits() const;
+  bool useSVEForFixedLengthVectors() const;
 };
 } // End llvm namespace
 

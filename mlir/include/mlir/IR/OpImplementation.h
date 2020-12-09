@@ -13,6 +13,7 @@
 #ifndef MLIR_IR_OPIMPLEMENTATION_H
 #define MLIR_IR_OPIMPLEMENTATION_H
 
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectInterface.h"
 #include "mlir/IR/OpDefinition.h"
 #include "llvm/ADT/Twine.h"
@@ -326,8 +327,32 @@ public:
   /// Parse a '<' token.
   virtual ParseResult parseLess() = 0;
 
+  /// Parse a '<' token if present.
+  virtual ParseResult parseOptionalLess() = 0;
+
   /// Parse a '>' token.
   virtual ParseResult parseGreater() = 0;
+
+  /// Parse a '>' token if present.
+  virtual ParseResult parseOptionalGreater() = 0;
+
+  /// Parse a '?' token.
+  virtual ParseResult parseQuestion() = 0;
+
+  /// Parse a '?' token if present.
+  virtual ParseResult parseOptionalQuestion() = 0;
+
+  /// Parse a '+' token.
+  virtual ParseResult parsePlus() = 0;
+
+  /// Parse a '+' token if present.
+  virtual ParseResult parseOptionalPlus() = 0;
+
+  /// Parse a '*' token.
+  virtual ParseResult parseStar() = 0;
+
+  /// Parse a '*' token if present.
+  virtual ParseResult parseOptionalStar() = 0;
 
   /// Parse a given keyword.
   ParseResult parseKeyword(StringRef keyword, const Twine &msg = "") {
@@ -351,6 +376,12 @@ public:
   /// Parse a keyword, if present, into 'keyword'.
   virtual ParseResult parseOptionalKeyword(StringRef *keyword) = 0;
 
+  /// Parse a keyword, if present, and if one of the 'allowedValues',
+  /// into 'keyword'
+  virtual ParseResult
+  parseOptionalKeyword(StringRef *keyword,
+                       ArrayRef<StringRef> allowedValues) = 0;
+
   /// Parse a `(` token.
   virtual ParseResult parseLParen() = 0;
 
@@ -362,9 +393,6 @@ public:
 
   /// Parse a `)` token if present.
   virtual ParseResult parseOptionalRParen() = 0;
-
-  /// Parses a '?' if present.
-  virtual ParseResult parseOptionalQuestion() = 0;
 
   /// Parse a `[` token.
   virtual ParseResult parseLSquare() = 0;
@@ -395,7 +423,7 @@ public:
 
     // Parse any kind of attribute.
     Attribute attr;
-    if (parseAttribute(attr))
+    if (parseAttribute(attr, type))
       return failure();
 
     // Check for the right kind of attribute.
@@ -433,6 +461,10 @@ public:
   /// Specialized variants of `parseOptionalAttribute` that remove potential
   /// ambiguities in syntax.
   virtual OptionalParseResult parseOptionalAttribute(ArrayAttr &result,
+                                                     Type type,
+                                                     StringRef attrName,
+                                                     NamedAttrList &attrs) = 0;
+  virtual OptionalParseResult parseOptionalAttribute(StringAttr &result,
                                                      Type type,
                                                      StringRef attrName,
                                                      NamedAttrList &attrs) = 0;
@@ -614,23 +646,23 @@ public:
   // Region Parsing
   //===--------------------------------------------------------------------===//
 
-  /// Parses a region. Any parsed blocks are appended to "region" and must be
+  /// Parses a region. Any parsed blocks are appended to 'region' and must be
   /// moved to the op regions after the op is created. The first block of the
-  /// region takes "arguments" of types "argTypes". If "enableNameShadowing" is
+  /// region takes 'arguments' of types 'argTypes'. If 'enableNameShadowing' is
   /// set to true, the argument names are allowed to shadow the names of other
-  /// existing SSA values defined above the region scope. "enableNameShadowing"
+  /// existing SSA values defined above the region scope. 'enableNameShadowing'
   /// can only be set to true for regions attached to operations that are
-  /// "IsolatedFromAbove".
+  /// 'IsolatedFromAbove.
   virtual ParseResult parseRegion(Region &region,
                                   ArrayRef<OperandType> arguments = {},
                                   ArrayRef<Type> argTypes = {},
                                   bool enableNameShadowing = false) = 0;
 
   /// Parses a region if present.
-  virtual ParseResult parseOptionalRegion(Region &region,
-                                          ArrayRef<OperandType> arguments = {},
-                                          ArrayRef<Type> argTypes = {},
-                                          bool enableNameShadowing = false) = 0;
+  virtual OptionalParseResult
+  parseOptionalRegion(Region &region, ArrayRef<OperandType> arguments = {},
+                      ArrayRef<Type> argTypes = {},
+                      bool enableNameShadowing = false) = 0;
 
   /// Parses a region if present. If the region is present, a new region is
   /// allocated and placed in `region`. If no region is present or on failure,
@@ -751,11 +783,18 @@ public:
   parseOptionalColonTypeList(SmallVectorImpl<Type> &result) = 0;
 
   /// Parse a list of assignments of the form
-  /// (%x1 = %y1 : type1, %x2 = %y2 : type2, ...).
-  /// The list must contain at least one entry
-  virtual ParseResult
-  parseAssignmentList(SmallVectorImpl<OperandType> &lhs,
-                      SmallVectorImpl<OperandType> &rhs) = 0;
+  ///   (%x1 = %y1, %x2 = %y2, ...)
+  ParseResult parseAssignmentList(SmallVectorImpl<OperandType> &lhs,
+                                  SmallVectorImpl<OperandType> &rhs) {
+    OptionalParseResult result = parseOptionalAssignmentList(lhs, rhs);
+    if (!result.hasValue())
+      return emitError(getCurrentLocation(), "expected '('");
+    return result.getValue();
+  }
+
+  virtual OptionalParseResult
+  parseOptionalAssignmentList(SmallVectorImpl<OperandType> &lhs,
+                              SmallVectorImpl<OperandType> &rhs) = 0;
 
   /// Parse a keyword followed by a type.
   ParseResult parseKeywordType(const char *keyword, Type &result) {
@@ -801,21 +840,17 @@ class OpAsmDialectInterface
 public:
   OpAsmDialectInterface(Dialect *dialect) : Base(dialect) {}
 
-  /// Hooks for getting identifier aliases for symbols. The identifier is used
-  /// in place of the symbol when printing textual IR.
-  ///
-  /// Hook for defining Attribute kind aliases. This will generate an alias for
-  /// all attributes of the given kind in the form : <alias>[0-9]+. These
-  /// aliases must not contain `.`.
-  virtual void getAttributeKindAliases(
-      SmallVectorImpl<std::pair<TypeID, StringRef>> &aliases) const {}
-  /// Hook for defining Attribute aliases. These aliases must not contain `.` or
-  /// end with a numeric digit([0-9]+).
-  virtual void getAttributeAliases(
-      SmallVectorImpl<std::pair<Attribute, StringRef>> &aliases) const {}
-  /// Hook for defining Type aliases.
-  virtual void
-  getTypeAliases(SmallVectorImpl<std::pair<Type, StringRef>> &aliases) const {}
+  /// Hooks for getting an alias identifier alias for a given symbol, that is
+  /// not necessarily a part of this dialect. The identifier is used in place of
+  /// the symbol when printing textual IR. These aliases must not contain `.` or
+  /// end with a numeric digit([0-9]+). Returns success if an alias was
+  /// provided, failure otherwise.
+  virtual LogicalResult getAlias(Attribute attr, raw_ostream &os) const {
+    return failure();
+  }
+  virtual LogicalResult getAlias(Type type, raw_ostream &os) const {
+    return failure();
+  }
 
   /// Get a special name to use when printing the given operation. See
   /// OpAsmInterface.td#getAsmResultNames for usage details and documentation.

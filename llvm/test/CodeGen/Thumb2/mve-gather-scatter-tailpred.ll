@@ -62,7 +62,7 @@ vector.body:                                      ; preds = %vector.body, %entry
   br i1 %8, label %middle.block, label %vector.body
 middle.block:                                     ; preds = %vector.body
   %9 = select <4 x i1> %active.lane.mask, <4 x i32> %7, <4 x i32> %vec.phi
-  %10 = call i32 @llvm.experimental.vector.reduce.add.v4i32(<4 x i32> %9)
+  %10 = call i32 @llvm.vector.reduce.add.v4i32(<4 x i32> %9)
   store i32 %10, i32* %arrayidx.us.us, align 4
   %inc21.us.us = add nuw i32 4, 1
   %exitcond81.not = icmp eq i32 %inc21.us.us, %n
@@ -80,9 +80,9 @@ define dso_local void @mve_gatherscatter_offset(i32* noalias nocapture readonly 
 ; CHECK-NEXT:    vpush {d8, d9}
 ; CHECK-NEXT:    add.w r4, r0, r3, lsl #2
 ; CHECK-NEXT:    adr r0, .LCPI1_0
+; CHECK-NEXT:    movw lr, #1250
 ; CHECK-NEXT:    vldrw.u32 q1, [r0]
 ; CHECK-NEXT:    add.w r12, r3, #4
-; CHECK-NEXT:    movw lr, #1250
 ; CHECK-NEXT:    vmov.i32 q2, #0x0
 ; CHECK-NEXT:    vmov.i32 q0, #0x14
 ; CHECK-NEXT:    dls lr, lr
@@ -139,7 +139,7 @@ vector.body:                                      ; preds = %vector.body, %entry
   br i1 %8, label %middle.block, label %vector.body
 middle.block:                                     ; preds = %vector.body
   %9 = select <4 x i1> %active.lane.mask, <4 x i32> %7, <4 x i32> %vec.phi
-  %10 = call i32 @llvm.experimental.vector.reduce.add.v4i32(<4 x i32> %9)
+  %10 = call i32 @llvm.vector.reduce.add.v4i32(<4 x i32> %9)
   store i32 %10, i32* %arrayidx.us.us, align 4
   %inc21.us.us = add nuw i32 4, 1
   %exitcond81.not = icmp eq i32 %inc21.us.us, %n
@@ -157,10 +157,10 @@ define dso_local void @mve_scatter_qi(i32* noalias nocapture readonly %A, i32* n
 ; CHECK-NEXT:    vldrw.u32 q0, [r0]
 ; CHECK-NEXT:    movw lr, #1250
 ; CHECK-NEXT:    vmov.i32 q1, #0x0
-; CHECK-NEXT:    vmov.i32 q2, #0x3
+; CHECK-NEXT:    dls lr, lr
 ; CHECK-NEXT:    vadd.i32 q0, q0, r1
 ; CHECK-NEXT:    adds r1, r3, #4
-; CHECK-NEXT:    dls lr, lr
+; CHECK-NEXT:    vmov.i32 q2, #0x3
 ; CHECK-NEXT:  .LBB2_1: @ %vector.body
 ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
 ; CHECK-NEXT:    vctp.32 r3
@@ -210,7 +210,7 @@ vector.body:                                      ; preds = %vector.body, %entry
   br i1 %8, label %middle.block, label %vector.body
 middle.block:                                     ; preds = %vector.body
   %9 = select <4 x i1> %active.lane.mask, <4 x i32> %7, <4 x i32> %vec.phi
-  %10 = call i32 @llvm.experimental.vector.reduce.add.v4i32(<4 x i32> %9)
+  %10 = call i32 @llvm.vector.reduce.add.v4i32(<4 x i32> %9)
   store i32 %10, i32* %arrayidx.us.us, align 4
   %inc21.us.us = add nuw i32 4, 1
   %exitcond81.not = icmp eq i32 %inc21.us.us, %n
@@ -452,7 +452,7 @@ for.cond.cleanup:                                 ; preds = %vector.body, %for.b
   ret void
 }
 
-declare i32 @llvm.experimental.vector.reduce.add.v4i32(<4 x i32>)
+declare i32 @llvm.vector.reduce.add.v4i32(<4 x i32>)
 declare <4 x i32> @llvm.masked.gather.v4i32.v4p0i32(<4 x i32*>, i32, <4 x i1>, <4 x i32>)
 declare <4 x i8> @llvm.masked.gather.v4i8.v4p0i8(<4 x i8*>, i32, <4 x i1>, <4 x i8>)
 declare <4 x i1> @llvm.get.active.lane.mask.v4i1.i32(i32, i32)

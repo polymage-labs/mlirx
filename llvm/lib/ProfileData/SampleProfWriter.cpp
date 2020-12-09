@@ -144,7 +144,7 @@ std::error_code SampleProfileWriterExtBinaryBase::write(
 }
 
 std::error_code
-SampleProfileWriterExtBinary::writeSample(const FunctionSamples &S) {
+SampleProfileWriterExtBinaryBase::writeSample(const FunctionSamples &S) {
   uint64_t Offset = OutputStream->tell();
   StringRef Name = S.getName();
   FuncOffsetTable[Name] = Offset - SecLBRProfileStart;
@@ -152,7 +152,7 @@ SampleProfileWriterExtBinary::writeSample(const FunctionSamples &S) {
   return writeBody(S);
 }
 
-std::error_code SampleProfileWriterExtBinary::writeFuncOffsetTable() {
+std::error_code SampleProfileWriterExtBinaryBase::writeFuncOffsetTable() {
   auto &OS = *OutputStream;
 
   // Write out the table size.
@@ -166,7 +166,7 @@ std::error_code SampleProfileWriterExtBinary::writeFuncOffsetTable() {
   return sampleprof_error::success;
 }
 
-std::error_code SampleProfileWriterExtBinary::writeNameTable() {
+std::error_code SampleProfileWriterExtBinaryBase::writeNameTable() {
   if (!UseMD5)
     return SampleProfileWriterBinary::writeNameTable();
 
@@ -174,56 +174,88 @@ std::error_code SampleProfileWriterExtBinary::writeNameTable() {
   std::set<StringRef> V;
   stablizeNameTable(V);
 
-  // Write out the name table.
+  // Write out the MD5 name table. We wrote unencoded MD5 so reader can
+  // retrieve the name using the name index without having to read the
+  // whole name table.
   encodeULEB128(NameTable.size(), OS);
-  for (auto N : V) {
-    encodeULEB128(MD5Hash(N), OS);
+  support::endian::Writer Writer(OS, support::little);
+  for (auto N : V)
+    Writer.write(MD5Hash(N));
+  return sampleprof_error::success;
+}
+
+std::error_code SampleProfileWriterExtBinaryBase::writeNameTableSection(
+    const StringMap<FunctionSamples> &ProfileMap) {
+  for (const auto &I : ProfileMap) {
+    addName(I.first());
+    addNames(I.second);
   }
+  if (auto EC = writeNameTable())
+    return EC;
+  return sampleprof_error::success;
+}
+
+std::error_code
+SampleProfileWriterExtBinaryBase::writeProfileSymbolListSection() {
+  if (ProfSymList && ProfSymList->size() > 0)
+    if (std::error_code EC = ProfSymList->write(*OutputStream))
+      return EC;
+
+  return sampleprof_error::success;
+}
+
+std::error_code SampleProfileWriterExtBinaryBase::writeOneSection(
+    SecType Type, const StringMap<FunctionSamples> &ProfileMap) {
+  // The setting of SecFlagCompress should happen before markSectionStart.
+  if (Type == SecProfileSymbolList && ProfSymList && ProfSymList->toCompress())
+    setToCompressSection(SecProfileSymbolList);
+
+  uint64_t SectionStart = markSectionStart(Type);
+  switch (Type) {
+  case SecProfSummary:
+    computeSummary(ProfileMap);
+    if (auto EC = writeSummary())
+      return EC;
+    break;
+  case SecNameTable:
+    if (auto EC = writeNameTableSection(ProfileMap))
+      return EC;
+    break;
+  case SecLBRProfile:
+    SecLBRProfileStart = OutputStream->tell();
+    if (std::error_code EC = writeFuncProfiles(ProfileMap))
+      return EC;
+    break;
+  case SecFuncOffsetTable:
+    if (auto EC = writeFuncOffsetTable())
+      return EC;
+    break;
+  case SecProfileSymbolList:
+    if (auto EC = writeProfileSymbolListSection())
+      return EC;
+    break;
+  default:
+    if (auto EC = writeCustomSection(Type))
+      return EC;
+    break;
+  }
+  if (std::error_code EC = addNewSection(Type, SectionStart))
+    return EC;
   return sampleprof_error::success;
 }
 
 std::error_code SampleProfileWriterExtBinary::writeSections(
     const StringMap<FunctionSamples> &ProfileMap) {
-  uint64_t SectionStart = markSectionStart(SecProfSummary);
-  computeSummary(ProfileMap);
-  if (auto EC = writeSummary())
+  if (auto EC = writeOneSection(SecProfSummary, ProfileMap))
     return EC;
-  if (std::error_code EC = addNewSection(SecProfSummary, SectionStart))
+  if (auto EC = writeOneSection(SecNameTable, ProfileMap))
     return EC;
-
-  // Generate the name table for all the functions referenced in the profile.
-  SectionStart = markSectionStart(SecNameTable);
-  for (const auto &I : ProfileMap) {
-    addName(I.first());
-    addNames(I.second);
-  }
-  writeNameTable();
-  if (std::error_code EC = addNewSection(SecNameTable, SectionStart))
+  if (auto EC = writeOneSection(SecLBRProfile, ProfileMap))
     return EC;
-
-  SectionStart = markSectionStart(SecLBRProfile);
-  SecLBRProfileStart = OutputStream->tell();
-  if (std::error_code EC = writeFuncProfiles(ProfileMap))
+  if (auto EC = writeOneSection(SecProfileSymbolList, ProfileMap))
     return EC;
-  if (std::error_code EC = addNewSection(SecLBRProfile, SectionStart))
+  if (auto EC = writeOneSection(SecFuncOffsetTable, ProfileMap))
     return EC;
-
-  if (ProfSymList && ProfSymList->toCompress())
-    setToCompressSection(SecProfileSymbolList);
-
-  SectionStart = markSectionStart(SecProfileSymbolList);
-  if (ProfSymList && ProfSymList->size() > 0)
-    if (std::error_code EC = ProfSymList->write(*OutputStream))
-      return EC;
-  if (std::error_code EC = addNewSection(SecProfileSymbolList, SectionStart))
-    return EC;
-
-  SectionStart = markSectionStart(SecFuncOffsetTable);
-  if (std::error_code EC = writeFuncOffsetTable())
-    return EC;
-  if (std::error_code EC = addNewSection(SecFuncOffsetTable, SectionStart))
-    return EC;
-
   return sampleprof_error::success;
 }
 
@@ -246,7 +278,10 @@ std::error_code SampleProfileWriterCompactBinary::write(
 /// it needs to be parsed by the SampleProfileReaderText class.
 std::error_code SampleProfileWriterText::writeSample(const FunctionSamples &S) {
   auto &OS = *OutputStream;
-  OS << S.getName() << ":" << S.getTotalSamples();
+  if (FunctionSamples::ProfileIsCS)
+    OS << "[" << S.getNameWithContext() << "]:" << S.getTotalSamples();
+  else
+    OS << S.getName() << ":" << S.getTotalSamples();
   if (Indent == 0)
     OS << ":" << S.getHeadSamples();
   OS << "\n";

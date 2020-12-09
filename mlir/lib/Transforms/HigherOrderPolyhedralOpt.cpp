@@ -27,6 +27,7 @@
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/LoopUtils.h"
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/Utils.h"
@@ -280,7 +281,7 @@ void HigherOrderPolyhedralOpt::runOnFunction() {
     AffineLoadOp::getCanonicalizationPatterns(patterns, context);
     AffineStoreOp::getCanonicalizationPatterns(patterns, context);
     AffineApplyOp::getCanonicalizationPatterns(patterns, context);
-    applyPatternsAndFoldGreedily(func, patterns);
+    applyPatternsAndFoldGreedily(func, std::move(patterns));
   }
 
   // Replace accesses to invariant load/store's and multiple redundant loads

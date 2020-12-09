@@ -1382,6 +1382,18 @@ the configuration (without a prefix: ``Auto``).
 
 
 
+**BreakBeforeConceptDeclarations** (``bool``)
+  If ``true``, concept will be placed on a new line.
+
+  .. code-block:: c++
+
+    true:
+     template<typename T>
+     concept ...
+
+    false:
+     template<typename T> concept ...
+
 **BreakBeforeTernaryOperators** (``bool``)
   If ``true``, ternary operators will be placed after line breaks.
 
@@ -1707,6 +1719,9 @@ the configuration (without a prefix: ``Auto``).
   priority for order.``SortPriority`` is set to the value of ``Priority``
   as default if it is not assigned.
 
+  Each regular expression can be marked as case sensitive with the field
+  ``CaseSensitive``, per default it is not.
+
   To configure this in the .clang-format file, use:
 
   .. code-block:: yaml
@@ -1715,6 +1730,7 @@ the configuration (without a prefix: ``Auto``).
       - Regex:           '^"(llvm|llvm-c|clang|clang-c)/'
         Priority:        2
         SortPriority:    2
+        CaseSensitive:   true
       - Regex:           '^(<|"(gtest|gmock|isl|json)/)'
         Priority:        3
       - Regex:           '<[[:alnum:].]+>'
@@ -1900,6 +1916,25 @@ the configuration (without a prefix: ``Auto``).
        #endif
 
 
+
+**IndentRequires** (``bool``)
+  Indent the requires clause in a template
+
+  .. code-block:: c++
+
+     true:
+     template <typename It>
+       requires Iterator<It>
+     void sort(It begin, It end) {
+       //....
+     }
+
+     false:
+     template <typename It>
+     requires Iterator<It>
+     void sort(It begin, It end) {
+       //....
+     }
 
 **IndentWidth** (``unsigned``)
   The number of columns to use for indentation.
@@ -2301,6 +2336,10 @@ the configuration (without a prefix: ``Auto``).
 **PenaltyExcessCharacter** (``unsigned``)
   The penalty for each character outside of the column limit.
 
+**PenaltyIndentedWhitespace** (``unsigned``)
+  Penalty for each character of whitespace indentation
+  (counted relative to leading non-whitespace column).
+
 **PenaltyReturnTypeOnItsOwnLine** (``unsigned``)
   Penalty for putting the return type of a function onto its own
   line.
@@ -2462,6 +2501,46 @@ the configuration (without a prefix: ``Auto``).
 
      true:                                  false:
      template <int> void foo();     vs.     template<int> void foo();
+
+**SpaceAroundPointerQualifiers** (``SpaceAroundPointerQualifiersStyle``)
+  Defines in which cases to put a space before or after pointer qualifiers
+
+  Possible values:
+
+  * ``SAPQ_Default`` (in configuration: ``Default``)
+    Don't ensure spaces around pointer qualifiers and use PointerAlignment
+    instead.
+
+    .. code-block:: c++
+
+       PointerAlignment: Left                 PointerAlignment: Right
+       void* const* x = NULL;         vs.     void *const *x = NULL;
+
+  * ``SAPQ_Before`` (in configuration: ``Before``)
+    Ensure that there is a space before pointer qualifiers.
+
+    .. code-block:: c++
+
+       PointerAlignment: Left                 PointerAlignment: Right
+       void* const* x = NULL;         vs.     void * const *x = NULL;
+
+  * ``SAPQ_After`` (in configuration: ``After``)
+    Ensure that there is a space after pointer qualifiers.
+
+    .. code-block:: c++
+
+       PointerAlignment: Left                 PointerAlignment: Right
+       void* const * x = NULL;         vs.     void *const *x = NULL;
+
+  * ``SAPQ_Both`` (in configuration: ``Both``)
+    Ensure that there is a space both before and after pointer qualifiers.
+
+    .. code-block:: c++
+
+       PointerAlignment: Left                 PointerAlignment: Right
+       void* const * x = NULL;         vs.     void * const *x = NULL;
+
+
 
 **SpaceBeforeAssignmentOperators** (``bool``)
   If ``false``, spaces will be removed before assignment operators.

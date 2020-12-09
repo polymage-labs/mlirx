@@ -11,8 +11,12 @@
 #include "Features.inc"
 #include "PathMapping.h"
 #include "Protocol.h"
+#include "TidyProvider.h"
 #include "Transport.h"
 #include "index/Background.h"
+#include "index/Index.h"
+#include "index/Merge.h"
+#include "index/ProjectAware.h"
 #include "index/Serialization.h"
 #include "index/remote/Client.h"
 #include "refactor/Rename.h"
@@ -40,6 +44,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -47,6 +52,11 @@
 
 namespace clang {
 namespace clangd {
+
+// Implemented in Check.cpp.
+bool check(const llvm::StringRef File, const ThreadsafeFS &TFS,
+           const ClangdLSPServer::Options &Opts);
+
 namespace {
 
 using llvm::cl::cat;
@@ -57,6 +67,7 @@ using llvm::cl::init;
 using llvm::cl::list;
 using llvm::cl::opt;
 using llvm::cl::OptionCategory;
+using llvm::cl::ValueOptional;
 using llvm::cl::values;
 
 // All flags must be placed in a category, or they will be shown neither in
@@ -179,7 +190,7 @@ opt<CodeCompleteOptions::CodeCompletionRankingModel> RankingModel{
     Hidden,
 };
 
-opt<bool> DecisionForestBase{
+opt<float> DecisionForestBase{
     "decision-forest-base",
     cat(Features),
     desc("Base for exponentiating the prediction from DecisionForest."),
@@ -304,7 +315,7 @@ opt<bool> CrossFileRename{
 opt<bool> RecoveryAST{
     "recovery-ast",
     cat(Features),
-    desc("Preserve expressions in AST for broken code (C++ only)."),
+    desc("Preserve expressions in AST for broken code."),
     init(ClangdServer::Options().BuildRecoveryAST),
 };
 
@@ -352,6 +363,16 @@ opt<bool> Test{
          "Intended to simplify lit tests"),
     init(false),
     Hidden,
+};
+
+opt<Path> CheckFile{
+    "check",
+    cat(Misc),
+    desc("Parse one file in isolation instead of acting as a language server. "
+         "Useful to investigate/reproduce crashes or configuration problems. "
+         "With --check=<filename>, attempts to parse a particular file."),
+    init(""),
+    ValueOptional,
 };
 
 enum PCHStorageFlag { Disk, Memory };
@@ -473,7 +494,7 @@ opt<bool> CollectMainFileRefs{
     "collect-main-file-refs",
     cat(Misc),
     desc("Store references to main-file-only symbols in the index"),
-    init(false),
+    init(ClangdServer::Options().CollectMainFileRefs),
 };
 
 #if CLANGD_ENABLE_REMOTE
@@ -508,10 +529,10 @@ public:
           "Expect URI body to be an absolute path starting with '/': {0}",
           Body);
     Body = Body.ltrim('/');
-    llvm::SmallVector<char, 16> Path(Body.begin(), Body.end());
+    llvm::SmallString<16> Path(Body);
     path::native(Path);
     fs::make_absolute(TestScheme::TestDir, Path);
-    return std::string(Path.begin(), Path.end());
+    return std::string(Path);
   }
 
   llvm::Expected<URI>
@@ -535,13 +556,35 @@ const char TestScheme::TestDir[] = "C:\\clangd-test";
 const char TestScheme::TestDir[] = "/clangd-test";
 #endif
 
+std::unique_ptr<SymbolIndex>
+loadExternalIndex(const Config::ExternalIndexSpec &External,
+                  AsyncTaskRunner &Tasks) {
+  switch (External.Kind) {
+  case Config::ExternalIndexSpec::Server:
+    log("Associating {0} with remote index at {1}.", External.MountPoint,
+        External.Location);
+    return remote::getClient(External.Location, External.MountPoint);
+  case Config::ExternalIndexSpec::File:
+    log("Associating {0} with monolithic index at {1}.", External.MountPoint,
+        External.Location);
+    auto NewIndex = std::make_unique<SwapIndex>(std::make_unique<MemIndex>());
+    Tasks.runAsync("Load-index:" + External.Location,
+                   [File = External.Location, PlaceHolder = NewIndex.get()] {
+                     if (auto Idx = loadIndex(File, /*UseDex=*/true))
+                       PlaceHolder->reset(std::move(Idx));
+                   });
+    return std::move(NewIndex);
+  }
+  llvm_unreachable("Invalid ExternalIndexKind.");
+}
 } // namespace
 } // namespace clangd
 } // namespace clang
 
 enum class ErrorResultCode : int {
   NoShutdownRequest = 1,
-  CantRunAsXPCService = 2
+  CantRunAsXPCService = 2,
+  CheckFailed = 3
 };
 
 int main(int argc, char *argv[]) {
@@ -646,7 +689,8 @@ clangd accepts flags on the commandline, and in the CLANGD_FLAGS environment var
   // If a user ran `clangd` in a terminal without redirecting anything,
   // it's somewhat likely they're confused about how to use clangd.
   // Show them the help overview, which explains.
-  if (llvm::outs().is_displayed() && llvm::errs().is_displayed())
+  if (llvm::outs().is_displayed() && llvm::errs().is_displayed() &&
+      !CheckFile.getNumOccurrences())
     llvm::errs() << Overview << "\n";
   // Use buffered stream to stderr (we still flush each log message). Unbuffered
   // stream can cause significant (non-deterministic) latency for the logger.
@@ -708,6 +752,7 @@ clangd accepts flags on the commandline, and in the CLANGD_FLAGS environment var
     Opts.ResourceDir = ResourceDir;
   Opts.BuildDynamicSymbolIndex = EnableIndex;
   Opts.CollectMainFileRefs = CollectMainFileRefs;
+  std::vector<std::unique_ptr<SymbolIndex>> IdxStack;
   std::unique_ptr<SymbolIndex> StaticIdx;
   std::future<void> AsyncIndexLoad; // Block exit while loading the index.
   if (EnableIndex && !IndexFile.empty()) {
@@ -739,7 +784,15 @@ clangd accepts flags on the commandline, and in the CLANGD_FLAGS environment var
   }
 #endif
   Opts.BackgroundIndex = EnableBackgroundIndex;
-  Opts.StaticIndex = StaticIdx.get();
+  auto PAI = createProjectAwareIndex(loadExternalIndex);
+  if (StaticIdx) {
+    IdxStack.emplace_back(std::move(StaticIdx));
+    IdxStack.emplace_back(
+        std::make_unique<MergedIndex>(PAI.get(), IdxStack.back().get()));
+    Opts.StaticIndex = IdxStack.back().get();
+  } else {
+    Opts.StaticIndex = PAI.get();
+  }
   Opts.AsyncThreadsCount = WorkerThreadsCount;
   Opts.BuildRecoveryAST = RecoveryAST;
   Opts.PreserveRecoveryASTType = RecoveryASTType;
@@ -772,7 +825,8 @@ clangd accepts flags on the commandline, and in the CLANGD_FLAGS environment var
     if (llvm::sys::path::user_config_directory(UserConfig)) {
       llvm::sys::path::append(UserConfig, "clangd", "config.yaml");
       vlog("User config file is {0}", UserConfig);
-      ProviderStack.push_back(config::Provider::fromYAMLFile(UserConfig, TFS));
+      ProviderStack.push_back(
+          config::Provider::fromYAMLFile(UserConfig, /*Directory=*/"", TFS));
     } else {
       elog("Couldn't determine user config file, not loading");
     }
@@ -784,30 +838,21 @@ clangd accepts flags on the commandline, and in the CLANGD_FLAGS environment var
   }
 
   // Create an empty clang-tidy option.
-  std::mutex ClangTidyOptMu;
-  std::unique_ptr<tidy::ClangTidyOptionsProvider>
-      ClangTidyOptProvider; /*GUARDED_BY(ClangTidyOptMu)*/
+  TidyProvider ClangTidyOptProvider;
   if (EnableClangTidy) {
-    auto EmptyDefaults = tidy::ClangTidyOptions::getDefaults();
-    EmptyDefaults.Checks.reset(); // So we can tell if checks were ever set.
-    tidy::ClangTidyOptions OverrideClangTidyOptions;
+    std::vector<TidyProvider> Providers;
+    Providers.reserve(4 + EnableConfig);
+    Providers.push_back(provideEnvironment());
+    Providers.push_back(provideClangTidyFiles(TFS));
+    if (EnableConfig)
+      Providers.push_back(provideClangdConfig());
     if (!ClangTidyChecks.empty())
-      OverrideClangTidyOptions.Checks = ClangTidyChecks;
-    ClangTidyOptProvider = std::make_unique<tidy::FileOptionsProvider>(
-        tidy::ClangTidyGlobalOptions(),
-        /* Default */ EmptyDefaults,
-        /* Override */ OverrideClangTidyOptions, TFS.view(/*CWD=*/llvm::None));
-    Opts.GetClangTidyOptions = [&](llvm::vfs::FileSystem &,
-                                   llvm::StringRef File) {
-      // This function must be thread-safe and tidy option providers are not.
-      tidy::ClangTidyOptions Opts;
-      {
-        std::lock_guard<std::mutex> Lock(ClangTidyOptMu);
-        // FIXME: use the FS provided to the function.
-        Opts = ClangTidyOptProvider->getOptions(File);
-      }
-      return Opts;
-    };
+      Providers.push_back(addTidyChecks(ClangTidyChecks));
+    else
+      Providers.push_back(provideDefaultChecks());
+    Providers.push_back(disableUnusableChecks());
+    ClangTidyOptProvider = combine(std::move(Providers));
+    Opts.ClangTidyProvider = ClangTidyOptProvider;
   }
   Opts.AsyncPreambleBuilds = AsyncPreamble;
   Opts.SuggestMissingIncludes = SuggestMissingIncludes;
@@ -825,6 +870,15 @@ clangd accepts flags on the commandline, and in the CLANGD_FLAGS environment var
   // Shall we allow to customize the file limit?
   Opts.Rename.AllowCrossFile = CrossFileRename;
 
+  if (CheckFile.getNumOccurrences()) {
+    llvm::SmallString<256> Path;
+    llvm::sys::fs::real_path(CheckFile, Path, /*expand_tilde=*/true);
+    log("Entering check mode (no LSP server)");
+    return check(Path, TFS, Opts)
+               ? 0
+               : static_cast<int>(ErrorResultCode::CheckFailed);
+  }
+
   // Initialize and run ClangdLSPServer.
   // Change stdin to binary to not lose \r\n on windows.
   llvm::sys::ChangeStdinToBinary();
@@ -835,7 +889,7 @@ clangd accepts flags on the commandline, and in the CLANGD_FLAGS environment var
     TransportLayer = newXPCTransport();
 #else
     llvm::errs() << "This clangd binary wasn't built with XPC support.\n";
-    return (int)ErrorResultCode::CantRunAsXPCService;
+    return static_cast<int>(ErrorResultCode::CantRunAsXPCService);
 #endif
   } else {
     log("Starting LSP over stdin/stdout");

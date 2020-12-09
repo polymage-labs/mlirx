@@ -215,11 +215,10 @@ Retry:
       DeclGroupPtrTy Decl;
       if (GNUAttributeLoc.isValid()) {
         DeclStart = GNUAttributeLoc;
-        Decl = ParseDeclaration(DeclaratorContext::BlockContext, DeclEnd, Attrs,
+        Decl = ParseDeclaration(DeclaratorContext::Block, DeclEnd, Attrs,
                                 &GNUAttributeLoc);
       } else {
-        Decl =
-            ParseDeclaration(DeclaratorContext::BlockContext, DeclEnd, Attrs);
+        Decl = ParseDeclaration(DeclaratorContext::Block, DeclEnd, Attrs);
       }
       if (Attrs.Range.getBegin().isValid())
         DeclStart = Attrs.Range.getBegin();
@@ -366,7 +365,8 @@ Retry:
 
   case tok::annot_pragma_fenv_access:
     ProhibitAttributes(Attrs);
-    HandlePragmaFEnvAccess();
+    Diag(Tok, diag::err_pragma_stdc_fenv_access_scope);
+    ConsumeAnnotationToken();
     return StmtEmpty();
 
   case tok::annot_pragma_fenv_round:
@@ -1033,9 +1033,9 @@ StmtResult Parser::ParseCompoundStatementBody(bool isStmtExpr) {
                                 Tok.getLocation(),
                                 "in compound statement ('{}')");
 
-  // Record the state of the FPFeatures, restore on leaving the
+  // Record the current FPFeatures, restore on leaving the
   // compound statement.
-  Sema::FPFeaturesStateRAII SaveFPContractState(Actions);
+  Sema::FPFeaturesStateRAII SaveFPFeatures(Actions);
 
   InMessageExpressionRAIIObject InMessage(*this, false);
   BalancedDelimiterTracker T(*this, tok::l_brace);
@@ -1046,6 +1046,7 @@ StmtResult Parser::ParseCompoundStatementBody(bool isStmtExpr) {
 
   // Parse any pragmas at the beginning of the compound statement.
   ParseCompoundStatementLeadingPragmas();
+  Actions.ActOnAfterCompoundStatementLeadingPragmas();
 
   StmtVector Stmts;
 
@@ -1117,7 +1118,7 @@ StmtResult Parser::ParseCompoundStatementBody(bool isStmtExpr) {
 
         SourceLocation DeclStart = Tok.getLocation(), DeclEnd;
         DeclGroupPtrTy Res =
-            ParseDeclaration(DeclaratorContext::BlockContext, DeclEnd, attrs);
+            ParseDeclaration(DeclaratorContext::Block, DeclEnd, attrs);
         R = Actions.ActOnDeclStmt(Res, DeclStart, DeclEnd);
       } else {
         // Otherwise this was a unary __extension__ marker.
@@ -1870,7 +1871,7 @@ StmtResult Parser::ParseForStatement(SourceLocation *TrailingElseLoc) {
 
     SourceLocation DeclStart = Tok.getLocation(), DeclEnd;
     DeclGroupPtrTy DG = ParseSimpleDeclaration(
-        DeclaratorContext::ForContext, DeclEnd, attrs, false,
+        DeclaratorContext::ForInit, DeclEnd, attrs, false,
         MightBeForRangeStmt ? &ForRangeInfo : nullptr);
     FirstPart = Actions.ActOnDeclStmt(DG, DeclStart, Tok.getLocation());
     if (ForRangeInfo.ParsedForRangeDecl()) {
@@ -2469,7 +2470,7 @@ StmtResult Parser::ParseCXXCatchBlock(bool FnCatch) {
     if (ParseCXXTypeSpecifierSeq(DS))
       return StmtError();
 
-    Declarator ExDecl(DS, DeclaratorContext::CXXCatchContext);
+    Declarator ExDecl(DS, DeclaratorContext::CXXCatch);
     ParseDeclarator(ExDecl);
     ExceptionDecl = Actions.ActOnExceptionDeclarator(getCurScope(), ExDecl);
   } else

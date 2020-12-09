@@ -1160,6 +1160,17 @@ struct FormatStyle {
   /// \endcode
   BraceWrappingFlags BraceWrapping;
 
+  /// If ``true``, concept will be placed on a new line.
+  /// \code
+  ///   true:
+  ///    template<typename T>
+  ///    concept ...
+  ///
+  ///   false:
+  ///    template<typename T> concept ...
+  /// \endcode
+  bool BreakBeforeConceptDeclarations;
+
   /// If ``true``, ternary operators will be placed after line breaks.
   /// \code
   ///    true:
@@ -1590,6 +1601,24 @@ struct FormatStyle {
   /// IndentExternBlockStyle is the type of indenting of extern blocks.
   IndentExternBlockStyle IndentExternBlock;
 
+  /// Indent the requires clause in a template
+  /// \code
+  ///    true:
+  ///    template <typename It>
+  ///      requires Iterator<It>
+  ///    void sort(It begin, It end) {
+  ///      //....
+  ///    }
+  ///
+  ///    false:
+  ///    template <typename It>
+  ///    requires Iterator<It>
+  ///    void sort(It begin, It end) {
+  ///      //....
+  ///    }
+  /// \endcode
+  bool IndentRequires;
+
   /// The number of columns to use for indentation.
   /// \code
   ///    IndentWidth: 3
@@ -1913,6 +1942,10 @@ struct FormatStyle {
   /// line.
   unsigned PenaltyReturnTypeOnItsOwnLine;
 
+  /// Penalty for each character of whitespace indentation
+  /// (counted relative to leading non-whitespace column).
+  unsigned PenaltyIndentedWhitespace;
+
   /// The ``&`` and ``*`` alignment style.
   enum PointerAlignmentStyle {
     /// Align pointer to the left.
@@ -2077,6 +2110,38 @@ struct FormatStyle {
   ///    template <int> void foo();     vs.     template<int> void foo();
   /// \endcode
   bool SpaceAfterTemplateKeyword;
+
+  /// Different ways to put a space before opening parentheses.
+  enum SpaceAroundPointerQualifiersStyle {
+    /// Don't ensure spaces around pointer qualifiers and use PointerAlignment
+    /// instead.
+    /// \code
+    ///    PointerAlignment: Left                 PointerAlignment: Right
+    ///    void* const* x = NULL;         vs.     void *const *x = NULL;
+    /// \endcode
+    SAPQ_Default,
+    /// Ensure that there is a space before pointer qualifiers.
+    /// \code
+    ///    PointerAlignment: Left                 PointerAlignment: Right
+    ///    void* const* x = NULL;         vs.     void * const *x = NULL;
+    /// \endcode
+    SAPQ_Before,
+    /// Ensure that there is a space after pointer qualifiers.
+    /// \code
+    ///    PointerAlignment: Left                 PointerAlignment: Right
+    ///    void* const * x = NULL;         vs.     void *const *x = NULL;
+    /// \endcode
+    SAPQ_After,
+    /// Ensure that there is a space both before and after pointer qualifiers.
+    /// \code
+    ///    PointerAlignment: Left                 PointerAlignment: Right
+    ///    void* const * x = NULL;         vs.     void * const *x = NULL;
+    /// \endcode
+    SAPQ_Both,
+  };
+
+  ///  Defines in which cases to put a space before or after pointer qualifiers
+  SpaceAroundPointerQualifiersStyle SpaceAroundPointerQualifiers;
 
   /// If ``false``, spaces will be removed before assignment operators.
   /// \code
@@ -2399,6 +2464,7 @@ struct FormatStyle {
            BinPackParameters == R.BinPackParameters &&
            BreakBeforeBinaryOperators == R.BreakBeforeBinaryOperators &&
            BreakBeforeBraces == R.BreakBeforeBraces &&
+           BreakBeforeConceptDeclarations == R.BreakBeforeConceptDeclarations &&
            BreakBeforeTernaryOperators == R.BreakBeforeTernaryOperators &&
            BreakConstructorInitializers == R.BreakConstructorInitializers &&
            CompactNamespaces == R.CompactNamespaces &&
@@ -2430,7 +2496,8 @@ struct FormatStyle {
            IndentGotoLabels == R.IndentGotoLabels &&
            IndentPPDirectives == R.IndentPPDirectives &&
            IndentExternBlock == R.IndentExternBlock &&
-           IndentWidth == R.IndentWidth && Language == R.Language &&
+           IndentRequires == R.IndentRequires && IndentWidth == R.IndentWidth &&
+           Language == R.Language &&
            IndentWrappedFunctionNames == R.IndentWrappedFunctionNames &&
            JavaImportGroups == R.JavaImportGroups &&
            JavaScriptQuotes == R.JavaScriptQuotes &&
@@ -2470,6 +2537,7 @@ struct FormatStyle {
                R.SpaceBeforeCtorInitializerColon &&
            SpaceBeforeInheritanceColon == R.SpaceBeforeInheritanceColon &&
            SpaceBeforeParens == R.SpaceBeforeParens &&
+           SpaceAroundPointerQualifiers == R.SpaceAroundPointerQualifiers &&
            SpaceBeforeRangeBasedForLoopColon ==
                R.SpaceBeforeRangeBasedForLoopColon &&
            SpaceInEmptyBlock == R.SpaceInEmptyBlock &&

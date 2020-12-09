@@ -14,7 +14,7 @@
 #define MLIR_DIALECT_SPIRV_SPIRVATTRIBUTES_H
 
 #include "mlir/Dialect/SPIRV/SPIRVTypes.h"
-#include "mlir/IR/Attributes.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Support/LLVM.h"
 
 // Pull in SPIR-V attribute definitions for target and ABI.
@@ -139,10 +139,10 @@ public:
   static StringRef getKindName();
 
   /// Returns the (version, capabilities, extensions) triple attribute.
-  VerCapExtAttr getTripleAttr();
+  VerCapExtAttr getTripleAttr() const;
 
   /// Returns the target version.
-  Version getVersion();
+  Version getVersion() const;
 
   /// Returns the target extensions.
   VerCapExtAttr::ext_range getExtensions();
@@ -155,16 +155,16 @@ public:
   ArrayAttr getCapabilitiesAttr();
 
   /// Returns the vendor ID.
-  Vendor getVendorID();
+  Vendor getVendorID() const;
 
   /// Returns the device type.
-  DeviceType getDeviceType();
+  DeviceType getDeviceType() const;
 
   /// Returns the device ID.
-  uint32_t getDeviceID();
+  uint32_t getDeviceID() const;
 
   /// Returns the target resource limits.
-  ResourceLimitsAttr getResourceLimits();
+  ResourceLimitsAttr getResourceLimits() const;
 
   static LogicalResult
   verifyConstructionInvariants(Location loc, VerCapExtAttr triple,
