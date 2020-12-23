@@ -21,9 +21,11 @@ func @main() {
   %pC = memref_cast %C : memref<2088x2048xf32> to memref<*xf32>
   call @print_memref_f32(%pC): (memref<*xf32>) -> ()
 
-  %M = dim %C, 0 : memref<2088x2048xf32>
-  %N = dim %C, 1 : memref<2088x2048xf32>
-  %K = dim %A, 1 : memref<2088x2048xf32>
+  %c0 = constant 0 : index
+  %c1 = constant 1 : index
+  %M = dim %C, %c0 : memref<2088x2048xf32>
+  %N = dim %C, %c1 : memref<2088x2048xf32>
+  %K = dim %A, %c1 : memref<2088x2048xf32>
 
   %t = subf %t_end, %t_start : f64
   %f1 = muli %M, %N : index
@@ -73,6 +75,6 @@ func @matmul_hop(%arg0: memref<2088x2048xf32>, %arg1: memref<2048x2048xf32>, %ar
   return
 }
 
-func @print_flops(f64)
-func @rtclock() -> f64
-func @print_memref_f32(memref<*xf32>)
+func private @print_flops(f64)
+func private @rtclock() -> f64
+func private @print_memref_f32(memref<*xf32>)
