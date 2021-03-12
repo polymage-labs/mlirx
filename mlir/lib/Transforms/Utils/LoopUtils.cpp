@@ -2697,7 +2697,12 @@ static LogicalResult generateCopy(
 
     // Create the fast memory space buffer just before the 'affine.for'
     // operation.
-    fastMemRef = prologue.create<AllocOp>(loc, fastMemRefType).getResult();
+    AllocOp allocOp = prologue.create<AllocOp>(loc, fastMemRefType);
+    if (copyOptions.alignment)
+      allocOp.setAttr(AllocOp::getAlignmentAttrName(),
+                      prologue.getI64IntegerAttr(copyOptions.alignment));
+    fastMemRef = allocOp.getResult();
+
     // Record it.
     fastBufferMap[memref] = fastMemRef;
     // fastMemRefType is a constant shaped memref.

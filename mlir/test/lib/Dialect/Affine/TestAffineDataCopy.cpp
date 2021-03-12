@@ -43,6 +43,10 @@ private:
       *this, "for-memref-region",
       llvm::cl::desc("Test copy generation for a single memref region"),
       llvm::cl::init(false)};
+  Option<bool> clTestAllocAlignment{
+      *this, "alloc-alignment",
+      llvm::cl::desc("Test alignment attribute of alloc instruction"),
+      llvm::cl::init(false)};
 };
 
 } // end anonymous namespace
@@ -62,7 +66,8 @@ void TestAffineDataCopy::runOnFunction() {
   auto loopNest = depthToLoops[0][0];
   auto innermostLoop = depthToLoops[innermostLoopIdx][0];
   AffineLoadOp load;
-  if (clMemRefFilter || clTestGenerateCopyForMemRegion) {
+  if (clMemRefFilter || clTestGenerateCopyForMemRegion ||
+      clTestAllocAlignment) {
     // Gather MemRef filter. For simplicity, we use the first loaded memref
     // found in the innermost loop.
     for (auto &op : *innermostLoop.getBody()) {
@@ -80,6 +85,7 @@ void TestAffineDataCopy::runOnFunction() {
                                    /*fastMemCapacityBytes=*/32 * 1024 * 1024UL,
                                    /*fastBufLayout*/{}};
   DenseSet<Operation *> copyNests;
+
   if (clMemRefFilter) {
     affineDataCopyGenerate(loopNest, copyOptions, load.getMemRef(), copyNests);
   } else if (clTestGenerateCopyForMemRegion) {
@@ -87,6 +93,9 @@ void TestAffineDataCopy::runOnFunction() {
     MemRefRegion region(loopNest.getLoc());
     region.compute(load, /*loopDepth=*/0);
     generateCopyForMemRegion(region, loopNest, copyOptions, result);
+  } else if (clTestAllocAlignment) {
+    copyOptions.alignment = 64;
+    affineDataCopyGenerate(loopNest, copyOptions, load.getMemRef(), copyNests);
   }
 
   // Promote any single iteration loops in the copy nests and simplify
