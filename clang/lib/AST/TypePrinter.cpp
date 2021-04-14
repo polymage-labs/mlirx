@@ -10,8 +10,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/Attr.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclBase.h"
 #include "clang/AST/DeclCXX.h"
@@ -19,6 +19,7 @@
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/NestedNameSpecifier.h"
+#include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/TemplateBase.h"
 #include "clang/AST/TemplateName.h"
 #include "clang/AST/Type.h"
@@ -115,6 +116,8 @@ namespace {
     static bool canPrefixQualifiers(const Type *T, bool &NeedARCStrongQualifier);
     void spaceBeforePlaceHolder(raw_ostream &OS);
     void printTypeSpec(NamedDecl *D, raw_ostream &OS);
+    void printTemplateId(const TemplateSpecializationType *T, raw_ostream &OS,
+                         bool FullyQualify);
 
     void printBefore(QualType T, raw_ostream &OS);
     void printAfter(QualType T, raw_ostream &OS);
@@ -1222,6 +1225,9 @@ void TypePrinter::AppendScope(DeclContext *DC, raw_ostream &OS,
   if (DC->isFunctionOrMethod())
     return;
 
+  if (Policy.Callbacks && Policy.Callbacks->isScopeVisible(DC))
+    return;
+
   if (const auto *NS = dyn_cast<NamespaceDecl>(DC)) {
     if (Policy.SuppressUnwrittenScope && NS->isAnonymousNamespace())
       return AppendScope(DC->getParent(), OS, NameInScope);
@@ -1229,8 +1235,7 @@ void TypePrinter::AppendScope(DeclContext *DC, raw_ostream &OS,
     // Only suppress an inline namespace if the name has the same lookup
     // results in the enclosing namespace.
     if (Policy.SuppressInlineNamespace && NS->isInline() && NameInScope &&
-        DC->getParent()->lookup(NameInScope).size() ==
-            DC->lookup(NameInScope).size())
+        NS->isRedundantInlineQualifierFor(NameInScope))
       return AppendScope(DC->getParent(), OS, NameInScope);
 
     AppendScope(DC->getParent(), OS, NS->getDeclName());
@@ -1298,8 +1303,10 @@ void TypePrinter::printTag(TagDecl *D, raw_ostream &OS) {
     if (isa<CXXRecordDecl>(D) && cast<CXXRecordDecl>(D)->isLambda()) {
       OS << "lambda";
       HasKindDecoration = true;
-    } else {
+    } else if ((isa<RecordDecl>(D) && cast<RecordDecl>(D)->isAnonymousStructOrUnion())) {
       OS << "anonymous";
+    } else {
+      OS << "unnamed";
     }
 
     if (Policy.AnonymousTagLocations) {
@@ -1348,6 +1355,22 @@ void TypePrinter::printTag(TagDecl *D, raw_ostream &OS) {
 }
 
 void TypePrinter::printRecordBefore(const RecordType *T, raw_ostream &OS) {
+  // Print the preferred name if we have one for this type.
+  for (const auto *PNA : T->getDecl()->specific_attrs<PreferredNameAttr>()) {
+    if (declaresSameEntity(PNA->getTypedefType()->getAsCXXRecordDecl(),
+                           T->getDecl())) {
+      // Find the outermost typedef or alias template.
+      QualType T = PNA->getTypedefType();
+      while (true) {
+        if (auto *TT = dyn_cast<TypedefType>(T))
+          return printTypeSpec(TT->getDecl(), OS);
+        if (auto *TST = dyn_cast<TemplateSpecializationType>(T))
+          return printTemplateId(TST, OS, /*FullyQualify=*/true);
+        T = T->getLocallyUnqualifiedSingleStepDesugaredType();
+      }
+    }
+  }
+
   printTag(T->getDecl(), OS);
 }
 
@@ -1407,18 +1430,30 @@ void TypePrinter::printSubstTemplateTypeParmPackAfter(
   printTemplateTypeParmAfter(T->getReplacedParameter(), OS);
 }
 
+void TypePrinter::printTemplateId(const TemplateSpecializationType *T,
+                                  raw_ostream &OS, bool FullyQualify) {
+  IncludeStrongLifetimeRAII Strong(Policy);
+
+  TemplateDecl *TD = T->getTemplateName().getAsTemplateDecl();
+  if (FullyQualify && TD) {
+    if (!Policy.SuppressScope)
+      AppendScope(TD->getDeclContext(), OS, TD->getDeclName());
+
+    IdentifierInfo *II = TD->getIdentifier();
+    OS << II->getName();
+  } else {
+    T->getTemplateName().print(OS, Policy);
+  }
+
+  const TemplateParameterList *TPL = TD ? TD->getTemplateParameters() : nullptr;
+  printTemplateArgumentList(OS, T->template_arguments(), Policy, TPL);
+  spaceBeforePlaceHolder(OS);
+}
+
 void TypePrinter::printTemplateSpecializationBefore(
                                             const TemplateSpecializationType *T,
                                             raw_ostream &OS) {
-  IncludeStrongLifetimeRAII Strong(Policy);
-  T->getTemplateName().print(OS, Policy);
-
-  const TemplateParameterList *TPL = nullptr;
-  if (TemplateDecl *TD = T->getTemplateName().getAsTemplateDecl())
-    TPL = TD->getTemplateParameters();
-
-  printTemplateArgumentList(OS, T->template_arguments(), Policy, TPL);
-  spaceBeforePlaceHolder(OS);
+  printTemplateId(T, OS, false);
 }
 
 void TypePrinter::printTemplateSpecializationAfter(

@@ -21,10 +21,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "PassDetail.h"
-#include "mlir/Analysis/LoopAnalysis.h"
 #include "mlir/Analysis/Utils.h"
+#include "mlir/Analysis/LoopAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/LoopUtils.h"
 #include "mlir/Dialect/Affine/Passes.h"
@@ -76,7 +77,8 @@ static bool isVectorizable(AffineForOp forOp) {
 
     // Call ops and standard load/store (as opposed to affine load/stores) will
     // not be vectorized.
-    if (isa<CallOp>(op) || isa<LoadOp>(op) || isa<StoreOp>(op)) {
+    if (isa<CallOp>(op) || isa<memref::LoadOp>(op) ||
+        isa<memref::StoreOp>(op)) {
       isVectorizable = false;
       return WalkResult::interrupt();
     }
@@ -125,7 +127,7 @@ void AffineVectorize::runOnFunction() {
     LLVM_DEBUG(llvm::dbgs() << "\n******************************************");
     LLVM_DEBUG(llvm::dbgs() << "\n[affine-vect] Vectorizing loop\n");
     LLVM_DEBUG(loop->dump());
-    loopVectorize(cast<AffineForOp>(loop), clSimdWidth);
+    (void)loopVectorize(cast<AffineForOp>(loop), clSimdWidth);
   }
   LLVM_DEBUG(llvm::dbgs() << "\n");
 }

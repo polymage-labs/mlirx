@@ -20,6 +20,7 @@
 #include "mlir/Analysis/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/Passes.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/LoopUtils.h"
@@ -174,7 +175,7 @@ void AffineScalarReplacement::forwardStoreToLoad(AffineReadOpInterface loadOp) {
 
   // Perform the actual store to load forwarding.
   Value storeVal =
-    cast<AffineWriteOpInterface>(lastWriteStoreOp).getValueToStore();
+      cast<AffineWriteOpInterface>(lastWriteStoreOp).getValueToStore();
   loadOp.getValue().replaceAllUsesWith(storeVal);
   // Record the memref for a later sweep to optimize away.
   memrefsToErase.insert(loadOp.getMemRef());
@@ -203,12 +204,12 @@ bool AffineScalarReplacement::forwardStoreToLoad(FuncOp f) {
   for (auto memref : memrefsToErase) {
     // If the memref hasn't been alloc'ed in this function, skip.
     Operation *defOp = memref.getDefiningOp();
-    if (!defOp || !isa<AllocOp>(defOp))
+    if (!defOp || !isa<memref::AllocOp>(defOp))
       // TODO: if the memref was returned by a 'call' operation, we
       // could still erase it if the call had no side-effects.
       continue;
     if (llvm::any_of(memref.getUsers(), [&](Operation *ownerOp) {
-          return !isa<AffineWriteOpInterface, DeallocOp>(ownerOp);
+          return !isa<AffineWriteOpInterface, memref::DeallocOp>(ownerOp);
         }))
       continue;
 

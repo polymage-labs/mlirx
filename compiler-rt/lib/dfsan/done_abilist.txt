@@ -28,6 +28,13 @@ fun:dfsan_set_write_callback=uninstrumented
 fun:dfsan_set_write_callback=custom
 fun:dfsan_flush=uninstrumented
 fun:dfsan_flush=discard
+fun:dfsan_print_origin_trace=uninstrumented
+fun:dfsan_print_origin_trace=discard
+fun:dfsan_get_origin=uninstrumented
+fun:dfsan_get_origin=custom
+fun:dfsan_get_init_origin=uninstrumented
+fun:dfsan_get_init_origin=discard
+
 
 ###############################################################################
 # glibc
@@ -116,6 +123,8 @@ fun:connect=discard
 fun:creat=discard
 fun:dladdr=discard
 fun:dlclose=discard
+fun:epoll_create=discard
+fun:epoll_create1=discard
 fun:epoll_ctl=discard
 fun:fclose=discard
 fun:feof=discard
@@ -181,19 +190,27 @@ fun:uselocale=discard
 
 # Functions that produce output does not depend on the input (need to zero the
 # shadow manually).
+fun:_dl_get_tls_static_info=custom
 fun:calloc=custom
 fun:clock_gettime=custom
 fun:dlopen=custom
+fun:epoll_wait=custom
 fun:fgets=custom
 fun:fstat=custom
 fun:getcwd=custom
 fun:get_current_dir_name=custom
 fun:gethostname=custom
+fun:getpeername=custom
 fun:getrlimit=custom
 fun:getrusage=custom
+fun:getsockname=custom
+fun:getsockopt=custom
 fun:nanosleep=custom
 fun:pread=custom
 fun:read=custom
+fun:recvmmsg=custom
+fun:recvmsg=custom
+fun:sigaltstack=custom
 fun:socketpair=custom
 fun:stat=custom
 fun:time=custom
@@ -204,6 +221,7 @@ fun:ctime_r=custom
 fun:inet_pton=custom
 fun:localtime_r=custom
 fun:memcpy=custom
+fun:memmove=custom
 fun:memset=custom
 fun:strcpy=custom
 fun:strdup=custom
@@ -213,6 +231,7 @@ fun:strtol=custom
 fun:strtoll=custom
 fun:strtoul=custom
 fun:strtoull=custom
+fun:strcat=custom
 
 # Functions that produce an output that is computed from the input, but is not
 # necessarily data dependent.
@@ -242,6 +261,7 @@ fun:sched_getaffinity=custom
 fun:select=custom
 fun:sigemptyset=custom
 fun:sigaction=custom
+fun:signal=custom
 fun:gettimeofday=custom
 
 # sprintf-like
@@ -251,6 +271,9 @@ fun:snprintf=custom
 # TODO: custom
 fun:asprintf=discard
 fun:qsort=discard
+
+# fork
+fun:fork=custom
 
 ###############################################################################
 # pthread
@@ -309,6 +332,10 @@ fun:pthread_setspecific=discard
 
 # Functions that take a callback (wrap the callback manually).
 fun:pthread_create=custom
+
+# Functions that produce output does not depend on the input (need to zero the
+# shadow manually).
+fun:pthread_join=custom
 
 ###############################################################################
 # libffi/libgo
@@ -375,3 +402,5 @@ fun:__sanitizer_cov_pcs_init=discard
 # Ignores the dfsan wrappers.
 fun:__dfsw_*=uninstrumented
 fun:__dfsw_*=discard
+fun:__dfso_*=uninstrumented
+fun:__dfso_*=discard

@@ -24,8 +24,7 @@ constexpr char ConstructorCall[] = "constructorCall";
 constexpr char ResetCall[] = "resetCall";
 constexpr char NewExpression[] = "newExpression";
 
-std::string GetNewExprName(const CXXNewExpr *NewExpr,
-                           const SourceManager &SM,
+std::string getNewExprName(const CXXNewExpr *NewExpr, const SourceManager &SM,
                            const LangOptions &Lang) {
   StringRef WrittenName = Lexer::getSourceText(
       CharSourceRange::getTokenRange(
@@ -84,7 +83,7 @@ void MakeSmartPtrCheck::registerMatchers(ast_matchers::MatchFinder *Finder) {
 
   Finder->addMatcher(
       traverse(
-          ast_type_traits::TK_AsIs,
+          TK_AsIs,
           cxxBindTemporaryExpr(has(ignoringParenImpCasts(
               cxxConstructExpr(
                   hasType(getSmartPointerTypeMatcher()), argumentCountIs(1),
@@ -98,7 +97,7 @@ void MakeSmartPtrCheck::registerMatchers(ast_matchers::MatchFinder *Finder) {
       this);
 
   Finder->addMatcher(
-      traverse(ast_type_traits::TK_AsIs,
+      traverse(TK_AsIs,
                cxxMemberCallExpr(
                    thisPointerType(getSmartPointerTypeMatcher()),
                    callee(cxxMethodDecl(hasName("reset"))),
@@ -176,15 +175,14 @@ void MakeSmartPtrCheck::checkConstruct(SourceManager &SM, ASTContext *Ctx,
   }
 
   // Find the location of the template's left angle.
-  size_t LAngle = ExprStr.find("<");
+  size_t LAngle = ExprStr.find('<');
   SourceLocation ConstructCallEnd;
   if (LAngle == StringRef::npos) {
     // If the template argument is missing (because it is part of the alias)
     // we have to add it back.
     ConstructCallEnd = ConstructCallStart.getLocWithOffset(ExprStr.size());
     Diag << FixItHint::CreateInsertion(
-        ConstructCallEnd,
-        "<" + GetNewExprName(New, SM, getLangOpts()) + ">");
+        ConstructCallEnd, "<" + getNewExprName(New, SM, getLangOpts()) + ">");
   } else {
     ConstructCallEnd = ConstructCallStart.getLocWithOffset(LAngle);
   }
@@ -248,7 +246,7 @@ void MakeSmartPtrCheck::checkReset(SourceManager &SM, ASTContext *Ctx,
   Diag << FixItHint::CreateReplacement(
       CharSourceRange::getCharRange(OperatorLoc, ExprEnd),
       (llvm::Twine(" = ") + MakeSmartPtrFunctionName + "<" +
-       GetNewExprName(New, SM, getLangOpts()) + ">")
+       getNewExprName(New, SM, getLangOpts()) + ">")
           .str());
 
   if (Expr->isArrow())
@@ -261,7 +259,7 @@ bool MakeSmartPtrCheck::replaceNew(DiagnosticBuilder &Diag,
                                    const CXXNewExpr *New, SourceManager &SM,
                                    ASTContext *Ctx) {
   auto SkipParensParents = [&](const Expr *E) {
-    TraversalKindScope RAII(*Ctx, ast_type_traits::TK_AsIs);
+    TraversalKindScope RAII(*Ctx, TK_AsIs);
 
     for (const Expr *OldE = nullptr; E != OldE;) {
       OldE = E;
@@ -389,19 +387,18 @@ bool MakeSmartPtrCheck::replaceNew(DiagnosticBuilder &Diag,
         //   std::make_smart_ptr<S>(std::initializer_list<int>({}));
         //   std::make_smart_ptr<S2>(S{1, 2}, 3);
         return false;
-      } else {
-        // Direct initialization with ordinary constructors.
-        //   struct S { S(int x); S(); };
-        //   smart_ptr<S>(new S{5});
-        //   smart_ptr<S>(new S{}); // use default constructor
-        // The arguments in the initialization list are going to be forwarded to
-        // the constructor, so this has to be replaced with:
-        //   std::make_smart_ptr<S>(5);
-        //   std::make_smart_ptr<S>();
-        InitRange = SourceRange(
-            NewConstruct->getParenOrBraceRange().getBegin().getLocWithOffset(1),
-            NewConstruct->getParenOrBraceRange().getEnd().getLocWithOffset(-1));
       }
+      // Direct initialization with ordinary constructors.
+      //   struct S { S(int x); S(); };
+      //   smart_ptr<S>(new S{5});
+      //   smart_ptr<S>(new S{}); // use default constructor
+      // The arguments in the initialization list are going to be forwarded to
+      // the constructor, so this has to be replaced with:
+      //   std::make_smart_ptr<S>(5);
+      //   std::make_smart_ptr<S>();
+      InitRange = SourceRange(
+          NewConstruct->getParenOrBraceRange().getBegin().getLocWithOffset(1),
+          NewConstruct->getParenOrBraceRange().getEnd().getLocWithOffset(-1));
     } else {
       // Aggregate initialization.
       //   smart_ptr<Pair>(new Pair{first, second});

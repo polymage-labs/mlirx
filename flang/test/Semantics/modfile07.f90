@@ -549,3 +549,78 @@ end
 ! end
 !end
 
+! Verify that equivalent names are used when generic operators are merged
+
+module m10a
+  interface operator(.ne.)
+  end interface
+end
+!Expect: m10a.mod
+!module m10a
+! interface operator(.ne.)
+! end interface
+!end
+
+module m10b
+  interface operator(<>)
+  end interface
+end
+!Expect: m10b.mod
+!module m10b
+! interface operator(<>)
+! end interface
+!end
+
+module m10c
+  use m10a
+  use m10b
+  interface operator(/=)
+  end interface
+end
+!Expect: m10c.mod
+!module m10c
+! use m10b,only:operator(.ne.)
+! use m10a,only:operator(.ne.)
+! interface operator(.ne.)
+! end interface
+!end
+
+module m10d
+  use m10a
+  use m10c
+  private :: operator(<>)
+end
+!Expect: m10d.mod
+!module m10d
+! use m10c,only:operator(.ne.)
+! use m10a,only:operator(.ne.)
+! interface operator(.ne.)
+! end interface
+! private::operator(.ne.)
+!end
+
+module m11a
+contains
+  subroutine s1()
+  end
+end
+!Expect: m11a.mod
+!module m11a
+!contains
+! subroutine s1()
+! end
+!end
+
+module m11b
+  use m11a
+  interface g
+    module procedure s1
+  end interface
+end
+!Expect: m11b.mod
+!module m11b
+! use m11a,only:s1
+! interface g
+!  procedure::s1
+! end interface
+!end

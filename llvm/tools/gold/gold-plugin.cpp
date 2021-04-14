@@ -288,6 +288,8 @@ namespace options {
       cs_profile_path = std::string(opt);
     } else if (opt == "new-pass-manager") {
       new_pass_manager = true;
+    } else if (opt == "legacy-pass-manager") {
+      new_pass_manager = false;
     } else if (opt == "debug-pass-manager") {
       debug_pass_manager = true;
     } else if (opt == "whole-program-visibility") {
@@ -689,7 +691,7 @@ static const void *getSymbolsAndView(claimed_file &F) {
 static void getThinLTOOldAndNewSuffix(std::string &OldSuffix,
                                       std::string &NewSuffix) {
   assert(options::thinlto_object_suffix_replace.empty() ||
-         options::thinlto_object_suffix_replace.find(";") != StringRef::npos);
+         options::thinlto_object_suffix_replace.find(';') != StringRef::npos);
   StringRef SuffixReplace = options::thinlto_object_suffix_replace;
   auto Split = SuffixReplace.split(';');
   OldSuffix = std::string(Split.first);
@@ -746,10 +748,13 @@ static void addModule(LTO &Lto, claimed_file &F, const void *View,
 
     case LDPR_RESOLVED_IR:
     case LDPR_RESOLVED_EXEC:
-    case LDPR_RESOLVED_DYN:
     case LDPR_PREEMPTED_IR:
     case LDPR_PREEMPTED_REG:
     case LDPR_UNDEF:
+      break;
+
+    case LDPR_RESOLVED_DYN:
+      R.ExportDynamic = true;
       break;
 
     case LDPR_PREVAILING_DEF_IRONLY:
@@ -763,6 +768,9 @@ static void addModule(LTO &Lto, claimed_file &F, const void *View,
 
     case LDPR_PREVAILING_DEF_IRONLY_EXP:
       R.Prevailing = !isUndefined(Sym);
+      // Identify symbols exported dynamically, and that therefore could be
+      // referenced by a shared library not visible to the linker.
+      R.ExportDynamic = true;
       if (!Res.CanOmitFromDynSym)
         R.VisibleToRegularObj = true;
       break;
@@ -845,7 +853,7 @@ static CodeGenOpt::Level getCGOptLevel() {
 static void getThinLTOOldAndNewPrefix(std::string &OldPrefix,
                                       std::string &NewPrefix) {
   StringRef PrefixReplace = options::thinlto_prefix_replace;
-  assert(PrefixReplace.empty() || PrefixReplace.find(";") != StringRef::npos);
+  assert(PrefixReplace.empty() || PrefixReplace.find(';') != StringRef::npos);
   auto Split = PrefixReplace.split(';');
   OldPrefix = std::string(Split.first);
   NewPrefix = std::string(Split.second);
@@ -910,7 +918,10 @@ static std::unique_ptr<LTO> createLTO(IndexWriteCallback OnIndexWrite,
   case options::OT_BC_ONLY:
     Conf.PostInternalizeModuleHook = [](size_t Task, const Module &M) {
       std::error_code EC;
-      raw_fd_ostream OS(output_name, EC, sys::fs::OpenFlags::OF_None);
+      SmallString<128> TaskFilename;
+      getOutputFileName(output_name, /* TempOutFile */ false, TaskFilename,
+                        Task);
+      raw_fd_ostream OS(TaskFilename, EC, sys::fs::OpenFlags::OF_None);
       if (EC)
         message(LDPL_FATAL, "Failed to write the output file.");
       WriteBitcodeToFile(M, OS, /* ShouldPreserveUseListOrder */ false);

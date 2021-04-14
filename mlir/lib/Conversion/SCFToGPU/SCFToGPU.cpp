@@ -18,6 +18,7 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/GPU/GPUDialect.h"
 #include "mlir/Dialect/GPU/ParallelLoopMapper.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/SCF.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/AffineExpr.h"
@@ -381,7 +382,7 @@ static LogicalResult processParallelLoop(
   // TODO: Verify that this is a valid GPU mapping.
   // processor ids: 0-2 block [x/y/z], 3-5 -> thread [x/y/z], 6-> sequential
   ArrayAttr mapping =
-      parallelOp.getAttrOfType<ArrayAttr>(gpu::getMappingAttrName());
+      parallelOp->getAttrOfType<ArrayAttr>(gpu::getMappingAttrName());
 
   // TODO: Support reductions.
   if (!mapping || parallelOp.getNumResults() != 0)
@@ -390,7 +391,7 @@ static LogicalResult processParallelLoop(
   Location loc = parallelOp.getLoc();
 
   auto launchIndependent = [&launchOp](Value val) {
-    return val.getParentRegion()->isAncestor(launchOp.getParentRegion());
+    return val.getParentRegion()->isAncestor(launchOp->getParentRegion());
   };
 
   auto ensureLaunchIndependent = [&rewriter,
@@ -520,11 +521,11 @@ static LogicalResult processParallelLoop(
 
   // Propagate custom user defined optional attributes, that can be used at
   // later stage, such as extension data for GPU kernel dispatch
-  for (const auto &namedAttr : parallelOp.getAttrs()) {
+  for (const auto &namedAttr : parallelOp->getAttrs()) {
     if (namedAttr.first == gpu::getMappingAttrName() ||
         namedAttr.first == ParallelOp::getOperandSegmentSizeAttr())
       continue;
-    launchOp.setAttr(namedAttr.first, namedAttr.second);
+    launchOp->setAttr(namedAttr.first, namedAttr.second);
   }
 
   Block *body = parallelOp.getBody();
@@ -568,7 +569,7 @@ ParallelToGpuLaunchLowering::matchAndRewrite(ParallelOp parallelOp,
                                              PatternRewriter &rewriter) const {
   // We can only transform starting at the outer-most loop. Launches inside of
   // parallel loops are not supported.
-  if (auto parentLoop = parallelOp.getParentOfType<ParallelOp>())
+  if (auto parentLoop = parallelOp->getParentOfType<ParallelOp>())
     return failure();
   // Create a launch operation. We start with bound one for all grid/block
   // sizes. Those will be refined later as we discover them from mappings.
@@ -641,13 +642,13 @@ ParallelToGpuLaunchLowering::matchAndRewrite(ParallelOp parallelOp,
   return success();
 }
 
-void mlir::populateParallelLoopToGPUPatterns(OwningRewritePatternList &patterns,
-                                             MLIRContext *ctx) {
-  patterns.insert<ParallelToGpuLaunchLowering>(ctx);
+void mlir::populateParallelLoopToGPUPatterns(RewritePatternSet &patterns) {
+  patterns.add<ParallelToGpuLaunchLowering>(patterns.getContext());
 }
 
 void mlir::configureParallelLoopToGPULegality(ConversionTarget &target) {
+  target.addLegalDialect<memref::MemRefDialect>();
   target.addDynamicallyLegalOp<scf::ParallelOp>([](scf::ParallelOp parallelOp) {
-    return !parallelOp.getAttr(gpu::getMappingAttrName());
+    return !parallelOp->getAttr(gpu::getMappingAttrName());
   });
 }

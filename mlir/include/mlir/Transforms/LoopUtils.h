@@ -86,7 +86,6 @@ void promoteSingleIterationLoops(FuncOp f);
 /// order, and are multiplied by the loop 'step' before being applied. If
 /// `unrollPrologueEpilogue` is set, fully unroll the prologue and epilogue
 /// loops when possible.
-LLVM_NODISCARD
 LogicalResult affineForOpBodySkew(AffineForOp forOp, ArrayRef<uint64_t> shifts,
                                   bool unrollPrologueEpilogue = false);
 
@@ -98,7 +97,6 @@ void getTileableBands(FuncOp f,
 
 /// Tiles the specified band of perfectly nested loops creating tile-space loops
 /// and intra-tile loops. A band is a contiguous set of loops.
-LLVM_NODISCARD
 LogicalResult
 tilePerfectlyNested(MutableArrayRef<AffineForOp> input,
                     ArrayRef<unsigned> tileSizes,
@@ -107,7 +105,6 @@ tilePerfectlyNested(MutableArrayRef<AffineForOp> input,
 /// Tiles the specified band of perfectly nested loops creating tile-space
 /// loops and intra-tile loops, using SSA values as tiling parameters. A band
 /// is a contiguous set of loops.
-LLVM_NODISCARD
 LogicalResult tilePerfectlyNestedParametric(
     MutableArrayRef<AffineForOp> input, ArrayRef<Value> tileSizes,
     SmallVectorImpl<AffineForOp> *tiledNest = nullptr);

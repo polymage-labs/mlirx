@@ -14,11 +14,11 @@
 #include "lld/Common/LLVM.h"
 #include "lld/Common/Memory.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "llvm/Object/Archive.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/TextAPI/MachO/InterfaceFile.h"
 #include "llvm/TextAPI/MachO/TextAPIReader.h"
 
 #include <map>
@@ -28,6 +28,9 @@ namespace llvm {
 namespace lto {
 class InputFile;
 } // namespace lto
+namespace MachO {
+class InterfaceFile;
+} // namespace MachO
 class TarWriter;
 } // namespace llvm
 
@@ -37,15 +40,20 @@ namespace macho {
 class InputSection;
 class Symbol;
 struct Reloc;
+enum class RefState : uint8_t;
 
 // If --reproduce option is given, all input files are written
 // to this tar archive.
 extern std::unique_ptr<llvm::TarWriter> tar;
 
 // If .subsections_via_symbols is set, each InputSection will be split along
-// symbol boundaries. The keys of a SubsectionMap represent the offsets of
-// each subsection from the start of the original pre-split InputSection.
-using SubsectionMap = std::map<uint32_t, InputSection *>;
+// symbol boundaries. The field offset represents the offset of the subsection
+// from the start of the original pre-split InputSection.
+struct SubsectionEntry {
+  uint64_t offset;
+  InputSection *isec;
+};
+using SubsectionMapping = std::vector<SubsectionEntry>;
 
 class InputFile {
 public:
@@ -64,7 +72,7 @@ public:
   MemoryBufferRef mb;
 
   std::vector<Symbol *> symbols;
-  std::vector<SubsectionMap> subsections;
+  std::vector<SubsectionMapping> subsections;
   // Provides an easy way to sort InputFiles deterministically.
   const int id;
 
@@ -76,8 +84,7 @@ protected:
   InputFile(Kind kind, MemoryBufferRef mb)
       : mb(mb), id(idCount++), fileKind(kind), name(mb.getBufferIdentifier()) {}
 
-  InputFile(Kind kind, const llvm::MachO::InterfaceFile &interface)
-      : id(idCount++), fileKind(kind), name(saver.save(interface.getPath())) {}
+  InputFile(Kind, const llvm::MachO::InterfaceFile &);
 
 private:
   const Kind fileKind;
@@ -95,13 +102,14 @@ public:
   llvm::DWARFUnit *compileUnit = nullptr;
   const uint32_t modTime;
   ArrayRef<llvm::MachO::section_64> sectionHeaders;
+  std::vector<InputSection *> debugSections;
 
 private:
   void parseSections(ArrayRef<llvm::MachO::section_64>);
   void parseSymbols(ArrayRef<lld::structs::nlist_64> nList, const char *strtab,
                     bool subsectionsViaSymbols);
   Symbol *parseNonSectionSymbol(const structs::nlist_64 &sym, StringRef name);
-  void parseRelocations(const llvm::MachO::section_64 &, SubsectionMap &);
+  void parseRelocations(const llvm::MachO::section_64 &, SubsectionMapping &);
   void parseDebugInfo();
 };
 
@@ -122,18 +130,28 @@ public:
   // the root dylib to ensure symbols in the child library are correctly bound
   // to the root. On the other hand, if a dylib is being directly loaded
   // (through an -lfoo flag), then `umbrella` should be a nullptr.
-  explicit DylibFile(MemoryBufferRef mb, DylibFile *umbrella = nullptr);
+  explicit DylibFile(MemoryBufferRef mb, DylibFile *umbrella = nullptr,
+                     bool isBundleLoader = false);
 
   explicit DylibFile(const llvm::MachO::InterfaceFile &interface,
-                     DylibFile *umbrella = nullptr);
+                     DylibFile *umbrella = nullptr,
+                     bool isBundleLoader = false);
 
   static bool classof(const InputFile *f) { return f->kind() == DylibKind; }
 
   StringRef dylibName;
-  uint64_t ordinal = 0; // Ordinal numbering starts from 1, so 0 is a sentinel
+  uint32_t compatibilityVersion = 0;
+  uint32_t currentVersion = 0;
+  int64_t ordinal = 0; // Ordinal numbering starts from 1, so 0 is a sentinel
+  RefState refState;
   bool reexport = false;
   bool forceWeakImport = false;
-  std::vector<DylibFile *> reexported;
+
+  // An executable can be used as a bundle loader that will load the output
+  // file being linked, and that contains symbols referenced, but not
+  // implemented in the bundle. When used like this, it is very similar
+  // to a Dylib, so we re-used the same class to represent it.
+  bool isBundleLoader;
 };
 
 // .a file
@@ -158,12 +176,24 @@ public:
   std::unique_ptr<llvm::lto::InputFile> obj;
 };
 
-extern std::vector<InputFile *> inputFiles;
+extern llvm::SetVector<InputFile *> inputFiles;
 
 llvm::Optional<MemoryBufferRef> readFile(StringRef path);
 
-const llvm::MachO::load_command *
-findCommand(const llvm::MachO::mach_header_64 *, uint32_t type);
+template <class CommandType = llvm::MachO::load_command>
+const CommandType *findCommand(const llvm::MachO::mach_header_64 *hdr,
+                               uint32_t type) {
+  const uint8_t *p = reinterpret_cast<const uint8_t *>(hdr) +
+                     sizeof(llvm::MachO::mach_header_64);
+
+  for (uint32_t i = 0, n = hdr->ncmds; i < n; ++i) {
+    auto *cmd = reinterpret_cast<const CommandType *>(p);
+    if (cmd->cmd == type)
+      return cmd;
+    p += cmd->cmdsize;
+  }
+  return nullptr;
+}
 
 } // namespace macho
 

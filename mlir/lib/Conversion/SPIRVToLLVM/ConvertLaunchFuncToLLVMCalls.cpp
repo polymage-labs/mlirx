@@ -12,12 +12,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "../PassDetail.h"
-#include "mlir/Conversion/SPIRVToLLVM/ConvertSPIRVToLLVM.h"
-#include "mlir/Conversion/SPIRVToLLVM/ConvertSPIRVToLLVMPass.h"
+#include "mlir/Conversion/SPIRVToLLVM/SPIRVToLLVM.h"
+#include "mlir/Conversion/SPIRVToLLVM/SPIRVToLLVMPass.h"
 #include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
 #include "mlir/Dialect/GPU/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/SPIRV/SPIRVOps.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
@@ -52,7 +52,7 @@ static std::string bindingName() {
 ///   i -> (0, i)
 /// which is implemented under `LowerABIAttributesPass`.
 static unsigned calculateGlobalIndex(spirv::GlobalVariableOp op) {
-  IntegerAttr binding = op.getAttrOfType<IntegerAttr>(bindingName());
+  IntegerAttr binding = op->getAttrOfType<IntegerAttr>(bindingName());
   return binding.getInt();
 }
 
@@ -60,7 +60,7 @@ static unsigned calculateGlobalIndex(spirv::GlobalVariableOp op) {
 static void copy(Location loc, Value dst, Value src, Value size,
                  OpBuilder &builder) {
   MLIRContext *context = builder.getContext();
-  auto llvmI1Type = LLVM::LLVMType::getInt1Ty(context);
+  auto llvmI1Type = IntegerType::get(context, 1);
   Value isVolatile = builder.create<LLVM::ConstantOp>(
       loc, llvmI1Type, builder.getBoolAttr(false));
   builder.create<LLVM::MemcpyOp>(loc, dst, src, size, isVolatile);
@@ -75,8 +75,8 @@ static std::string
 createGlobalVariableWithBindName(spirv::GlobalVariableOp op,
                                  StringRef kernelModuleName) {
   IntegerAttr descriptorSet =
-      op.getAttrOfType<IntegerAttr>(descriptorSetName());
-  IntegerAttr binding = op.getAttrOfType<IntegerAttr>(bindingName());
+      op->getAttrOfType<IntegerAttr>(descriptorSetName());
+  IntegerAttr binding = op->getAttrOfType<IntegerAttr>(bindingName());
   return llvm::formatv("{0}_{1}_descriptor_set{2}_binding{3}",
                        kernelModuleName.str(), op.sym_name().str(),
                        std::to_string(descriptorSet.getInt()),
@@ -87,14 +87,14 @@ createGlobalVariableWithBindName(spirv::GlobalVariableOp op,
 /// and a binding number.
 static bool hasDescriptorSetAndBinding(spirv::GlobalVariableOp op) {
   IntegerAttr descriptorSet =
-      op.getAttrOfType<IntegerAttr>(descriptorSetName());
-  IntegerAttr binding = op.getAttrOfType<IntegerAttr>(bindingName());
+      op->getAttrOfType<IntegerAttr>(descriptorSetName());
+  IntegerAttr binding = op->getAttrOfType<IntegerAttr>(bindingName());
   return descriptorSet && binding;
 }
 
 /// Fills `globalVariableMap` with SPIR-V global variables that represent kernel
 /// arguments from the given SPIR-V module. We assume that the module contains a
-/// single entry point function. Hence, all `spv.globalVariable`s with a bind
+/// single entry point function. Hence, all `spv.GlobalVariable`s with a bind
 /// attribute are kernel arguments.
 static LogicalResult getKernelGlobalVariables(
     spirv::ModuleOp module,
@@ -155,7 +155,7 @@ class GPULaunchLowering : public ConvertOpToLLVMPattern<gpu::LaunchFuncOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto *op = launchOp.getOperation();
     MLIRContext *context = rewriter.getContext();
-    auto module = launchOp.getParentOfType<ModuleOp>();
+    auto module = launchOp->getParentOfType<ModuleOp>();
 
     // Get the SPIR-V module that represents the gpu kernel module. The module
     // is named:
@@ -183,9 +183,8 @@ class GPULaunchLowering : public ConvertOpToLLVMPattern<gpu::LaunchFuncOp> {
       rewriter.setInsertionPointToStart(module.getBody());
       kernelFunc = rewriter.create<LLVM::LLVMFuncOp>(
           rewriter.getUnknownLoc(), newKernelFuncName,
-          LLVM::LLVMType::getFunctionTy(LLVM::LLVMType::getVoidTy(context),
-                                        ArrayRef<LLVM::LLVMType>(),
-                                        /*isVarArg=*/false));
+          LLVM::LLVMFunctionType::get(LLVM::LLVMVoidType::get(context),
+                                      ArrayRef<Type>()));
       rewriter.setInsertionPoint(launchOp);
     }
 
@@ -201,7 +200,7 @@ class GPULaunchLowering : public ConvertOpToLLVMPattern<gpu::LaunchFuncOp> {
     auto numKernelOperands = launchOp.getNumKernelOperands();
     auto kernelOperands = operands.take_back(numKernelOperands);
     for (auto operand : llvm::enumerate(kernelOperands)) {
-      // Check if the kernel's opernad is a ranked memref.
+      // Check if the kernel's operand is a ranked memref.
       auto memRefType = launchOp.getKernelOperand(operand.index())
                             .getType()
                             .dyn_cast<MemRefType>();
@@ -213,8 +212,8 @@ class GPULaunchLowering : public ConvertOpToLLVMPattern<gpu::LaunchFuncOp> {
       SmallVector<Value, 4> sizes;
       SmallVector<Value, 4> strides;
       Value sizeBytes;
-      getMemRefDescriptorSizes(loc, memRefType, operand.value(), rewriter,
-                               sizes, strides, sizeBytes);
+      getMemRefDescriptorSizes(loc, memRefType, {}, rewriter, sizes, strides,
+                               sizeBytes);
       MemRefDescriptor descriptor(operand.value());
       Value src = descriptor.allocatedPtr(rewriter, loc);
 
@@ -235,7 +234,7 @@ class GPULaunchLowering : public ConvertOpToLLVMPattern<gpu::LaunchFuncOp> {
         OpBuilder::InsertionGuard guard(rewriter);
         rewriter.setInsertionPointToStart(module.getBody());
         dstGlobal = rewriter.create<LLVM::GlobalOp>(
-            loc, dstGlobalType.cast<LLVM::LLVMType>(),
+            loc, dstGlobalType,
             /*isConstant=*/false, LLVM::Linkage::Linkonce, name, Attribute());
         rewriter.setInsertionPoint(launchOp);
       }
@@ -274,15 +273,13 @@ public:
 
     // Specify options to lower Standard to LLVM and pull in the conversion
     // patterns.
-    LowerToLLVMOptions options = {
-        /*useBarePtrCallConv=*/false,
-        /*emitCWrappers=*/true,
-        /*indexBitwidth=*/kDeriveIndexBitwidthFromDataLayout};
+    LowerToLLVMOptions options(module.getContext());
+    options.emitCWrappers = true;
     auto *context = module.getContext();
-    OwningRewritePatternList patterns;
+    RewritePatternSet patterns(context);
     LLVMTypeConverter typeConverter(context, options);
     populateStdToLLVMConversionPatterns(typeConverter, patterns);
-    patterns.insert<GPULaunchLowering>(typeConverter);
+    patterns.add<GPULaunchLowering>(typeConverter);
 
     // Pull in SPIR-V type conversion patterns to convert SPIR-V global
     // variable's type to LLVM dialect type.
@@ -296,7 +293,7 @@ public:
     // Finally, modify the kernel function in SPIR-V modules to avoid symbolic
     // conflicts.
     for (auto spvModule : module.getOps<spirv::ModuleOp>())
-      encodeKernelName(spvModule);
+      (void)encodeKernelName(spvModule);
   }
 };
 } // namespace

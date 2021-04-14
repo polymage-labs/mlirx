@@ -284,6 +284,14 @@ bool X86FastISel::foldX86XALUIntrinsic(X86::CondCode &CC, const Instruction *I,
       return false;
   }
 
+  // Make sure no potentially eflags clobbering phi moves can be inserted in
+  // between.
+  auto HasPhis = [](const BasicBlock *Succ) {
+    return !llvm::empty(Succ->phis());
+  };
+  if (I->isTerminator() && llvm::any_of(successors(I), HasPhis))
+    return false;
+
   CC = TmpCC;
   return true;
 }
@@ -1444,6 +1452,10 @@ bool X86FastISel::X86SelectCmp(const Instruction *I) {
 
   MVT VT;
   if (!isTypeLegal(I->getOperand(0)->getType(), VT))
+    return false;
+
+  // Below code only works for scalars.
+  if (VT.isVector())
     return false;
 
   // Try to optimize or fold the cmp.
@@ -3200,23 +3212,23 @@ bool X86FastISel::fastLowerCall(CallLoweringInfo &CLI) {
   bool &IsTailCall    = CLI.IsTailCall;
   bool IsVarArg       = CLI.IsVarArg;
   const Value *Callee = CLI.Callee;
-  MCSymbol *Symbol = CLI.Symbol;
+  MCSymbol *Symbol    = CLI.Symbol;
+  const auto *CB      = CLI.CB;
 
   bool Is64Bit        = Subtarget->is64Bit();
   bool IsWin64        = Subtarget->isCallingConvWin64(CC);
 
-  const CallInst *CI = dyn_cast_or_null<CallInst>(CLI.CB);
-  const Function *CalledFn = CI ? CI->getCalledFunction() : nullptr;
-
   // Call / invoke instructions with NoCfCheck attribute require special
   // handling.
-  const auto *II = dyn_cast_or_null<InvokeInst>(CLI.CB);
-  if ((CI && CI->doesNoCfCheck()) || (II && II->doesNoCfCheck()))
+  if (CB && CB->doesNoCfCheck())
     return false;
 
   // Functions with no_caller_saved_registers that need special handling.
-  if ((CI && CI->hasFnAttr("no_caller_saved_registers")) ||
-      (CalledFn && CalledFn->hasFnAttribute("no_caller_saved_registers")))
+  if ((CB && isa<CallInst>(CB) && CB->hasFnAttr("no_caller_saved_registers")))
+    return false;
+
+  // Functions with no_callee_saved_registers that need special handling.
+  if ((CB && CB->hasFnAttr("no_callee_saved_registers")))
     return false;
 
   // Functions using thunks for indirect calls need to use SDISel.

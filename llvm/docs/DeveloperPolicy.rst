@@ -80,7 +80,7 @@ Making and Submitting a Patch
 When making a patch for review, the goal is to make it as easy for the reviewer
 to read it as possible.  As such, we recommend that you:
 
-#. Make your patch against git master, not a branch, and not an old version
+#. Make your patch against git main, not a branch, and not an old version
    of LLVM.  This makes it easy to apply the patch.  For information on how to
    clone from git, please see the :ref:`Getting Started Guide
    <checkout>`.
@@ -146,7 +146,7 @@ problem, we have a notion of an 'owner' for a piece of the code.  The sole
 responsibility of a code owner is to ensure that a commit to their area of the
 code is appropriately reviewed, either by themself or by someone else.  The list
 of current code owners can be found in the file `CODE_OWNERS.TXT
-<https://github.com/llvm/llvm-project/blob/master/llvm/CODE_OWNERS.TXT>`_ in the
+<https://github.com/llvm/llvm-project/blob/main/llvm/CODE_OWNERS.TXT>`_ in the
 root of the LLVM source tree.
 
 Note that code ownership is completely different than reviewers: anyone can
@@ -290,6 +290,9 @@ Below are some guidelines about the format of the message itself:
   revert or reapply of a patch, include the git commit hash of the prior
   related commit. This could be as simple as "Revert commit NNNN because it
   caused PR#".
+
+* If the patch has been reviewed, add a link to its review page, as shown
+  `here <https://www.llvm.org/docs/Phabricator.html#committing-a-change>`_.
 
 For minor violations of these recommendations, the community normally favors
 reminding the contributor of this policy over reverting. Minor corrections and
@@ -786,8 +789,9 @@ Copyright, License, and Patents
 This section addresses the issues of copyright, license and patents for the LLVM
 project.  The copyright for the code is held by the contributors of
 the code.  The code is licensed under permissive `open source licensing terms`_,
-namely the Apache 2 license, which includes a copyright and `patent license`_.
-When you contribute code to the LLVM project, you license it under these terms.
+namely the Apache-2.0 with LLVM-exception license, which includes a copyright
+and `patent license`_.  When you contribute code to the LLVM project, you
+license it under these terms.
 
 If you have questions or comments about these topics, please contact the
 `LLVM Developer's Mailing List <mailto:llvm-dev@lists.llvm.org>`_.  However,

@@ -24,6 +24,29 @@ using llvm::yaml::Node;
 using llvm::yaml::ScalarNode;
 using llvm::yaml::SequenceNode;
 
+llvm::Optional<llvm::StringRef>
+bestGuess(llvm::StringRef Search,
+          llvm::ArrayRef<llvm::StringRef> AllowedValues) {
+  unsigned MaxEdit = (Search.size() + 1) / 3;
+  if (!MaxEdit)
+    return llvm::None;
+  llvm::Optional<llvm::StringRef> Result;
+  for (const auto &AllowedValue : AllowedValues) {
+    unsigned EditDistance = Search.edit_distance(AllowedValue, true, MaxEdit);
+    // We can't do better than an edit distance of 1, so just return this and
+    // save computing other values.
+    if (EditDistance == 1U)
+      return AllowedValue;
+    if (EditDistance == MaxEdit && !Result) {
+      Result = AllowedValue;
+    } else if (EditDistance < MaxEdit) {
+      Result = AllowedValue;
+      MaxEdit = EditDistance;
+    }
+  }
+  return Result;
+}
+
 class Parser {
   llvm::SourceMgr &SM;
   bool HadError = false;
@@ -39,7 +62,8 @@ public:
     Dict.handle("CompileFlags", [&](Node &N) { parse(F.CompileFlags, N); });
     Dict.handle("Index", [&](Node &N) { parse(F.Index, N); });
     Dict.handle("Style", [&](Node &N) { parse(F.Style, N); });
-    Dict.handle("ClangTidy", [&](Node &N) { parse(F.ClangTidy, N); });
+    Dict.handle("Diagnostics", [&](Node &N) { parse(F.Diagnostics, N); });
+    Dict.handle("Completion", [&](Node &N) { parse(F.Completion, N); });
     Dict.parse(N);
     return !(N.failed() || HadError);
   }
@@ -72,6 +96,9 @@ private:
       if (auto Values = scalarValues(N))
         F.Remove = std::move(*Values);
     });
+    Dict.handle("CompilationDatabase", [&](Node &N) {
+      F.CompilationDatabase = scalarValue(N, "CompilationDatabase");
+    });
     Dict.parse(N);
   }
 
@@ -84,7 +111,17 @@ private:
     Dict.parse(N);
   }
 
-  void parse(Fragment::ClangTidyBlock &F, Node &N) {
+  void parse(Fragment::DiagnosticsBlock &F, Node &N) {
+    DictParser Dict("Diagnostics", this);
+    Dict.handle("Suppress", [&](Node &N) {
+      if (auto Values = scalarValues(N))
+        F.Suppress = std::move(*Values);
+    });
+    Dict.handle("ClangTidy", [&](Node &N) { parse(F.ClangTidy, N); });
+    Dict.parse(N);
+  }
+
+  void parse(Fragment::DiagnosticsBlock::ClangTidyBlock &F, Node &N) {
     DictParser Dict("ClangTidy", this);
     Dict.handle("Add", [&](Node &N) {
       if (auto Values = scalarValues(N))
@@ -129,6 +166,19 @@ private:
     Dict.parse(N);
   }
 
+  void parse(Fragment::CompletionBlock &F, Node &N) {
+    DictParser Dict("Completion", this);
+    Dict.handle("AllScopes", [&](Node &N) {
+      if (auto Value = scalarValue(N, "AllScopes")) {
+        if (auto AllScopes = llvm::yaml::parseBool(**Value))
+          F.AllScopes = *AllScopes;
+        else
+          warning("AllScopes should be a boolean", N);
+      }
+    });
+    Dict.parse(N);
+  }
+
   // Helper for parsing mapping nodes (dictionaries).
   // We don't use YamlIO as we want to control over unknown keys.
   class DictParser {
@@ -167,6 +217,7 @@ private:
         return;
       }
       llvm::SmallSet<std::string, 8> Seen;
+      llvm::SmallVector<Located<std::string>, 0> UnknownKeys;
       // We *must* consume all items, even on error, or the parser will assert.
       for (auto &KV : llvm::cast<MappingNode>(N)) {
         auto *K = KV.getKey();
@@ -198,9 +249,30 @@ private:
             Warn = UnknownHandler(
                 Located<std::string>(**Key, K->getSourceRange()), *Value);
           if (Warn)
-            Outer->warning("Unknown " + Description + " key " + **Key, *K);
+            UnknownKeys.push_back(std::move(*Key));
         }
       }
+      if (!UnknownKeys.empty())
+        warnUnknownKeys(UnknownKeys, Seen);
+    }
+
+  private:
+    void warnUnknownKeys(llvm::ArrayRef<Located<std::string>> UnknownKeys,
+                         const llvm::SmallSet<std::string, 8> &SeenKeys) const {
+      llvm::SmallVector<llvm::StringRef> UnseenKeys;
+      for (const auto &KeyAndHandler : Keys)
+        if (!SeenKeys.count(KeyAndHandler.first.str()))
+          UnseenKeys.push_back(KeyAndHandler.first);
+
+      for (const Located<std::string> &UnknownKey : UnknownKeys)
+        if (auto BestGuess = bestGuess(*UnknownKey, UnseenKeys))
+          Outer->warning("Unknown " + Description + " key '" + *UnknownKey +
+                             "'; did you mean '" + *BestGuess + "'?",
+                         UnknownKey.Range);
+        else
+          Outer->warning("Unknown " + Description + " key '" + *UnknownKey +
+                             "'",
+                         UnknownKey.Range);
     }
   };
 
@@ -238,16 +310,20 @@ private:
   }
 
   // Report a "hard" error, reflecting a config file that can never be valid.
-  void error(const llvm::Twine &Msg, const Node &N) {
+  void error(const llvm::Twine &Msg, llvm::SMRange Range) {
     HadError = true;
-    SM.PrintMessage(N.getSourceRange().Start, llvm::SourceMgr::DK_Error, Msg,
-                    N.getSourceRange());
+    SM.PrintMessage(Range.Start, llvm::SourceMgr::DK_Error, Msg, Range);
+  }
+  void error(const llvm::Twine &Msg, const Node &N) {
+    return error(Msg, N.getSourceRange());
   }
 
   // Report a "soft" error that could be caused by e.g. version skew.
+  void warning(const llvm::Twine &Msg, llvm::SMRange Range) {
+    SM.PrintMessage(Range.Start, llvm::SourceMgr::DK_Warning, Msg, Range);
+  }
   void warning(const llvm::Twine &Msg, const Node &N) {
-    SM.PrintMessage(N.getSourceRange().Start, llvm::SourceMgr::DK_Warning, Msg,
-                    N.getSourceRange());
+    return warning(Msg, N.getSourceRange());
   }
 };
 

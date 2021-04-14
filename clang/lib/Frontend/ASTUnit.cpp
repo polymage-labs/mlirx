@@ -758,9 +758,8 @@ std::unique_ptr<ASTUnit> ASTUnit::LoadFromASTFile(
     const std::string &Filename, const PCHContainerReader &PCHContainerRdr,
     WhatToLoad ToLoad, IntrusiveRefCntPtr<DiagnosticsEngine> Diags,
     const FileSystemOptions &FileSystemOpts, bool UseDebugInfo,
-    bool OnlyLocalDecls, ArrayRef<RemappedFile> RemappedFiles,
-    CaptureDiagsKind CaptureDiagnostics, bool AllowASTWithCompilerErrors,
-    bool UserFilesAreVolatile) {
+    bool OnlyLocalDecls, CaptureDiagsKind CaptureDiagnostics,
+    bool AllowASTWithCompilerErrors, bool UserFilesAreVolatile) {
   std::unique_ptr<ASTUnit> AST(new ASTUnit(true));
 
   // Recover resources if we crash before exiting this method.
@@ -793,9 +792,6 @@ std::unique_ptr<ASTUnit> ASTUnit::LoadFromASTFile(
                                          /*Target=*/nullptr));
   AST->PPOpts = std::make_shared<PreprocessorOptions>();
 
-  for (const auto &RemappedFile : RemappedFiles)
-    AST->PPOpts->addRemappedFile(RemappedFile.first, RemappedFile.second);
-
   // Gather Info for preprocessor construction later on.
 
   HeaderSearch &HeaderInfo = *AST->HeaderInfo;
@@ -813,9 +809,10 @@ std::unique_ptr<ASTUnit> ASTUnit::LoadFromASTFile(
                               PP.getIdentifierTable(), PP.getSelectorTable(),
                               PP.getBuiltinInfo());
 
-  bool disableValid = false;
+  DisableValidationForModuleKind disableValid =
+      DisableValidationForModuleKind::None;
   if (::getenv("LIBCLANG_DISABLE_PCH_VALIDATION"))
-    disableValid = true;
+    disableValid = DisableValidationForModuleKind::All;
   AST->Reader = new ASTReader(
       PP, *AST->ModuleCache, AST->Ctx.get(), PCHContainerRdr, {},
       /*isysroot=*/"",
@@ -1320,8 +1317,8 @@ ASTUnit::getMainBufferWithPrecompiledPreamble(
     return nullptr;
 
   if (Preamble) {
-    if (Preamble->CanReuse(PreambleInvocationIn, MainFileBuffer.get(), Bounds,
-                           VFS.get())) {
+    if (Preamble->CanReuse(PreambleInvocationIn, *MainFileBuffer, Bounds,
+                           *VFS)) {
       // Okay! We can re-use the precompiled preamble.
 
       // Set the state of the diagnostic object to mimic its state

@@ -436,7 +436,7 @@ declare cc82 void @f.cc82()
 ; CHECK: declare hhvm_ccc void @f.cc82()
 declare hhvm_ccc void @f.hhvm_ccc()
 ; CHECK: declare hhvm_ccc void @f.hhvm_ccc()
-declare cc83 void @f.cc83()
+declare cc83 void @f.cc83(i8* byval(i8))
 ; CHECK: declare x86_intrcc void @f.cc83()
 declare x86_intrcc void @f.x86_intrcc()
 ; CHECK: declare x86_intrcc void @f.x86_intrcc()
@@ -517,7 +517,7 @@ declare void @f.param.inreg(i8 inreg)
 declare void @f.param.byval({ i8, i8 }* byval({ i8, i8 }))
 ; CHECK: declare void @f.param.byval({ i8, i8 }* byval({ i8, i8 }))
 declare void @f.param.inalloca(i8* inalloca)
-; CHECK: declare void @f.param.inalloca(i8* inalloca)
+; CHECK: declare void @f.param.inalloca(i8* inalloca(i8))
 declare void @f.param.sret(i8* sret(i8))
 ; CHECK: declare void @f.param.sret(i8* sret(i8))
 declare void @f.param.noalias(i8* noalias)
@@ -1276,7 +1276,7 @@ exit:
 
 define void @instructions.call_musttail(i8* inalloca %val) {
   musttail call void @f.param.inalloca(i8* inalloca %val)
-  ; CHECK: musttail call void @f.param.inalloca(i8* inalloca %val)
+  ; CHECK: musttail call void @f.param.inalloca(i8* inalloca(i8) %val)
 
   ret void
 }

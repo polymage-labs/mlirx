@@ -58,8 +58,8 @@ func private @baz() -> (i1, index, f32)
 // CHECK: func private @missingReturn()
 func private @missingReturn()
 
-// CHECK: func private @int_types(i1, i2, i4, i7, i87) -> (i1, index, i19)
-func private @int_types(i1, i2, i4, i7, i87) -> (i1, index, i19)
+// CHECK: func private @int_types(i0, i1, i2, i4, i7, i87) -> (i1, index, i19)
+func private @int_types(i0, i1, i2, i4, i7, i87) -> (i1, index, i19)
 
 // CHECK: func private @sint_types(si2, si4) -> (si7, si1023)
 func private @sint_types(si2, si4) -> (si7, si1023)
@@ -67,6 +67,8 @@ func private @sint_types(si2, si4) -> (si7, si1023)
 // CHECK: func private @uint_types(ui2, ui4) -> (ui7, ui1023)
 func private @uint_types(ui2, ui4) -> (ui7, ui1023)
 
+// CHECK: func private @float_types(f80, f128)
+func private @float_types(f80, f128)
 
 // CHECK: func private @vectors(vector<1xf32>, vector<2x4xf32>)
 func private @vectors(vector<1 x f32>, vector<2x4xf32>)
@@ -135,10 +137,34 @@ func private @memrefs_drop_triv_id_multiple(memref<2xi8, affine_map<(d0) -> (d0)
 func private @memrefs_compose_with_id(memref<2x2xi8, affine_map<(d0, d1) -> (d0, d1)>,
                                              affine_map<(d0, d1) -> (d1, d0)>>)
 
+// Test memref with custom memory space
+
+// CHECK: func private @memrefs_nomap_nospace(memref<5x6x7xf32>)
+func private @memrefs_nomap_nospace(memref<5x6x7xf32>)
+
+// CHECK: func private @memrefs_map_nospace(memref<5x6x7xf32, #map{{[0-9]+}}>)
+func private @memrefs_map_nospace(memref<5x6x7xf32, #map3>)
+
+// CHECK: func private @memrefs_nomap_intspace(memref<5x6x7xf32, 3>)
+func private @memrefs_nomap_intspace(memref<5x6x7xf32, 3>)
+
+// CHECK: func private @memrefs_map_intspace(memref<5x6x7xf32, #map{{[0-9]+}}, 5>)
+func private @memrefs_map_intspace(memref<5x6x7xf32, #map3, 5>)
+
+// CHECK: func private @memrefs_nomap_strspace(memref<5x6x7xf32, "local">)
+func private @memrefs_nomap_strspace(memref<5x6x7xf32, "local">)
+
+// CHECK: func private @memrefs_map_strspace(memref<5x6x7xf32, #map{{[0-9]+}}, "private">)
+func private @memrefs_map_strspace(memref<5x6x7xf32, #map3, "private">)
+
+// CHECK: func private @memrefs_nomap_dictspace(memref<5x6x7xf32, {memSpace = "special", subIndex = 1 : i64}>)
+func private @memrefs_nomap_dictspace(memref<5x6x7xf32, {memSpace = "special", subIndex = 1}>)
+
+// CHECK: func private @memrefs_map_dictspace(memref<5x6x7xf32, #map{{[0-9]+}}, {memSpace = "special", subIndex = 3 : i64}>)
+func private @memrefs_map_dictspace(memref<5x6x7xf32, #map3, {memSpace = "special", subIndex = 3}>)
 
 // CHECK: func private @complex_types(complex<i1>) -> complex<f32>
 func private @complex_types(complex<i1>) -> complex<f32>
-
 
 // CHECK: func private @memref_with_index_elems(memref<1x?xindex>)
 func private @memref_with_index_elems(memref<1x?xindex>)
@@ -285,7 +311,7 @@ func @triang_loop(%arg0: index, %arg1: memref<?x?xi32>) {
   %c = constant 0 : i32       // CHECK: %{{.*}} = constant 0 : i32
   affine.for %i0 = 1 to %arg0 {      // CHECK: affine.for %{{.*}} = 1 to %{{.*}} {
     affine.for %i1 = affine_map<(d0)[]->(d0)>(%i0)[] to %arg0 {  // CHECK:   affine.for %{{.*}} = #map{{[0-9]+}}(%{{.*}}) to %{{.*}} {
-      store %c, %arg1[%i0, %i1] : memref<?x?xi32>  // CHECK: store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}]
+      memref.store %c, %arg1[%i0, %i1] : memref<?x?xi32>  // CHECK: memref.store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}]
     }          // CHECK:     }
   }            // CHECK:   }
   return       // CHECK:   return
@@ -1174,10 +1200,17 @@ func private @ptr_to_function() -> !unreg.ptr<() -> ()>
 // CHECK-LABEL: func private @escaped_string_char(i1 {foo.value = "\0A"})
 func private @escaped_string_char(i1 {foo.value = "\n"})
 
-// CHECK-LABEL: func @wrapped_keyword_test
-func @wrapped_keyword_test() {
-  // CHECK: test.wrapped_keyword foo.keyword
-  test.wrapped_keyword foo.keyword
+// CHECK-LABEL: func @parse_integer_literal_test
+func @parse_integer_literal_test() {
+  // CHECK: test.parse_integer_literal : 5
+  test.parse_integer_literal : 5
+  return
+}
+
+// CHECK-LABEL: func @parse_wrapped_keyword_test
+func @parse_wrapped_keyword_test() {
+  // CHECK: test.parse_wrapped_keyword foo.keyword
+  test.parse_wrapped_keyword foo.keyword
   return
 }
 
@@ -1378,3 +1411,7 @@ test.graph_region {
   %2 = "bar"(%1) : (i64) -> i64
   "unregistered_terminator"() : () -> ()
 }) {sym_name = "unregistered_op_dominance_violation_ok", type = () -> i1} : () -> ()
+
+// This is an unregister operation, the printing/parsing is handled by the dialect.
+// CHECK: test.dialect_custom_printer custom_format
+test.dialect_custom_printer custom_format

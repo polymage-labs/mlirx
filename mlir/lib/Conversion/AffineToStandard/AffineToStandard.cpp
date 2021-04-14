@@ -15,6 +15,7 @@
 
 #include "../PassDetail.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/SCF.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/Vector/VectorOps.h"
@@ -46,7 +47,8 @@ public:
       : builder(builder), dimValues(dimValues), symbolValues(symbolValues),
         loc(loc) {}
 
-  template <typename OpTy> Value buildBinaryExpr(AffineBinaryOpExpr expr) {
+  template <typename OpTy>
+  Value buildBinaryExpr(AffineBinaryOpExpr expr) {
     auto lhs = visit(expr.getLHS());
     auto rhs = visit(expr.getRHS());
     if (!lhs || !rhs)
@@ -336,7 +338,13 @@ public:
 
   LogicalResult matchAndRewrite(AffineYieldOp op,
                                 PatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<scf::YieldOp>(op);
+    if (isa<scf::ParallelOp>(op->getParentOp())) {
+      // scf.parallel does not yield any values via its terminator scf.yield but
+      // models reductions differently using additional ops in its region.
+      rewriter.replaceOpWithNewOp<scf::YieldOp>(op);
+      return success();
+    }
+    rewriter.replaceOpWithNewOp<scf::YieldOp>(op, op.operands());
     return success();
   }
 };
@@ -351,10 +359,12 @@ public:
     Value lowerBound = lowerAffineLowerBound(op, rewriter);
     Value upperBound = lowerAffineUpperBound(op, rewriter);
     Value step = rewriter.create<ConstantIndexOp>(loc, op.getStep());
-    auto f = rewriter.create<scf::ForOp>(loc, lowerBound, upperBound, step);
-    rewriter.eraseBlock(f.getBody());
-    rewriter.inlineRegionBefore(op.region(), f.region(), f.region().end());
-    rewriter.eraseOp(op);
+    auto scfForOp = rewriter.create<scf::ForOp>(loc, lowerBound, upperBound,
+                                                step, op.getIterOperands());
+    rewriter.eraseBlock(scfForOp.getBody());
+    rewriter.inlineRegionBefore(op.region(), scfForOp.region(),
+                                scfForOp.region().end());
+    rewriter.replaceOp(op, scfForOp.results());
     return success();
   }
 };
@@ -370,7 +380,7 @@ public:
     // containing block.
     if (op.region().getBlocks().size() > 1) {
       LLVM_DEBUG(llvm::dbgs()
-                 << "Single block in graybox region supported for now");
+                 << "Single block in an execute_region supported for now");
       return failure();
     }
     auto &block = op.region().front();
@@ -384,10 +394,10 @@ public:
     for (auto operandEn : llvm::enumerate(returnOp.getOperands()))
       op.getResult(operandEn.index()).replaceAllUsesWith(operandEn.value());
 
-    // Remove the terminator of the graybox.
+    // Remove the terminator of the execute_region.
     rewriter.eraseOp(returnOp);
 
-    // Move the operations of the graybox into its parent block.
+    // Move the operations of the execute_region into its parent block.
     auto *parentBlock = op.getOperation()->getBlock();
     parentBlock->getOperations().splice(Block::iterator(op),
                                         block.getOperations());
@@ -399,6 +409,47 @@ public:
     return success();
   }
 };
+
+/// Returns the identity value associated with an AtomicRMWKind op.
+static Value getIdentityValue(AtomicRMWKind op, OpBuilder &builder,
+                              Location loc) {
+  switch (op) {
+  case AtomicRMWKind::addf:
+    return builder.create<ConstantOp>(loc, builder.getF32FloatAttr(0));
+  case AtomicRMWKind::addi:
+    return builder.create<ConstantOp>(loc, builder.getI32IntegerAttr(0));
+  case AtomicRMWKind::mulf:
+    return builder.create<ConstantOp>(loc, builder.getF32FloatAttr(1));
+  case AtomicRMWKind::muli:
+    return builder.create<ConstantOp>(loc, builder.getI32IntegerAttr(1));
+  // TODO: Add remaining reduction operations.
+  default:
+    (void)emitOptionalError(loc, "Reduction operation type not supported");
+    break;
+  }
+  return nullptr;
+}
+
+/// Return the value obtained by applying the reduction operation kind
+/// associated with a binary AtomicRMWKind op to `lhs` and `rhs`.
+static Value getReductionOp(AtomicRMWKind op, OpBuilder &builder, Location loc,
+                            Value lhs, Value rhs) {
+  switch (op) {
+  case AtomicRMWKind::addf:
+    return builder.create<AddFOp>(loc, lhs, rhs);
+  case AtomicRMWKind::addi:
+    return builder.create<AddIOp>(loc, lhs, rhs);
+  case AtomicRMWKind::mulf:
+    return builder.create<MulFOp>(loc, lhs, rhs);
+  case AtomicRMWKind::muli:
+    return builder.create<MulIOp>(loc, lhs, rhs);
+  // TODO: Add remaining reduction operations.
+  default:
+    (void)emitOptionalError(loc, "Reduction operation type not supported");
+    break;
+  }
+  return nullptr;
+}
 
 /// Convert an `affine.parallel` (loop nest) operation into a `scf.parallel`
 /// operation.
@@ -412,12 +463,13 @@ public:
     SmallVector<Value, 8> steps;
     SmallVector<Value, 8> upperBoundTuple;
     SmallVector<Value, 8> lowerBoundTuple;
+    SmallVector<Value, 8> identityVals;
     // Finding lower and upper bound by expanding the map expression.
     // Checking if expandAffineMap is not giving NULL.
-    Optional<SmallVector<Value, 8>> upperBound = expandAffineMap(
-        rewriter, loc, op.upperBoundsMap(), op.getUpperBoundsOperands());
     Optional<SmallVector<Value, 8>> lowerBound = expandAffineMap(
         rewriter, loc, op.lowerBoundsMap(), op.getLowerBoundsOperands());
+    Optional<SmallVector<Value, 8>> upperBound = expandAffineMap(
+        rewriter, loc, op.upperBoundsMap(), op.getUpperBoundsOperands());
     if (!lowerBound || !upperBound)
       return failure();
     upperBoundTuple = *upperBound;
@@ -426,13 +478,62 @@ public:
     for (Attribute step : op.steps())
       steps.push_back(rewriter.create<ConstantIndexOp>(
           loc, step.cast<IntegerAttr>().getInt()));
-    // Creating empty scf.parallel op body with appropriate bounds.
-    auto parallelOp = rewriter.create<scf::ParallelOp>(loc, lowerBoundTuple,
-                                                       upperBoundTuple, steps);
-    rewriter.eraseBlock(parallelOp.getBody());
-    rewriter.inlineRegionBefore(op.region(), parallelOp.region(),
-                                parallelOp.region().end());
-    rewriter.eraseOp(op);
+    // Get the terminator op.
+    Operation *affineParOpTerminator = op.getBody()->getTerminator();
+    scf::ParallelOp parOp;
+    if (op.results().empty()) {
+      // Case with no reduction operations/return values.
+      parOp = rewriter.create<scf::ParallelOp>(loc, lowerBoundTuple,
+                                               upperBoundTuple, steps,
+                                               /*bodyBuilderFn=*/nullptr);
+      rewriter.eraseBlock(parOp.getBody());
+      rewriter.inlineRegionBefore(op.region(), parOp.region(),
+                                  parOp.region().end());
+      rewriter.replaceOp(op, parOp.results());
+      return success();
+    }
+    // Case with affine.parallel with reduction operations/return values.
+    // scf.parallel handles the reduction operation differently unlike
+    // affine.parallel.
+    ArrayRef<Attribute> reductions = op.reductions().getValue();
+    for (Attribute reduction : reductions) {
+      // For each of the reduction operations get the identity values for
+      // initialization of the result values.
+      Optional<AtomicRMWKind> reductionOp = symbolizeAtomicRMWKind(
+          static_cast<uint64_t>(reduction.cast<IntegerAttr>().getInt()));
+      assert(reductionOp.hasValue() &&
+             "Reduction operation cannot be of None Type");
+      AtomicRMWKind reductionOpValue = reductionOp.getValue();
+      identityVals.push_back(getIdentityValue(reductionOpValue, rewriter, loc));
+    }
+    parOp = rewriter.create<scf::ParallelOp>(
+        loc, lowerBoundTuple, upperBoundTuple, steps, identityVals,
+        /*bodyBuilderFn=*/nullptr);
+
+    //  Copy the body of the affine.parallel op.
+    rewriter.eraseBlock(parOp.getBody());
+    rewriter.inlineRegionBefore(op.region(), parOp.region(),
+                                parOp.region().end());
+    assert(reductions.size() == affineParOpTerminator->getNumOperands() &&
+           "Unequal number of reductions and operands.");
+    for (unsigned i = 0, end = reductions.size(); i < end; i++) {
+      // For each of the reduction operations get the respective mlir::Value.
+      Optional<AtomicRMWKind> reductionOp =
+          symbolizeAtomicRMWKind(reductions[i].cast<IntegerAttr>().getInt());
+      assert(reductionOp.hasValue() &&
+             "Reduction Operation cannot be of None Type");
+      AtomicRMWKind reductionOpValue = reductionOp.getValue();
+      rewriter.setInsertionPoint(&parOp.getBody()->back());
+      auto reduceOp = rewriter.create<scf::ReduceOp>(
+          loc, affineParOpTerminator->getOperand(i));
+      rewriter.setInsertionPointToEnd(&reduceOp.reductionOperator().front());
+      Value reductionResult =
+          getReductionOp(reductionOpValue, rewriter, loc,
+                         reduceOp.reductionOperator().front().getArgument(0),
+                         reduceOp.reductionOperator().front().getArgument(1));
+      rewriter.create<scf::ReduceReturnOp>(loc, reductionResult);
+    }
+    rewriter.replaceOp(op, parOp.results());
     return success();
   }
 };
@@ -474,7 +575,8 @@ public:
                 : rewriter.create<ConstantIntOp>(loc, /*value=*/1, /*width=*/1);
 
     bool hasElseRegion = !op.elseRegion().empty();
-    auto ifOp = rewriter.create<scf::IfOp>(loc, cond, hasElseRegion);
+    auto ifOp = rewriter.create<scf::IfOp>(loc, op.getResultTypes(), cond,
+                                           hasElseRegion);
     rewriter.inlineRegionBefore(op.thenRegion(), &ifOp.thenRegion().back());
     rewriter.eraseBlock(&ifOp.thenRegion().back());
     if (hasElseRegion) {
@@ -482,8 +584,8 @@ public:
       rewriter.eraseBlock(&ifOp.elseRegion().back());
     }
 
-    // Ok, we're done!
-    rewriter.eraseOp(op);
+    // Replace the Affine IfOp finally.
+    rewriter.replaceOp(op, ifOp.results());
     return success();
   }
 };
@@ -507,8 +609,8 @@ public:
 };
 
 /// Apply the affine map from an 'affine.load' operation to its operands, and
-/// feed the results to a newly created 'std.load' operation (which replaces the
-/// original 'affine.load').
+/// feed the results to a newly created 'memref.load' operation (which replaces
+/// the original 'affine.load').
 class AffineLoadLowering : public OpRewritePattern<AffineLoadOp> {
 public:
   using OpRewritePattern<AffineLoadOp>::OpRewritePattern;
@@ -522,14 +624,15 @@ public:
     if (!resultOperands)
       return failure();
 
-    // Build std.load memref[expandedMap.results].
-    rewriter.replaceOpWithNewOp<LoadOp>(op, op.getMemRef(), *resultOperands);
+    // Build vector.load memref[expandedMap.results].
+    rewriter.replaceOpWithNewOp<memref::LoadOp>(op, op.getMemRef(),
+                                                *resultOperands);
     return success();
   }
 };
 
 /// Apply the affine map from an 'affine.prefetch' operation to its operands,
-/// and feed the results to a newly created 'std.prefetch' operation (which
+/// and feed the results to a newly created 'memref.prefetch' operation (which
 /// replaces the original 'affine.prefetch').
 class AffinePrefetchLowering : public OpRewritePattern<AffinePrefetchOp> {
 public:
@@ -544,16 +647,16 @@ public:
     if (!resultOperands)
       return failure();
 
-    // Build std.prefetch memref[expandedMap.results].
-    rewriter.replaceOpWithNewOp<PrefetchOp>(op, op.memref(), *resultOperands,
-                                            op.isWrite(), op.localityHint(),
-                                            op.isDataCache());
+    // Build memref.prefetch memref[expandedMap.results].
+    rewriter.replaceOpWithNewOp<memref::PrefetchOp>(
+        op, op.memref(), *resultOperands, op.isWrite(), op.localityHint(),
+        op.isDataCache());
     return success();
   }
 };
 
 /// Apply the affine map from an 'affine.store' operation to its operands, and
-/// feed the results to a newly created 'std.store' operation (which replaces
+/// feed the results to a newly created 'memref.store' operation (which replaces
 /// the original 'affine.store').
 class AffineStoreLowering : public OpRewritePattern<AffineStoreOp> {
 public:
@@ -568,16 +671,17 @@ public:
     if (!maybeExpandedMap)
       return failure();
 
-    // Build std.store valueToStore, memref[expandedMap.results].
-    rewriter.replaceOpWithNewOp<StoreOp>(op, op.getValueToStore(),
-                                         op.getMemRef(), *maybeExpandedMap);
+    // Build memref.store valueToStore, memref[expandedMap.results].
+    rewriter.replaceOpWithNewOp<memref::StoreOp>(
+        op, op.getValueToStore(), op.getMemRef(), *maybeExpandedMap);
     return success();
   }
 };
 
 /// Apply the affine maps from an 'affine.dma_start' operation to each of their
 /// respective map operands, and feed the results to a newly created
-/// 'std.dma_start' operation (which replaces the original 'affine.dma_start').
+/// 'memref.dma_start' operation (which replaces the original
+/// 'affine.dma_start').
 class AffineDmaStartLowering : public OpRewritePattern<AffineDmaStartOp> {
 public:
   using OpRewritePattern<AffineDmaStartOp>::OpRewritePattern;
@@ -606,8 +710,8 @@ public:
     if (!maybeExpandedTagMap)
       return failure();
 
-    // Build std.dma_start operation with affine map results.
-    rewriter.replaceOpWithNewOp<DmaStartOp>(
+    // Build memref.dma_start operation with affine map results.
+    rewriter.replaceOpWithNewOp<memref::DmaStartOp>(
         op, op.getSrcMemRef(), *maybeExpandedSrcMap, op.getDstMemRef(),
         *maybeExpandedDstMap, op.getNumElements(), op.getTagMemRef(),
         *maybeExpandedTagMap, op.getStride(), op.getNumElementsPerStride());
@@ -616,7 +720,7 @@ public:
 };
 
 /// Apply the affine map from an 'affine.dma_wait' operation tag memref,
-/// and feed the results to a newly created 'std.dma_wait' operation (which
+/// and feed the results to a newly created 'memref.dma_wait' operation (which
 /// replaces the original 'affine.dma_wait').
 class AffineDmaWaitLowering : public OpRewritePattern<AffineDmaWaitOp> {
 public:
@@ -631,16 +735,16 @@ public:
     if (!maybeExpandedTagMap)
       return failure();
 
-    // Build std.dma_wait operation with affine map results.
-    rewriter.replaceOpWithNewOp<DmaWaitOp>(
+    // Build memref.dma_wait operation with affine map results.
+    rewriter.replaceOpWithNewOp<memref::DmaWaitOp>(
         op, op.getTagMemRef(), *maybeExpandedTagMap, op.getNumElements());
     return success();
   }
 };
 
 /// Apply the affine map from an 'affine.vector_load' operation to its operands,
-/// and feed the results to a newly created 'vector.transfer_read' operation
-/// (which replaces the original 'affine.vector_load').
+/// and feed the results to a newly created 'vector.load' operation (which
+/// replaces the original 'affine.vector_load').
 class AffineVectorLoadLowering : public OpRewritePattern<AffineVectorLoadOp> {
 public:
   using OpRewritePattern<AffineVectorLoadOp>::OpRewritePattern;
@@ -654,16 +758,16 @@ public:
     if (!resultOperands)
       return failure();
 
-    // Build vector.transfer_read memref[expandedMap.results].
-    rewriter.replaceOpWithNewOp<TransferReadOp>(
+    // Build vector.load memref[expandedMap.results].
+    rewriter.replaceOpWithNewOp<vector::LoadOp>(
         op, op.getVectorType(), op.getMemRef(), *resultOperands);
     return success();
   }
 };
 
 /// Apply the affine map from an 'affine.vector_store' operation to its
-/// operands, and feed the results to a newly created 'vector.transfer_write'
-/// operation (which replaces the original 'affine.vector_store').
+/// operands, and feed the results to a newly created 'vector.store' operation
+/// (which replaces the original 'affine.vector_store').
 class AffineVectorStoreLowering : public OpRewritePattern<AffineVectorStoreOp> {
 public:
   using OpRewritePattern<AffineVectorStoreOp>::OpRewritePattern;
@@ -677,7 +781,7 @@ public:
     if (!maybeExpandedMap)
       return failure();
 
-    rewriter.replaceOpWithNewOp<TransferWriteOp>(
+    rewriter.replaceOpWithNewOp<vector::StoreOp>(
         op, op.getValueToStore(), op.getMemRef(), *maybeExpandedMap);
     return success();
   }
@@ -685,10 +789,9 @@ public:
 
 } // end namespace
 
-void mlir::populateAffineToStdConversionPatterns(
-    OwningRewritePatternList &patterns, MLIRContext *ctx) {
+void mlir::populateAffineToStdConversionPatterns(RewritePatternSet &patterns) {
   // clang-format off
-  patterns.insert<
+  patterns.add<
       AffineApplyLowering,
       AffineDmaStartLowering,
       AffineDmaWaitLowering,
@@ -701,28 +804,28 @@ void mlir::populateAffineToStdConversionPatterns(
       AffineStoreLowering,
       AffineForLowering,
       AffineIfLowering,
-      AffineYieldOpLowering>(ctx);
+      AffineYieldOpLowering>(patterns.getContext());
   // clang-format on
 }
 
 void mlir::populateAffineToVectorConversionPatterns(
-    OwningRewritePatternList &patterns, MLIRContext *ctx) {
+    RewritePatternSet &patterns) {
   // clang-format off
-  patterns.insert<
+  patterns.add<
       AffineVectorLoadLowering,
-      AffineVectorStoreLowering>(ctx);
+      AffineVectorStoreLowering>(patterns.getContext());
   // clang-format on
 }
 
 namespace {
 class LowerAffinePass : public ConvertAffineToStandardBase<LowerAffinePass> {
   void runOnOperation() override {
-    OwningRewritePatternList patterns;
-    populateAffineToStdConversionPatterns(patterns, &getContext());
-    populateAffineToVectorConversionPatterns(patterns, &getContext());
+    RewritePatternSet patterns(&getContext());
+    populateAffineToStdConversionPatterns(patterns);
+    populateAffineToVectorConversionPatterns(patterns);
     ConversionTarget target(getContext());
-    target
-        .addLegalDialect<scf::SCFDialect, StandardOpsDialect, VectorDialect>();
+    target.addLegalDialect<memref::MemRefDialect, scf::SCFDialect,
+                           StandardOpsDialect, VectorDialect>();
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
       signalPassFailure();

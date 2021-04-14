@@ -24,6 +24,7 @@ add_mlir_dialect_library(MLIRAffineTransforms
   MLIRAffineUtils
   MLIREDSC
   MLIRIR
+  MLIRMemRef
   MLIRPass
   MLIRSideEffectInterfaces
   MLIRStandard

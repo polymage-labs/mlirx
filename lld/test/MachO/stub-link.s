@@ -3,9 +3,15 @@
 # RUN: mkdir -p %t
 #
 # RUN: llvm-mc -filetype obj -triple x86_64-apple-darwin %s -o %t/test.o
+
 # RUN: %lld -o %t/test -lSystem -lc++ -framework CoreFoundation %t/test.o
-#
 # RUN: llvm-objdump --bind --no-show-raw-insn -d -r %t/test | FileCheck %s
+
+## libReexportSystem.tbd tests that we can reference symbols from a dylib,
+## re-exported by a top-level tapi document, which itself is re-exported by
+## another top-level tapi document.
+# RUN: %lld -o %t/with-reexport %S/Inputs/libReexportSystem.tbd -lc++ -framework CoreFoundation %t/test.o
+# RUN: llvm-objdump --bind --no-show-raw-insn -d -r %t/with-reexport | FileCheck %s
 
 # CHECK: Disassembly of section __TEXT,__text:
 # CHECK: movq {{.*}} # [[ADDR:[0-9a-f]+]]
@@ -16,7 +22,27 @@
 # CHECK-DAG: __DATA __data {{.*}} pointer 0 CoreFoundation _OBJC_METACLASS_$_NSObject
 # CHECK-DAG: __DATA __data {{.*}} pointer 0 CoreFoundation _OBJC_IVAR_$_NSConstantArray._count
 # CHECK-DAG: __DATA __data {{.*}} pointer 0 CoreFoundation _OBJC_EHTYPE_$_NSException
-# CHECK-DAG: __DATA __data {{.*}} pointer 0 libc++         ___gxx_personality_v0
+# CHECK-DAG: __DATA __data {{.*}} pointer 0 libc++abi      ___gxx_personality_v0
+
+# RUN: llvm-objdump --macho --all-headers %t/test | \
+# RUN:     FileCheck --check-prefix=LOAD %s
+
+# RUN: llvm-objdump --macho --all-headers %t/with-reexport | \
+# RUN:     FileCheck --check-prefixes=LOAD,LOAD-REEXPORT %s
+
+# LOAD:          cmd LC_LOAD_DYLIB
+# LOAD-NEXT:               cmdsize
+# LOAD-NEXT:                  name /usr/lib/libSystem.dylib
+# LOAD-NEXT:            time stamp
+# LOAD-NEXT:       current version 1.1.1
+# LOAD-NEXT: compatibility version
+
+# LOAD-REEXPORT:          cmd LC_LOAD_DYLIB
+# LOAD-REEXPORT-NEXT:               cmdsize
+# LOAD-REEXPORT-NEXT:                  name /usr/lib/libReexportSystem.dylib
+# LOAD-REEXPORT-NEXT:            time stamp
+# LOAD-REEXPORT-NEXT:       current version 1.0.0
+# LOAD-REEXPORT-NEXT: compatibility version
 
 .section __TEXT,__text
 .global _main

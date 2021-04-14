@@ -29,7 +29,7 @@ _start:
 
 # Verify that we do not generate dynamic relocations for the GOT entry.
 
-# CHECK-NOT: __wasm_apply_relocs
+# CHECK-NOT: __wasm_apply_global_relocs
 
 # Verify that we do not generate an import for foo
 
@@ -45,7 +45,7 @@ _start:
 # CHECK-NEXT:           Value:           66560
 # Global 'undefined_weak:foo' representing the GOT entry for foo
 # Unlike other internal GOT entries that need to be mutable this one
-# is immutable and not updated by `__wasm_apply_relocs`
+# is immutable and not updated by `__wasm_apply_global_relocs`
 # CHECK-NEXT:       - Index:           1
 # CHECK-NEXT:         Type:            I32
 # CHECK-NEXT:         Mutable:         false
@@ -66,7 +66,7 @@ _start:
 # CHECK-NEXT:      - Index:           0
 # CHECK-NEXT:        Name:            __stack_pointer
 # CHECK-NEXT:      - Index:           1
-# CHECK-NEXT:        Name:            'undefined_weak:foo'
+# CHECK-NEXT:        Name:            'GOT.func.internal.undefined_weak:foo'
 
 # With `-pie` or `-shared` the resolution should be deferred to the dynamic
 # linker and the function address should be imported as GOT.func.foo.

@@ -110,6 +110,9 @@ static cl::opt<bool> PreserveAssemblyUseListOrder(
     cl::desc("Preserve use-list order when writing LLVM assembly."),
     cl::init(false), cl::Hidden);
 
+static cl::opt<bool> NoVerify("disable-verify",
+                              cl::desc("Do not run the verifier"), cl::Hidden);
+
 static ExitOnError ExitOnErr;
 
 // Read the specified bitcode file in and return it. This routine searches the
@@ -144,9 +147,7 @@ static std::unique_ptr<Module> loadFile(const char *argv0,
 
 static std::unique_ptr<Module> loadArFile(const char *Argv0,
                                           std::unique_ptr<MemoryBuffer> Buffer,
-                                          LLVMContext &Context, Linker &L,
-                                          unsigned OrigFlags,
-                                          unsigned ApplicableFlags) {
+                                          LLVMContext &Context) {
   std::unique_ptr<Module> Result(new Module("ArchiveModule", Context));
   StringRef ArchiveName = Buffer->getBufferIdentifier();
   if (Verbose)
@@ -155,6 +156,7 @@ static std::unique_ptr<Module> loadArFile(const char *Argv0,
   Error Err = Error::success();
   object::Archive Archive(*Buffer, Err);
   ExitOnErr(std::move(Err));
+  Linker L(*Result);
   for (const object::Archive::Child &C : Archive.children(Err)) {
     Expected<StringRef> Ename = C.getName();
     if (Error E = Ename.takeError()) {
@@ -163,7 +165,7 @@ static std::unique_ptr<Module> loadArFile(const char *Argv0,
           << " failed to read name of archive member"
           << ArchiveName << "'\n";
       return nullptr;
-    };
+    }
     std::string ChildName = Ename.get().str();
     if (Verbose)
       errs() << "Parsing member '" << ChildName
@@ -188,7 +190,12 @@ static std::unique_ptr<Module> loadArFile(const char *Argv0,
       return nullptr;
     }
 
-    std::unique_ptr<Module> M = parseIR(MemBuf.get(), ParseErr, Context);
+    std::unique_ptr<Module> M;
+    if (DisableLazyLoad)
+      M = parseIR(MemBuf.get(), ParseErr, Context);
+    else
+      M = getLazyIRModule(MemoryBuffer::getMemBuffer(MemBuf.get(), false),
+                          ParseErr, Context);
 
     if (!M.get()) {
       errs() << Argv0 << ": ";
@@ -199,9 +206,8 @@ static std::unique_ptr<Module> loadArFile(const char *Argv0,
     }
     if (Verbose)
       errs() << "Linking member '" << ChildName << "' of archive library.\n";
-    if (L.linkModules(*Result, std::move(M), ApplicableFlags))
+    if (L.linkInModule(std::move(M)))
       return nullptr;
-    ApplicableFlags = OrigFlags;
   } // end for each child
   ExitOnErr(std::move(Err));
   return Result;
@@ -243,8 +249,10 @@ public:
 Module &ModuleLazyLoaderCache::operator()(const char *argv0,
                                           const std::string &Identifier) {
   auto &Module = ModuleMap[Identifier];
-  if (!Module)
+  if (!Module) {
     Module = createLazyModule(argv0, Identifier);
+    assert(Module && "Failed to create lazy module!");
+  }
   return *Module;
 }
 } // anonymous namespace
@@ -306,7 +314,7 @@ static bool importFunctions(const char *argv0, Module &DestModule) {
     // Load the specified source module.
     auto &SrcModule = ModuleLoaderCache(argv0, FileName);
 
-    if (verifyModule(SrcModule, &errs())) {
+    if (!NoVerify && verifyModule(SrcModule, &errs())) {
       errs() << argv0 << ": " << FileName;
       WithColor::error() << "input module is broken!\n";
       return false;
@@ -356,8 +364,7 @@ static bool linkFiles(const char *argv0, LLVMContext &Context, Linker &L,
 
     std::unique_ptr<Module> M =
         identify_magic(Buffer->getBuffer()) == file_magic::archive
-            ? loadArFile(argv0, std::move(Buffer), Context, L, Flags,
-                         ApplicableFlags)
+            ? loadArFile(argv0, std::move(Buffer), Context)
             : loadFile(argv0, std::move(Buffer), Context);
     if (!M.get()) {
       errs() << argv0 << ": ";
@@ -368,7 +375,7 @@ static bool linkFiles(const char *argv0, LLVMContext &Context, Linker &L,
     // Note that when ODR merging types cannot verify input files in here When
     // doing that debug metadata in the src module might already be pointing to
     // the destination.
-    if (DisableDITypeMap && verifyModule(*M, &errs())) {
+    if (DisableDITypeMap && !NoVerify && verifyModule(*M, &errs())) {
       errs() << argv0 << ": " << File << ": ";
       WithColor::error() << "input module is broken!\n";
       return false;
@@ -460,13 +467,14 @@ int main(int argc, char **argv) {
     errs() << "Here's the assembly:\n" << *Composite;
 
   std::error_code EC;
-  ToolOutputFile Out(OutputFilename, EC, sys::fs::OF_None);
+  ToolOutputFile Out(OutputFilename, EC,
+                     OutputAssembly ? sys::fs::OF_Text : sys::fs::OF_None);
   if (EC) {
     WithColor::error() << EC.message() << '\n';
     return 1;
   }
 
-  if (verifyModule(*Composite, &errs())) {
+  if (!NoVerify && verifyModule(*Composite, &errs())) {
     errs() << argv[0] << ": ";
     WithColor::error() << "linked module is broken!\n";
     return 1;

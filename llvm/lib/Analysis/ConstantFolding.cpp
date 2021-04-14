@@ -105,9 +105,9 @@ Constant *FoldBitCast(Constant *C, Type *DestTy, const DataLayout &DL) {
          "Invalid constantexpr bitcast!");
 
   // Catch the obvious splat cases.
-  if (C->isNullValue() && !DestTy->isX86_MMXTy())
+  if (C->isNullValue() && !DestTy->isX86_MMXTy() && !DestTy->isX86_AMXTy())
     return Constant::getNullValue(DestTy);
-  if (C->isAllOnesValue() && !DestTy->isX86_MMXTy() &&
+  if (C->isAllOnesValue() && !DestTy->isX86_MMXTy() && !DestTy->isX86_AMXTy() &&
       !DestTy->isPtrOrPtrVectorTy()) // Don't get ones for ptr types!
     return Constant::getAllOnesValue(DestTy);
 
@@ -358,12 +358,13 @@ Constant *llvm::ConstantFoldLoadThroughBitcast(Constant *C, Type *DestTy,
 
     // Catch the obvious splat cases (since all-zeros can coerce non-integral
     // pointers legally).
-    if (C->isNullValue() && !DestTy->isX86_MMXTy())
+    if (C->isNullValue() && !DestTy->isX86_MMXTy() && !DestTy->isX86_AMXTy())
       return Constant::getNullValue(DestTy);
     if (C->isAllOnesValue() &&
         (DestTy->isIntegerTy() || DestTy->isFloatingPointTy() ||
          DestTy->isVectorTy()) &&
-        !DestTy->isX86_MMXTy() && !DestTy->isPtrOrPtrVectorTy())
+        !DestTy->isX86_AMXTy() && !DestTy->isX86_MMXTy() &&
+        !DestTy->isPtrOrPtrVectorTy())
       // Get ones when the input is trivial, but
       // only for supported types inside getAllOnesValue.
       return Constant::getAllOnesValue(DestTy);
@@ -388,7 +389,7 @@ Constant *llvm::ConstantFoldLoadThroughBitcast(Constant *C, Type *DestTy,
 
     // If this isn't an aggregate type, there is nothing we can do to drill down
     // and find a bitcastable constant.
-    if (!SrcTy->isAggregateType())
+    if (!SrcTy->isAggregateType() && !SrcTy->isVectorTy())
       return nullptr;
 
     // We're simulating a load through a pointer that was bitcast to point to
@@ -575,14 +576,16 @@ Constant *FoldReinterpretLoadFromConstPtr(Constant *C, Type *LoadTy,
 
     C = FoldBitCast(C, MapTy->getPointerTo(AS), DL);
     if (Constant *Res = FoldReinterpretLoadFromConstPtr(C, MapTy, DL)) {
-      if (Res->isNullValue() && !LoadTy->isX86_MMXTy())
+      if (Res->isNullValue() && !LoadTy->isX86_MMXTy() &&
+          !LoadTy->isX86_AMXTy())
         // Materializing a zero can be done trivially without a bitcast
         return Constant::getNullValue(LoadTy);
       Type *CastTy = LoadTy->isPtrOrPtrVectorTy() ? DL.getIntPtrType(LoadTy) : LoadTy;
       Res = FoldBitCast(Res, CastTy, DL);
       if (LoadTy->isPtrOrPtrVectorTy()) {
         // For vector of pointer, we needed to first convert to a vector of integer, then do vector inttoptr
-        if (Res->isNullValue() && !LoadTy->isX86_MMXTy())
+        if (Res->isNullValue() && !LoadTy->isX86_MMXTy() &&
+            !LoadTy->isX86_AMXTy())
           return Constant::getNullValue(LoadTy);
         if (DL.isNonIntegralPointerType(LoadTy->getScalarType()))
           // Be careful not to replace a load of an addrspace value with an inttoptr here
@@ -1453,6 +1456,7 @@ bool llvm::canConstantFoldCallTo(const CallBase *Call, const Function *F) {
   case Intrinsic::launder_invariant_group:
   case Intrinsic::strip_invariant_group:
   case Intrinsic::masked_load:
+  case Intrinsic::get_active_lane_mask:
   case Intrinsic::abs:
   case Intrinsic::smax:
   case Intrinsic::smin:
@@ -1511,6 +1515,8 @@ bool llvm::canConstantFoldCallTo(const CallBase *Call, const Function *F) {
   case Intrinsic::powi:
   case Intrinsic::fma:
   case Intrinsic::fmuladd:
+  case Intrinsic::fptoui_sat:
+  case Intrinsic::fptosi_sat:
   case Intrinsic::convert_from_fp16:
   case Intrinsic::convert_to_fp16:
   case Intrinsic::amdgcn_cos:
@@ -1846,8 +1852,11 @@ static Constant *ConstantFoldScalarCall1(StringRef Name,
   if (isa<UndefValue>(Operands[0])) {
     // cosine(arg) is between -1 and 1. cosine(invalid arg) is NaN.
     // ctpop() is between 0 and bitwidth, pick 0 for undef.
+    // fptoui.sat and fptosi.sat can always fold to zero (for a zero input).
     if (IntrinsicID == Intrinsic::cos ||
-        IntrinsicID == Intrinsic::ctpop)
+        IntrinsicID == Intrinsic::ctpop ||
+        IntrinsicID == Intrinsic::fptoui_sat ||
+        IntrinsicID == Intrinsic::fptosi_sat)
       return Constant::getNullValue(Ty);
     if (IntrinsicID == Intrinsic::bswap ||
         IntrinsicID == Intrinsic::bitreverse ||
@@ -1917,6 +1926,16 @@ static Constant *ConstantFoldScalarCall1(StringRef Name,
       else
         return Signed ? ConstantInt::get(Ty, APInt::getSignedMaxValue(Width))
                       : ConstantInt::get(Ty, APInt::getMaxValue(Width));
+    }
+
+    if (IntrinsicID == Intrinsic::fptoui_sat ||
+        IntrinsicID == Intrinsic::fptosi_sat) {
+      // convertToInteger() already has the desired saturation semantics.
+      APSInt Int(Ty->getIntegerBitWidth(),
+                 IntrinsicID == Intrinsic::fptoui_sat);
+      bool IsExact;
+      U.convertToInteger(Int, APFloat::rmTowardZero, &IsExact);
+      return ConstantInt::get(Ty, Int);
     }
 
     if (!Ty->isHalfTy() && !Ty->isFloatTy() && !Ty->isDoubleTy())
@@ -2500,16 +2519,19 @@ static Constant *ConstantFoldScalarCall2(StringRef Name,
 
     case Intrinsic::usub_with_overflow:
     case Intrinsic::ssub_with_overflow:
+      // X - undef -> { 0, false }
+      // undef - X -> { 0, false }
+      if (!C0 || !C1)
+        return Constant::getNullValue(Ty);
+      LLVM_FALLTHROUGH;
     case Intrinsic::uadd_with_overflow:
     case Intrinsic::sadd_with_overflow:
-      // X - undef -> { undef, false }
-      // undef - X -> { undef, false }
-      // X + undef -> { undef, false }
-      // undef + x -> { undef, false }
+      // X + undef -> { -1, false }
+      // undef + x -> { -1, false }
       if (!C0 || !C1) {
         return ConstantStruct::get(
             cast<StructType>(Ty),
-            {UndefValue::get(Ty->getStructElementType(0)),
+            {Constant::getAllOnesValue(Ty->getStructElementType(0)),
              Constant::getNullValue(Ty->getStructElementType(1))});
       }
       LLVM_FALLTHROUGH;
@@ -2756,41 +2778,42 @@ static Constant *ConstantFoldScalarCall3(StringRef Name,
     }
   }
 
-  if (const auto *Op1 = dyn_cast<ConstantInt>(Operands[0])) {
-    if (const auto *Op2 = dyn_cast<ConstantInt>(Operands[1])) {
-      if (const auto *Op3 = dyn_cast<ConstantInt>(Operands[2])) {
-        switch (IntrinsicID) {
-        default: break;
-        case Intrinsic::smul_fix:
-        case Intrinsic::smul_fix_sat: {
-          // This code performs rounding towards negative infinity in case the
-          // result cannot be represented exactly for the given scale. Targets
-          // that do care about rounding should use a target hook for specifying
-          // how rounding should be done, and provide their own folding to be
-          // consistent with rounding. This is the same approach as used by
-          // DAGTypeLegalizer::ExpandIntRes_MULFIX.
-          const APInt &Lhs = Op1->getValue();
-          const APInt &Rhs = Op2->getValue();
-          unsigned Scale = Op3->getValue().getZExtValue();
-          unsigned Width = Lhs.getBitWidth();
-          assert(Scale < Width && "Illegal scale.");
-          unsigned ExtendedWidth = Width * 2;
-          APInt Product = (Lhs.sextOrSelf(ExtendedWidth) *
-                           Rhs.sextOrSelf(ExtendedWidth)).ashr(Scale);
-          if (IntrinsicID == Intrinsic::smul_fix_sat) {
-            APInt MaxValue =
-              APInt::getSignedMaxValue(Width).sextOrSelf(ExtendedWidth);
-            APInt MinValue =
-              APInt::getSignedMinValue(Width).sextOrSelf(ExtendedWidth);
-            Product = APIntOps::smin(Product, MaxValue);
-            Product = APIntOps::smax(Product, MinValue);
-          }
-          return ConstantInt::get(Ty->getContext(),
-                                  Product.sextOrTrunc(Width));
-        }
-        }
-      }
+  if (IntrinsicID == Intrinsic::smul_fix ||
+      IntrinsicID == Intrinsic::smul_fix_sat) {
+    // poison * C -> poison
+    // C * poison -> poison
+    if (isa<PoisonValue>(Operands[0]) || isa<PoisonValue>(Operands[1]))
+      return PoisonValue::get(Ty);
+
+    const APInt *C0, *C1;
+    if (!getConstIntOrUndef(Operands[0], C0) ||
+        !getConstIntOrUndef(Operands[1], C1))
+      return nullptr;
+
+    // undef * C -> 0
+    // C * undef -> 0
+    if (!C0 || !C1)
+      return Constant::getNullValue(Ty);
+
+    // This code performs rounding towards negative infinity in case the result
+    // cannot be represented exactly for the given scale. Targets that do care
+    // about rounding should use a target hook for specifying how rounding
+    // should be done, and provide their own folding to be consistent with
+    // rounding. This is the same approach as used by
+    // DAGTypeLegalizer::ExpandIntRes_MULFIX.
+    unsigned Scale = cast<ConstantInt>(Operands[2])->getZExtValue();
+    unsigned Width = C0->getBitWidth();
+    assert(Scale < Width && "Illegal scale.");
+    unsigned ExtendedWidth = Width * 2;
+    APInt Product = (C0->sextOrSelf(ExtendedWidth) *
+                     C1->sextOrSelf(ExtendedWidth)).ashr(Scale);
+    if (IntrinsicID == Intrinsic::smul_fix_sat) {
+      APInt Max = APInt::getSignedMaxValue(Width).sextOrSelf(ExtendedWidth);
+      APInt Min = APInt::getSignedMinValue(Width).sextOrSelf(ExtendedWidth);
+      Product = APIntOps::smin(Product, Max);
+      Product = APIntOps::smax(Product, Min);
     }
+    return ConstantInt::get(Ty->getContext(), Product.sextOrTrunc(Width));
   }
 
   if (IntrinsicID == Intrinsic::fshl || IntrinsicID == Intrinsic::fshr) {
@@ -2916,6 +2939,25 @@ static Constant *ConstantFoldVectorCall(StringRef Name,
       SmallVector<Constant *, 16> NCs;
       for (unsigned i = 0; i < Lanes; i++) {
         if (i < Limit)
+          NCs.push_back(ConstantInt::getTrue(Ty));
+        else
+          NCs.push_back(ConstantInt::getFalse(Ty));
+      }
+      return ConstantVector::get(NCs);
+    }
+    break;
+  }
+  case Intrinsic::get_active_lane_mask: {
+    auto *Op0 = dyn_cast<ConstantInt>(Operands[0]);
+    auto *Op1 = dyn_cast<ConstantInt>(Operands[1]);
+    if (Op0 && Op1) {
+      unsigned Lanes = FVTy->getNumElements();
+      uint64_t Base = Op0->getZExtValue();
+      uint64_t Limit = Op1->getZExtValue();
+
+      SmallVector<Constant *, 16> NCs;
+      for (unsigned i = 0; i < Lanes; i++) {
+        if (Base + i < Limit)
           NCs.push_back(ConstantInt::getTrue(Ty));
         else
           NCs.push_back(ConstantInt::getFalse(Ty));

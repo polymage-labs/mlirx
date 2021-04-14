@@ -119,7 +119,7 @@ bool elf::link(ArrayRef<const char *> args, bool canExitEarly,
 
   config->progName = args[0];
 
-  driver->main(args);
+  driver->linkerMain(args);
 
   // Exit immediately if we don't need to return to the caller.
   // This saves time because the overhead of calling destructors
@@ -144,14 +144,15 @@ static std::tuple<ELFKind, uint16_t, uint8_t> parseEmulation(StringRef emul) {
 
   std::pair<ELFKind, uint16_t> ret =
       StringSwitch<std::pair<ELFKind, uint16_t>>(s)
-          .Cases("aarch64elf", "aarch64linux", "aarch64_elf64_le_vec",
-                 {ELF64LEKind, EM_AARCH64})
+          .Cases("aarch64elf", "aarch64linux", {ELF64LEKind, EM_AARCH64})
+          .Cases("aarch64elfb", "aarch64linuxb", {ELF64BEKind, EM_AARCH64})
           .Cases("armelf", "armelf_linux_eabi", {ELF32LEKind, EM_ARM})
           .Case("elf32_x86_64", {ELF32LEKind, EM_X86_64})
           .Cases("elf32btsmip", "elf32btsmipn32", {ELF32BEKind, EM_MIPS})
           .Cases("elf32ltsmip", "elf32ltsmipn32", {ELF32LEKind, EM_MIPS})
           .Case("elf32lriscv", {ELF32LEKind, EM_RISCV})
           .Cases("elf32ppc", "elf32ppclinux", {ELF32BEKind, EM_PPC})
+          .Cases("elf32lppc", "elf32lppclinux", {ELF32LEKind, EM_PPC})
           .Case("elf64btsmip", {ELF64BEKind, EM_MIPS})
           .Case("elf64ltsmip", {ELF64LEKind, EM_MIPS})
           .Case("elf64lriscv", {ELF64LEKind, EM_RISCV})
@@ -161,10 +162,13 @@ static std::tuple<ELFKind, uint16_t, uint8_t> parseEmulation(StringRef emul) {
           .Case("elf_i386", {ELF32LEKind, EM_386})
           .Case("elf_iamcu", {ELF32LEKind, EM_IAMCU})
           .Case("elf64_sparc", {ELF64BEKind, EM_SPARCV9})
+          .Case("msp430elf", {ELF32LEKind, EM_MSP430})
           .Default({ELFNoneKind, EM_NONE});
 
   if (ret.first == ELFNoneKind)
     error("unknown emulation: " + emul);
+  if (ret.second == EM_MSP430)
+    osabi = ELFOSABI_STANDALONE;
   return std::make_tuple(ret.first, ret.second, osabi);
 }
 
@@ -317,10 +321,10 @@ static void checkOptions() {
     error("--fix-cortex-a8 is only supported on ARM targets");
 
   if (config->tocOptimize && config->emachine != EM_PPC64)
-    error("--toc-optimize is only supported on the PowerPC64 target");
+    error("--toc-optimize is only supported on PowerPC64 targets");
 
   if (config->pcRelOptimize && config->emachine != EM_PPC64)
-    error("--pcrel--optimize is only supported on the PowerPC64 target");
+    error("--pcrel-optimize is only supported on PowerPC64 targets");
 
   if (config->pie && config->shared)
     error("-shared and -pie may not be used together");
@@ -447,10 +451,11 @@ static bool isKnownZFlag(StringRef s) {
          s == "initfirst" || s == "interpose" ||
          s == "keep-text-section-prefix" || s == "lazy" || s == "muldefs" ||
          s == "separate-code" || s == "separate-loadable-segments" ||
-         s == "nocombreloc" || s == "nocopyreloc" || s == "nodefaultlib" ||
-         s == "nodelete" || s == "nodlopen" || s == "noexecstack" ||
-         s == "nognustack" || s == "nokeep-text-section-prefix" ||
-         s == "norelro" || s == "noseparate-code" || s == "notext" ||
+         s == "start-stop-gc" || s == "nocombreloc" || s == "nocopyreloc" ||
+         s == "nodefaultlib" || s == "nodelete" || s == "nodlopen" ||
+         s == "noexecstack" || s == "nognustack" ||
+         s == "nokeep-text-section-prefix" || s == "norelro" ||
+         s == "noseparate-code" || s == "nostart-stop-gc" || s == "notext" ||
          s == "now" || s == "origin" || s == "pac-plt" || s == "rel" ||
          s == "rela" || s == "relro" || s == "retpolineplt" ||
          s == "rodynamic" || s == "shstk" || s == "text" || s == "undefs" ||
@@ -467,7 +472,7 @@ static void checkZOptions(opt::InputArgList &args) {
       error("unknown -z value: " + StringRef(arg->getValue()));
 }
 
-void LinkerDriver::main(ArrayRef<const char *> argsArr) {
+void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   ELFOptTable parser;
   opt::InputArgList args = parser.parse(argsArr.slice(1));
 
@@ -756,6 +761,20 @@ static OrphanHandlingPolicy getOrphanHandling(opt::InputArgList &args) {
   return OrphanHandlingPolicy::Place;
 }
 
+// Parses --power10-stubs= flags, to disable or enable Power 10
+// instructions in stubs.
+static bool getP10StubOpt(opt::InputArgList &args) {
+
+  if (args.getLastArgValue(OPT_power10_stubs_eq)== "no")
+    return false;
+
+  if (!args.hasArg(OPT_power10_stubs_eq) &&
+      args.hasArg(OPT_no_power10_stubs))
+    return false;
+
+  return true;
+}
+
 // Parse --build-id or --build-id=<style>. We handle "tree" as a
 // synonym for "sha1" because all our hash functions including
 // -build-id=sha1 are actually tree hashes for performance reasons.
@@ -992,7 +1011,7 @@ static void readConfigs(opt::InputArgList &args) {
   config->ltoDebugPassManager = args.hasArg(OPT_lto_debug_pass_manager);
   config->ltoEmitAsm = args.hasArg(OPT_lto_emit_asm);
   config->ltoNewPassManager =
-      args.hasFlag(OPT_lto_new_pass_manager, OPT_no_lto_new_pass_manager,
+      args.hasFlag(OPT_no_lto_legacy_pass_manager, OPT_lto_legacy_pass_manager,
                    LLVM_ENABLE_NEW_PASS_MANAGER);
   config->ltoNewPmPasses = args.getLastArgValue(OPT_lto_newpm_passes);
   config->ltoWholeProgramVisibility =
@@ -1001,6 +1020,8 @@ static void readConfigs(opt::InputArgList &args) {
   config->ltoo = args::getInteger(args, OPT_lto_O, 2);
   config->ltoObjPath = args.getLastArgValue(OPT_lto_obj_path_eq);
   config->ltoPartitions = args::getInteger(args, OPT_lto_partitions, 1);
+  config->ltoPseudoProbeForProfiling =
+      args.hasArg(OPT_lto_pseudo_probe_for_profiling);
   config->ltoSampleProfile = args.getLastArgValue(OPT_lto_sample_profile);
   config->ltoBasicBlockSections =
       args.getLastArgValue(OPT_lto_basic_block_sections);
@@ -1047,8 +1068,6 @@ static void readConfigs(opt::InputArgList &args) {
   config->rpath = getRpath(args);
   config->relocatable = args.hasArg(OPT_relocatable);
   config->saveTemps = args.hasArg(OPT_save_temps);
-  if (args.hasArg(OPT_shuffle_sections))
-    config->shuffleSectionSeed = args::getInteger(args, OPT_shuffle_sections, 0);
   config->searchPaths = args::getStrings(args, OPT_library_path);
   config->sectionStartMap = getSectionStartMap(args);
   config->shared = args.hasArg(OPT_shared);
@@ -1087,8 +1106,6 @@ static void readConfigs(opt::InputArgList &args) {
   config->warnBackrefs =
       args.hasFlag(OPT_warn_backrefs, OPT_no_warn_backrefs, false);
   config->warnCommon = args.hasFlag(OPT_warn_common, OPT_no_warn_common, false);
-  config->warnIfuncTextrel =
-      args.hasFlag(OPT_warn_ifunc_textrel, OPT_no_warn_ifunc_textrel, false);
   config->warnSymbolOrdering =
       args.hasFlag(OPT_warn_symbol_ordering, OPT_no_warn_symbol_ordering, true);
   config->zCombreloc = getZFlag(args, "combreloc", "nocombreloc", true);
@@ -1115,10 +1132,38 @@ static void readConfigs(opt::InputArgList &args) {
   config->zSeparate = getZSeparate(args);
   config->zShstk = hasZOption(args, "shstk");
   config->zStackSize = args::getZOptionValue(args, OPT_z, "stack-size", 0);
+  config->zStartStopGC =
+      getZFlag(args, "start-stop-gc", "nostart-stop-gc", false);
   config->zStartStopVisibility = getZStartStopVisibility(args);
   config->zText = getZFlag(args, "text", "notext", true);
   config->zWxneeded = hasZOption(args, "wxneeded");
   setUnresolvedSymbolPolicy(args);
+  config->Power10Stub = getP10StubOpt(args);
+
+  if (opt::Arg *arg = args.getLastArg(OPT_eb, OPT_el)) {
+    if (arg->getOption().matches(OPT_eb))
+      config->optEB = true;
+    else
+      config->optEL = true;
+  }
+
+  for (opt::Arg *arg : args.filtered(OPT_shuffle_sections)) {
+    constexpr StringRef errPrefix = "--shuffle-sections=: ";
+    std::pair<StringRef, StringRef> kv = StringRef(arg->getValue()).split('=');
+    if (kv.first.empty() || kv.second.empty()) {
+      error(errPrefix + "expected <section_glob>=<seed>, but got '" +
+            arg->getValue() + "'");
+      continue;
+    }
+    // Signed so that <section_glob>=-1 is allowed.
+    int64_t v;
+    if (!to_integer(kv.second, v))
+      error(errPrefix + "expected an integer, but got '" + kv.second + "'");
+    else if (Expected<GlobPattern> pat = GlobPattern::create(kv.first))
+      config->shuffleSections.emplace_back(std::move(*pat), uint32_t(v));
+    else
+      error(errPrefix + toString(pat.takeError()));
+  }
 
   for (opt::Arg *arg : args.filtered(OPT_z)) {
     std::pair<StringRef, StringRef> option =
@@ -1918,7 +1963,13 @@ static std::vector<WrappedSymbol> addWrappedSymbols(opt::InputArgList &args) {
 
     // Tell LTO not to eliminate these symbols.
     sym->isUsedInRegularObj = true;
-    if (!wrap->isUndefined())
+    // If sym is referenced in any object file, bitcode file or shared object,
+    // retain wrap which is the redirection target of sym. If the object file
+    // defining sym has sym references, we cannot easily distinguish the case
+    // from cases where sym is not referenced. Retain wrap because we choose to
+    // wrap sym references regardless of whether sym is defined
+    // (https://sourceware.org/bugzilla/show_bug.cgi?id=26358).
+    if (sym->referenced || sym->isDefined())
       wrap->isUsedInRegularObj = true;
   }
   return v;
@@ -2142,7 +2193,11 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
   // They also might be exported if referenced by DSOs.
   script->declareSymbols();
 
-  // Handle the -exclude-libs option.
+  // Handle --exclude-libs. This is before scanVersionScript() due to a
+  // workaround for Android ndk: for a defined versioned symbol in an archive
+  // without a version node in the version script, Android does not expect a
+  // 'has undefined version' error in -shared --exclude-libs=ALL mode (PR36295).
+  // GNU ld errors in this case.
   if (args.hasArg(OPT_exclude_libs))
     excludeLibs(args);
 
@@ -2175,6 +2230,12 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
   // except a few linker-synthesized ones will be added to the symbol table.
   compileBitcodeFiles<ELFT>();
 
+  // Handle --exclude-libs again because lto.tmp may reference additional
+  // libcalls symbols defined in an excluded archive. This may override
+  // versionId set by scanVersionScript().
+  if (args.hasArg(OPT_exclude_libs))
+    excludeLibs(args);
+
   // Symbol resolution finished. Report backward reference problems.
   reportBackrefs();
   if (errorCount())
@@ -2185,7 +2246,7 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
   // in addCombinedLTOObject, so we are done if that's the case.
   // Likewise, --plugin-opt=emit-llvm and --plugin-opt=emit-asm are the
   // options to create output files in bitcode or assembly code
-  // repsectively. No object files are generated.
+  // respectively. No object files are generated.
   // Also bail out here when only certain thinLTO modules are specified for
   // compilation. The intermediate object file are the expected output.
   if (config->thinLTOIndexOnly || config->emitLLVM || config->ltoEmitAsm ||

@@ -22,7 +22,7 @@ func @arbitrary_bound(%n : index) {
   return
 }
 
-func @powi(index) -> index attributes {sym_visibility = "private"}
+func private @powi(index) -> index
 
 // CHECK-LABEL: func @arbitrary_mem_access
 func @arbitrary_mem_access(%I: memref<128xi32>, %M: memref<1024xf32>) {
@@ -79,18 +79,18 @@ func @test_more_symbol_validity(%A: memref<100xf32>, %pos : index) {
   return
 }
 
-func @external() -> (index) attributes {sym_visibility = "private"}
+func private @external() -> (index)
 
 // CHECK-LABEL: func @search
 func @search(%A : memref<?x?xi32>, %S : memref<?xi32>, %key : i32) {
   %c0 = constant 0 : index
-  %ni = dim %A, %c0 : memref<?x?xi32>
+  %ni = memref.dim %A, %c0 : memref<?x?xi32>
   %c1 = constant 1 : index
   // This loop can be parallelized.
   affine.for %i = 0 to %ni {
     // CHECK: affine.execute_region
     affine.execute_region [%rA, %rS] = (%A, %S) : (memref<?x?xi32>, memref<?xi32>) -> () {
-      %nj = dim %rA, %c1 : memref<?x?xi32>
+      %nj = memref.dim %rA, %c1 : memref<?x?xi32>
       br ^bb1(%c0 : index)
 
     ^bb1(%j: index):

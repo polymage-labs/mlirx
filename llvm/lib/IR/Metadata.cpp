@@ -195,6 +195,19 @@ bool MetadataTracking::isReplaceable(const Metadata &MD) {
   return ReplaceableMetadataImpl::isReplaceable(MD);
 }
 
+SmallVector<Metadata *, 4> ReplaceableMetadataImpl::getAllArgListUsers() {
+  SmallVector<Metadata *, 4> MDUsers;
+  for (auto Pair : UseMap) {
+    OwnerTy Owner = Pair.second.first;
+    if (!Owner.is<Metadata *>())
+      continue;
+    Metadata *OwnerMD = Owner.get<Metadata *>();
+    if (OwnerMD->getMetadataID() == Metadata::DIArgListKind)
+      MDUsers.push_back(OwnerMD);
+  }
+  return MDUsers;
+}
+
 void ReplaceableMetadataImpl::addRef(void *Ref, OwnerTy Owner) {
   bool WasInserted =
       UseMap.insert(std::make_pair(Ref, std::make_pair(Owner, NextIndex)))
@@ -1169,11 +1182,10 @@ bool MDAttachments::erase(unsigned ID) {
     return true;
   }
 
-  auto I = std::remove_if(Attachments.begin(), Attachments.end(),
-                          [ID](const Attachment &A) { return A.MDKind == ID; });
-  bool Changed = I != Attachments.end();
-  Attachments.erase(I, Attachments.end());
-  return Changed;
+  auto OldSize = Attachments.size();
+  llvm::erase_if(Attachments,
+                 [ID](const Attachment &A) { return A.MDKind == ID; });
+  return OldSize != Attachments.size();
 }
 
 MDNode *Value::getMetadata(unsigned KindID) const {
@@ -1401,12 +1413,12 @@ bool Instruction::extractProfMetadata(uint64_t &TrueVal,
 }
 
 bool Instruction::extractProfTotalWeight(uint64_t &TotalVal) const {
-  assert((getOpcode() == Instruction::Br ||
-          getOpcode() == Instruction::Select ||
-          getOpcode() == Instruction::Call ||
-          getOpcode() == Instruction::Invoke ||
-          getOpcode() == Instruction::Switch) &&
-         "Looking for branch weights on something besides branch");
+  assert(
+      (getOpcode() == Instruction::Br || getOpcode() == Instruction::Select ||
+       getOpcode() == Instruction::Call || getOpcode() == Instruction::Invoke ||
+       getOpcode() == Instruction::IndirectBr ||
+       getOpcode() == Instruction::Switch) &&
+      "Looking for branch weights on something besides branch");
 
   TotalVal = 0;
   auto *ProfileData = getMetadata(LLVMContext::MD_prof);

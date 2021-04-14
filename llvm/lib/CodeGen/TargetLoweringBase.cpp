@@ -45,7 +45,6 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
-#include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
@@ -114,17 +113,6 @@ static bool darwinHasSinCos(const Triple &TT) {
   return true;
 }
 
-// Although this default value is arbitrary, it is not random. It is assumed
-// that a condition that evaluates the same way by a higher percentage than this
-// is best represented as control flow. Therefore, the default value N should be
-// set such that the win from N% correct executions is greater than the loss
-// from (100 - N)% mispredicted executions for the majority of intended targets.
-static cl::opt<int> MinPercentageForPredictableBranch(
-    "min-predictable-branch", cl::init(99),
-    cl::desc("Minimum percentage (0-100) that a condition must be either true "
-             "or false to assume that the condition is predictable"),
-    cl::Hidden);
-
 void TargetLoweringBase::InitLibcalls(const Triple &TT) {
 #define HANDLE_LIBCALL(code, name) \
   setLibcallName(RTLIB::code, name);
@@ -135,23 +123,28 @@ void TargetLoweringBase::InitLibcalls(const Triple &TT) {
     setLibcallCallingConv((RTLIB::Libcall)LC, CallingConv::C);
 
   // For IEEE quad-precision libcall names, PPC uses "kf" instead of "tf".
-  if (TT.getArch() == Triple::ppc || TT.isPPC64()) {
+  if (TT.isPPC()) {
     setLibcallName(RTLIB::ADD_F128, "__addkf3");
     setLibcallName(RTLIB::SUB_F128, "__subkf3");
     setLibcallName(RTLIB::MUL_F128, "__mulkf3");
     setLibcallName(RTLIB::DIV_F128, "__divkf3");
+    setLibcallName(RTLIB::POWI_F128, "__powikf2");
     setLibcallName(RTLIB::FPEXT_F32_F128, "__extendsfkf2");
     setLibcallName(RTLIB::FPEXT_F64_F128, "__extenddfkf2");
     setLibcallName(RTLIB::FPROUND_F128_F32, "__trunckfsf2");
     setLibcallName(RTLIB::FPROUND_F128_F64, "__trunckfdf2");
     setLibcallName(RTLIB::FPTOSINT_F128_I32, "__fixkfsi");
     setLibcallName(RTLIB::FPTOSINT_F128_I64, "__fixkfdi");
+    setLibcallName(RTLIB::FPTOSINT_F128_I128, "__fixkfti");
     setLibcallName(RTLIB::FPTOUINT_F128_I32, "__fixunskfsi");
     setLibcallName(RTLIB::FPTOUINT_F128_I64, "__fixunskfdi");
+    setLibcallName(RTLIB::FPTOUINT_F128_I128, "__fixunskfti");
     setLibcallName(RTLIB::SINTTOFP_I32_F128, "__floatsikf");
     setLibcallName(RTLIB::SINTTOFP_I64_F128, "__floatdikf");
+    setLibcallName(RTLIB::SINTTOFP_I128_F128, "__floattikf");
     setLibcallName(RTLIB::UINTTOFP_I32_F128, "__floatunsikf");
     setLibcallName(RTLIB::UINTTOFP_I64_F128, "__floatundikf");
+    setLibcallName(RTLIB::UINTTOFP_I128_F128, "__floatuntikf");
     setLibcallName(RTLIB::OEQ_F128, "__eqkf2");
     setLibcallName(RTLIB::UNE_F128, "__nekf2");
     setLibcallName(RTLIB::OGE_F128, "__gekf2");
@@ -774,6 +767,8 @@ void TargetLoweringBase::initActions() {
     setOperationAction(ISD::SDIVFIXSAT, VT, Expand);
     setOperationAction(ISD::UDIVFIX, VT, Expand);
     setOperationAction(ISD::UDIVFIXSAT, VT, Expand);
+    setOperationAction(ISD::FP_TO_SINT_SAT, VT, Expand);
+    setOperationAction(ISD::FP_TO_UINT_SAT, VT, Expand);
 
     // Overflow operations default to expand
     setOperationAction(ISD::SADDO, VT, Expand);
@@ -842,6 +837,9 @@ void TargetLoweringBase::initActions() {
     setOperationAction(ISD::VECREDUCE_FMIN, VT, Expand);
     setOperationAction(ISD::VECREDUCE_SEQ_FADD, VT, Expand);
     setOperationAction(ISD::VECREDUCE_SEQ_FMUL, VT, Expand);
+
+    // Named vector shuffles default to expand.
+    setOperationAction(ISD::VECTOR_SPLICE, VT, Expand);
   }
 
   // Most targets ignore the @llvm.prefetch intrinsic.
@@ -1217,36 +1215,6 @@ TargetLoweringBase::emitPatchPoint(MachineInstr &InitialMI,
   }
   MBB->insert(MachineBasicBlock::iterator(MI), MIB);
   MI->eraseFromParent();
-  return MBB;
-}
-
-MachineBasicBlock *
-TargetLoweringBase::emitXRayCustomEvent(MachineInstr &MI,
-                                        MachineBasicBlock *MBB) const {
-  assert(MI.getOpcode() == TargetOpcode::PATCHABLE_EVENT_CALL &&
-         "Called emitXRayCustomEvent on the wrong MI!");
-  auto &MF = *MI.getMF();
-  auto MIB = BuildMI(MF, MI.getDebugLoc(), MI.getDesc());
-  for (unsigned OpIdx = 0; OpIdx != MI.getNumOperands(); ++OpIdx)
-    MIB.add(MI.getOperand(OpIdx));
-
-  MBB->insert(MachineBasicBlock::iterator(MI), MIB);
-  MI.eraseFromParent();
-  return MBB;
-}
-
-MachineBasicBlock *
-TargetLoweringBase::emitXRayTypedEvent(MachineInstr &MI,
-                                       MachineBasicBlock *MBB) const {
-  assert(MI.getOpcode() == TargetOpcode::PATCHABLE_TYPED_EVENT_CALL &&
-         "Called emitXRayTypedEvent on the wrong MI!");
-  auto &MF = *MI.getMF();
-  auto MIB = BuildMI(MF, MI.getDebugLoc(), MI.getDesc());
-  for (unsigned OpIdx = 0; OpIdx != MI.getNumOperands(); ++OpIdx)
-    MIB.add(MI.getOperand(OpIdx));
-
-  MBB->insert(MachineBasicBlock::iterator(MI), MIB);
-  MI.eraseFromParent();
   return MBB;
 }
 
@@ -1721,8 +1689,7 @@ bool TargetLoweringBase::allowsMemoryAccessForAlignment(
   }
 
   // This is a misaligned access.
-  return allowsMisalignedMemoryAccesses(VT, AddrSpace, Alignment.value(), Flags,
-                                        Fast);
+  return allowsMisalignedMemoryAccesses(VT, AddrSpace, Alignment, Flags, Fast);
 }
 
 bool TargetLoweringBase::allowsMemoryAccessForAlignment(
@@ -1749,8 +1716,12 @@ bool TargetLoweringBase::allowsMemoryAccess(LLVMContext &Context,
                             MMO.getFlags(), Fast);
 }
 
-BranchProbability TargetLoweringBase::getPredictableBranchThreshold() const {
-  return BranchProbability(MinPercentageForPredictableBranch, 100);
+bool TargetLoweringBase::allowsMemoryAccess(LLVMContext &Context,
+                                            const DataLayout &DL, LLT Ty,
+                                            const MachineMemOperand &MMO,
+                                            bool *Fast) const {
+  return allowsMemoryAccess(Context, DL, getMVTForLLT(Ty), MMO.getAddrSpace(),
+                            MMO.getAlign(), MMO.getFlags(), Fast);
 }
 
 //===----------------------------------------------------------------------===//
@@ -2062,7 +2033,7 @@ static bool parseRefinementStep(StringRef In, size_t &Position,
   // step parameter.
   if (RefStepString.size() == 1) {
     char RefStepChar = RefStepString[0];
-    if (RefStepChar >= '0' && RefStepChar <= '9') {
+    if (isDigit(RefStepChar)) {
       Value = RefStepChar - '0';
       return true;
     }

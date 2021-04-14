@@ -54,6 +54,14 @@ static void warn(Twine Message, std::string Whence = "",
     WithColor::note() << Hint << "\n";
 }
 
+static void warn(Error E, StringRef Whence = "") {
+  if (E.isA<InstrProfError>()) {
+    handleAllErrors(std::move(E), [&](const InstrProfError &IPE) {
+      warn(IPE.message(), std::string(Whence), std::string(""));
+    });
+  }
+}
+
 static void exitWithError(Twine Message, std::string Whence = "",
                           std::string Hint = "") {
   WithColor::error();
@@ -243,7 +251,8 @@ static void loadInput(const WeightedFile &Input, SymbolRemapper *Remapper,
   auto Reader = std::move(ReaderOrErr.get());
   bool IsIRProfile = Reader->isIRLevelProfile();
   bool HasCSIRProfile = Reader->hasCSIRLevelProfile();
-  if (WC->Writer.setIsIRLevelProfile(IsIRProfile, HasCSIRProfile)) {
+  if (Error E = WC->Writer.setIsIRLevelProfile(IsIRProfile, HasCSIRProfile)) {
+    consumeError(std::move(E));
     WC->Errors.emplace_back(
         make_error<StringError>(
             "Merge IR generated profile with Clang generated profile.",
@@ -296,15 +305,18 @@ static void writeInstrProfile(StringRef OutputFilename,
                               ProfileFormat OutputFormat,
                               InstrProfWriter &Writer) {
   std::error_code EC;
-  raw_fd_ostream Output(OutputFilename.data(), EC, sys::fs::OF_None);
+  raw_fd_ostream Output(OutputFilename.data(), EC,
+                        OutputFormat == PF_Text ? sys::fs::OF_Text
+                                                : sys::fs::OF_None);
   if (EC)
     exitWithErrorCode(EC, OutputFilename);
 
   if (OutputFormat == PF_Text) {
     if (Error E = Writer.writeText(Output))
-      exitWithError(std::move(E));
+      warn(std::move(E));
   } else {
-    Writer.write(Output);
+    if (Error E = Writer.write(Output))
+      warn(std::move(E));
   }
 }
 
@@ -660,6 +672,8 @@ mergeSampleProfile(const WeightedFileVector &Inputs, SymbolRemapper *Remapper,
   SmallVector<std::unique_ptr<sampleprof::SampleProfileReader>, 5> Readers;
   LLVMContext Context;
   sampleprof::ProfileSymbolList WriterList;
+  Optional<bool> ProfileIsProbeBased;
+  Optional<bool> ProfileIsCS;
   for (const auto &Input : Inputs) {
     auto ReaderOrErr = SampleProfileReader::create(Input.Filename, Context);
     if (std::error_code EC = ReaderOrErr.getError()) {
@@ -680,6 +694,14 @@ mergeSampleProfile(const WeightedFileVector &Inputs, SymbolRemapper *Remapper,
     }
 
     StringMap<FunctionSamples> &Profiles = Reader->getProfiles();
+    if (ProfileIsProbeBased.hasValue() &&
+        ProfileIsProbeBased != FunctionSamples::ProfileIsProbeBased)
+      exitWithError(
+          "cannot merge probe-based profile with non-probe-based profile");
+    ProfileIsProbeBased = FunctionSamples::ProfileIsProbeBased;
+    if (ProfileIsCS.hasValue() && ProfileIsCS != FunctionSamples::ProfileIsCS)
+      exitWithError("cannot merge CS profile with non-CS profile");
+    ProfileIsCS = FunctionSamples::ProfileIsCS;
     for (StringMap<FunctionSamples>::iterator I = Profiles.begin(),
                                               E = Profiles.end();
          I != E; ++I) {
@@ -688,7 +710,7 @@ mergeSampleProfile(const WeightedFileVector &Inputs, SymbolRemapper *Remapper,
           Remapper ? remapSamples(I->second, *Remapper, Result)
                    : FunctionSamples();
       FunctionSamples &Samples = Remapper ? Remapped : I->second;
-      StringRef FName = Samples.getName();
+      StringRef FName = Samples.getNameWithContext(true);
       MergeResult(Result, ProfileMap[FName].merge(Samples, Input.Weight));
       if (Result != sampleprof_error::success) {
         std::error_code EC = make_error_code(Result);
@@ -1540,14 +1562,15 @@ void SampleOverlapAggregator::computeSampleProfileOverlap(raw_fd_ostream &OS) {
   StringMap<const FunctionSamples *> BaseFuncProf;
   const auto &BaseProfiles = BaseReader->getProfiles();
   for (const auto &BaseFunc : BaseProfiles) {
-    BaseFuncProf.try_emplace(BaseFunc.second.getName(), &(BaseFunc.second));
+    BaseFuncProf.try_emplace(BaseFunc.second.getNameWithContext(),
+                             &(BaseFunc.second));
   }
   ProfOverlap.UnionCount = BaseFuncProf.size();
 
   const auto &TestProfiles = TestReader->getProfiles();
   for (const auto &TestFunc : TestProfiles) {
     SampleOverlapStats FuncOverlap;
-    FuncOverlap.TestName = TestFunc.second.getName();
+    FuncOverlap.TestName = TestFunc.second.getNameWithContext();
     assert(TestStats.count(FuncOverlap.TestName) &&
            "TestStats should have records for all functions in test profile "
            "except inlinees");
@@ -1574,7 +1597,7 @@ void SampleOverlapAggregator::computeSampleProfileOverlap(raw_fd_ostream &OS) {
 
       // Two functions match with each other. Compute function-level overlap and
       // aggregate them into profile-level overlap.
-      FuncOverlap.BaseName = Match->second->getName();
+      FuncOverlap.BaseName = Match->second->getNameWithContext();
       assert(BaseStats.count(FuncOverlap.BaseName) &&
              "BaseStats should have records for all functions in base profile "
              "except inlinees");
@@ -1623,10 +1646,11 @@ void SampleOverlapAggregator::computeSampleProfileOverlap(raw_fd_ostream &OS) {
 
   // Traverse through functions in base profile but not in test profile.
   for (const auto &F : BaseFuncProf) {
-    assert(BaseStats.count(F.second->getName()) &&
+    assert(BaseStats.count(F.second->getNameWithContext()) &&
            "BaseStats should have records for all functions in base profile "
            "except inlinees");
-    const FuncSampleStats &FuncStats = BaseStats[F.second->getName()];
+    const FuncSampleStats &FuncStats =
+        BaseStats[F.second->getNameWithContext()];
     ++ProfOverlap.BaseUniqueCount;
     ProfOverlap.BaseUniqueSample += FuncStats.SampleSum;
 
@@ -1657,7 +1681,7 @@ void SampleOverlapAggregator::initializeSampleProfileOverlap() {
     FuncSampleStats FuncStats;
     getFuncSampleStats(I.second, FuncStats, BaseHotThreshold);
     ProfOverlap.BaseSample += FuncStats.SampleSum;
-    BaseStats.try_emplace(I.second.getName(), FuncStats);
+    BaseStats.try_emplace(I.second.getNameWithContext(), FuncStats);
   }
 
   const auto &TestProf = TestReader->getProfiles();
@@ -1666,7 +1690,7 @@ void SampleOverlapAggregator::initializeSampleProfileOverlap() {
     FuncSampleStats FuncStats;
     getFuncSampleStats(I.second, FuncStats, TestHotThreshold);
     ProfOverlap.TestSample += FuncStats.SampleSum;
-    TestStats.try_emplace(I.second.getName(), FuncStats);
+    TestStats.try_emplace(I.second.getNameWithContext(), FuncStats);
   }
 
   ProfOverlap.BaseName = StringRef(BaseFilename);
@@ -1822,6 +1846,11 @@ std::error_code SampleOverlapAggregator::loadProfiles() {
     exitWithErrorCode(EC, BaseFilename);
   if (std::error_code EC = TestReader->read())
     exitWithErrorCode(EC, TestFilename);
+  if (BaseReader->profileIsProbeBased() != TestReader->profileIsProbeBased())
+    exitWithError(
+        "cannot compare probe-based profile with non-probe-based profile");
+  if (BaseReader->profileIsCS() != TestReader->profileIsCS())
+    exitWithError("cannot compare CS profile with non-CS profile");
 
   // Load BaseHotThreshold and TestHotThreshold as 99-percentile threshold in
   // profile summary.
@@ -1877,21 +1906,24 @@ static int overlap_main(int argc, const char *argv[]) {
   cl::opt<std::string> Output("output", cl::value_desc("output"), cl::init("-"),
                               cl::desc("Output file"));
   cl::alias OutputA("o", cl::desc("Alias for --output"), cl::aliasopt(Output));
-  cl::opt<bool> IsCS("cs", cl::init(false),
-                     cl::desc("For context sensitive counts"));
+  cl::opt<bool> IsCS(
+      "cs", cl::init(false),
+      cl::desc("For context sensitive PGO counts. Does not work with CSSPGO."));
   cl::opt<unsigned long long> ValueCutoff(
       "value-cutoff", cl::init(-1),
       cl::desc(
-          "Function level overlap information for every function in test "
+          "Function level overlap information for every function (with calling "
+          "context for csspgo) in test "
           "profile with max count value greater then the parameter value"));
   cl::opt<std::string> FuncNameFilter(
       "function",
-      cl::desc("Function level overlap information for matching functions"));
+      cl::desc("Function level overlap information for matching functions. For "
+               "CSSPGO this takes a a function name with calling context"));
   cl::opt<unsigned long long> SimilarityCutoff(
       "similarity-cutoff", cl::init(0),
-      cl::desc(
-          "For sample profiles, list function names for overlapped functions "
-          "with similarities below the cutoff (percentage times 10000)."));
+      cl::desc("For sample profiles, list function names (with calling context "
+               "for csspgo) for overlapped functions "
+               "with similarities below the cutoff (percentage times 10000)."));
   cl::opt<ProfileKinds> ProfileKind(
       cl::desc("Profile kind:"), cl::init(instr),
       cl::values(clEnumVal(instr, "Instrumentation profile (default)"),
@@ -2243,7 +2275,6 @@ static void dumpHotFunctionList(const std::vector<std::string> &ColumnTitle,
     FOS.PadToColumn(ColumnOffset[3]);
     FOS << R.FuncName << "\n";
   }
-  return;
 }
 
 static int
@@ -2297,9 +2328,9 @@ showHotFunctionList(const StringMap<sampleprof::FunctionSamples> &Profiles,
         (ProfileTotalSample > 0)
             ? (Func.getTotalSamples() * 100.0) / ProfileTotalSample
             : 0;
-    PrintValues.emplace_back(
-        HotFuncInfo(Func.getName(), Func.getTotalSamples(), TotalSamplePercent,
-                    FuncPair.second.second, Func.getEntrySamples()));
+    PrintValues.emplace_back(HotFuncInfo(
+        Func.getNameWithContext(), Func.getTotalSamples(), TotalSamplePercent,
+        FuncPair.second.second, Func.getEntrySamples()));
   }
   dumpHotFunctionList(ColumnTitle, ColumnOffset, PrintValues, HotFuncCount,
                       Profiles.size(), HotFuncSample, ProfileTotalSample,
@@ -2419,7 +2450,7 @@ static int show_main(int argc, const char *argv[]) {
   if (OutputFilename.empty())
     OutputFilename = "-";
 
-  if (!Filename.compare(OutputFilename)) {
+  if (Filename == OutputFilename) {
     errs() << sys::path::filename(argv[0])
            << ": Input file name cannot be the same as the output file name!\n";
     return 1;

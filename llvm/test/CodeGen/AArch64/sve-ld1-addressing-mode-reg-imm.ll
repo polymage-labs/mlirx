@@ -44,9 +44,8 @@ define <vscale x 16 x i8> @ld1b_out_of_upper_bound(<vscale x 16 x i8>* %a) {
 ; CHECK-LABEL: ld1b_out_of_upper_bound:
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    rdvl x8, #8
-; CHECK-NEXT:    add x8, x0, x8
 ; CHECK-NEXT:    ptrue p0.b
-; CHECK-NEXT:    ld1b { z0.b }, p0/z, [x8]
+; CHECK-NEXT:    ld1b { z0.b }, p0/z, [x0, x8]
 ; CHECK-NEXT:    ret
   %base = getelementptr <vscale x 16 x i8>, <vscale x 16 x i8>* %a, i64 8
   %load = load <vscale x 16 x i8>, <vscale x 16 x i8>* %base
@@ -57,9 +56,8 @@ define <vscale x 16 x i8> @ld1b_out_of_lower_bound(<vscale x 16 x i8>* %a) {
 ; CHECK-LABEL: ld1b_out_of_lower_bound:
 ; CHECK:       // %bb.0:
 ; CHECK-NEXT:    rdvl x8, #-9
-; CHECK-NEXT:    add x8, x0, x8
 ; CHECK-NEXT:    ptrue p0.b
-; CHECK-NEXT:    ld1b { z0.b }, p0/z, [x8]
+; CHECK-NEXT:    ld1b { z0.b }, p0/z, [x0, x8]
 ; CHECK-NEXT:    ret
   %base = getelementptr <vscale x 16 x i8>, <vscale x 16 x i8>* %a, i64 -9
   %load = load <vscale x 16 x i8>, <vscale x 16 x i8>* %base
@@ -140,4 +138,3 @@ define void @load_nxv12f16(<vscale x 12 x half>* %a) {
   %val = load volatile <vscale x 12 x half>, <vscale x 12 x half>* %a
   ret void
 }
-

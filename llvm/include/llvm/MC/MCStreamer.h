@@ -21,6 +21,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/MC/MCDirectives.h"
 #include "llvm/MC/MCLinkerOptimizationHint.h"
+#include "llvm/MC/MCPseudoProbe.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCWinEH.h"
 #include "llvm/Support/Error.h"
@@ -38,7 +39,6 @@
 namespace llvm {
 
 class AssemblerConstantPools;
-class formatted_raw_ostream;
 class MCAsmBackend;
 class MCCodeEmitter;
 class MCContext;
@@ -611,10 +611,8 @@ public:
   ///
   /// This corresponds to an assembler statement such as:
   ///  .symver _start, foo@@SOME_VERSION
-  /// \param AliasName - The versioned alias (i.e. "foo@@SOME_VERSION")
-  /// \param Aliasee - The aliased symbol (i.e. "_start")
-  virtual void emitELFSymverDirective(StringRef AliasName,
-                                      const MCSymbol *Aliasee);
+  virtual void emitELFSymverDirective(const MCSymbol *OriginalSym,
+                                      StringRef Name, bool KeepOriginalSym);
 
   /// Emit a Linker Optimization Hint (LOH) directive.
   /// \param Args - Arguments of the LOH.
@@ -1049,6 +1047,11 @@ public:
   /// Emit the given \p Instruction into the current section.
   virtual void emitInstruction(const MCInst &Inst, const MCSubtargetInfo &STI);
 
+  /// Emit the a pseudo probe into the current section.
+  virtual void emitPseudoProbe(uint64_t Guid, uint64_t Index, uint64_t Type,
+                               uint64_t Attr,
+                               const MCPseudoProbeInlineStack &InlineStack);
+
   /// Set the bundle alignment mode from now on in the section.
   /// The argument is the power of 2 to which the alignment is set. The
   /// value 0 means turn the bundle alignment off.
@@ -1074,6 +1077,36 @@ public:
   void Finish(SMLoc EndLoc = SMLoc());
 
   virtual bool mayHaveInstructions(MCSection &Sec) const { return true; }
+
+  /// Emit a special value of 0xffffffff if producing 64-bit debugging info.
+  void maybeEmitDwarf64Mark();
+
+  /// Emit a unit length field. The actual format, DWARF32 or DWARF64, is chosen
+  /// according to the settings.
+  virtual void emitDwarfUnitLength(uint64_t Length, const Twine &Comment);
+
+  /// Emit a unit length field. The actual format, DWARF32 or DWARF64, is chosen
+  /// according to the settings.
+  /// Return the end symbol generated inside, the caller needs to emit it.
+  virtual MCSymbol *emitDwarfUnitLength(const Twine &Prefix,
+                                        const Twine &Comment);
+
+  /// Emit the debug line start label.
+  virtual void emitDwarfLineStartLabel(MCSymbol *StartSym);
+
+  /// Emit the debug line end entry.
+  virtual void emitDwarfLineEndEntry(MCSection *Section, MCSymbol *LastLabel) {}
+
+  /// If targets does not support representing debug line section by .loc/.file
+  /// directives in assembly output, we need to populate debug line section with
+  /// raw debug line contents.
+  virtual void emitDwarfAdvanceLineAddr(int64_t LineDelta,
+                                        const MCSymbol *LastLabel,
+                                        const MCSymbol *Label,
+                                        unsigned PointerSize) {}
+
+  /// Do finalization for the streamer at the end of a section.
+  virtual void doFinalizationAtSectionEnd(MCSection *Section) {}
 };
 
 /// Create a dummy machine code streamer, which does nothing. This is useful for

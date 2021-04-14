@@ -244,6 +244,7 @@ void TemplateArgument::Profile(llvm::FoldingSetNodeID &ID,
     break;
 
   case Declaration:
+    getParamTypeForDecl().Profile(ID);
     ID.AddPointer(getAsDecl()? getAsDecl()->getCanonicalDecl() : nullptr);
     break;
 
@@ -523,8 +524,8 @@ clang::TemplateArgumentLocInfo::TemplateArgumentLocInfo(
   TemplateTemplateArgLocInfo *Template = new (Ctx) TemplateTemplateArgLocInfo;
   Template->Qualifier = QualifierLoc.getNestedNameSpecifier();
   Template->QualifierLocData = QualifierLoc.getOpaqueData();
-  Template->TemplateNameLoc = TemplateNameLoc.getRawEncoding();
-  Template->EllipsisLoc = EllipsisLoc.getRawEncoding();
+  Template->TemplateNameLoc = TemplateNameLoc;
+  Template->EllipsisLoc = EllipsisLoc;
   Pointer = Template;
 }
 

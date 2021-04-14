@@ -6,13 +6,16 @@ tablegen("ACC") {
   output_name = "ACC.h.inc"
 }
 
-tablegen("ACC.cpp") {
+tablegen("ACCcpp") {
   visibility = [ ":acc_gen" ]
-  args = [ "-gen-directive-gen" ]
-  output_name = "ACC.cpp.inc"
+  args = [ "-gen-directive-impl" ]
+  output_name = "ACC.inc"
   td_file = "ACC.td"
 }
 
 group("acc_gen") {
-  deps = [ ":ACC" ]
+  deps = [
+    ":ACC",
+    ":ACCcpp",
+  ]
 }

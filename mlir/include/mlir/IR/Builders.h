@@ -56,8 +56,6 @@ public:
 
   // Locations.
   Location getUnknownLoc();
-  Location getFileLineColLoc(Identifier filename, unsigned line,
-                             unsigned column);
   Location getFusedLoc(ArrayRef<Location> locs,
                        Attribute metadata = Attribute());
 
@@ -66,6 +64,8 @@ public:
   FloatType getF16Type();
   FloatType getF32Type();
   FloatType getF64Type();
+  FloatType getF80Type();
+  FloatType getF128Type();
 
   IndexType getIndexType();
 

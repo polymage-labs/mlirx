@@ -931,18 +931,18 @@ private:
 
 #ifndef _LIBCPP_HAS_NO_DEDUCTION_GUIDES
 template<class _InputIterator,
-         class _Alloc = allocator<typename iterator_traits<_InputIterator>::value_type>,
-         class = typename enable_if<__is_allocator<_Alloc>::value, void>::type
+         class _Alloc = allocator<__iter_value_type<_InputIterator>>,
+         class = _EnableIf<__is_allocator<_Alloc>::value>
          >
 vector(_InputIterator, _InputIterator)
-  -> vector<typename iterator_traits<_InputIterator>::value_type, _Alloc>;
+  -> vector<__iter_value_type<_InputIterator>, _Alloc>;
 
 template<class _InputIterator,
          class _Alloc,
-         class = typename enable_if<__is_allocator<_Alloc>::value, void>::type
+         class = _EnableIf<__is_allocator<_Alloc>::value>
          >
 vector(_InputIterator, _InputIterator, _Alloc)
-  -> vector<typename iterator_traits<_InputIterator>::value_type, _Alloc>;
+  -> vector<__iter_value_type<_InputIterator>, _Alloc>;
 #endif
 
 template <class _Tp, class _Allocator>
@@ -2139,7 +2139,7 @@ vector<_Tp, _Allocator>::__invalidate_iterators_past(pointer __new_last) {
     if (__i->base() > __new_last) {
       (*__p)->__c_ = nullptr;
       if (--__c->end_ != __p)
-        memmove(__p, __p+1, (__c->end_ - __p)*sizeof(__i_node*));
+        _VSTD::memmove(__p, __p+1, (__c->end_ - __p)*sizeof(__i_node*));
     }
   }
   __get_db()->unlock();

@@ -213,6 +213,10 @@ ProcessGDBRemote::CreateInstance(lldb::TargetSP target_sp,
   return process_sp;
 }
 
+std::chrono::seconds ProcessGDBRemote::GetPacketTimeout() {
+  return std::chrono::seconds(GetGlobalPluginProperties()->GetPacketTimeout());
+}
+
 bool ProcessGDBRemote::CanDebug(lldb::TargetSP target_sp,
                                 bool plugin_specified_by_name) {
   if (plugin_specified_by_name)
@@ -249,7 +253,7 @@ ProcessGDBRemote::ProcessGDBRemote(lldb::TargetSP target_sp,
                                    ListenerSP listener_sp)
     : Process(target_sp, listener_sp),
       m_debugserver_pid(LLDB_INVALID_PROCESS_ID), m_last_stop_packet_mutex(),
-      m_register_info(),
+      m_register_info_sp(nullptr),
       m_async_broadcaster(nullptr, "lldb.process.gdb-remote.async-broadcaster"),
       m_async_listener_sp(
           Listener::MakeListener("lldb.process.gdb-remote.async-listener")),
@@ -368,8 +372,8 @@ bool ProcessGDBRemote::ParsePythonTargetDefinition(
           m_breakpoint_pc_offset = breakpoint_pc_int_value->GetValue();
       }
 
-      if (m_register_info.SetRegisterInfo(*target_definition_sp,
-                                          GetTarget().GetArchitecture()) > 0) {
+      if (m_register_info_sp->SetRegisterInfo(
+              *target_definition_sp, GetTarget().GetArchitecture()) > 0) {
         return true;
       }
     }
@@ -396,10 +400,10 @@ static size_t SplitCommaSeparatedRegisterNumberString(
 }
 
 void ProcessGDBRemote::BuildDynamicRegisterInfo(bool force) {
-  if (!force && m_register_info.GetNumRegisters() > 0)
+  if (!force && m_register_info_sp)
     return;
 
-  m_register_info.Clear();
+  m_register_info_sp = std::make_shared<GDBRemoteDynamicRegisterInfo>();
 
   // Check if qHostInfo specified a specific packet timeout for this
   // connection. If so then lets update our setting so the user knows what the
@@ -581,7 +585,7 @@ void ProcessGDBRemote::BuildDynamicRegisterInfo(bool force) {
         if (ABISP abi_sp = ABI::FindPlugin(shared_from_this(), arch_to_use))
           abi_sp->AugmentRegisterInfo(reg_info);
 
-        m_register_info.AddRegister(reg_info, reg_name, alt_name, set_name);
+        m_register_info_sp->AddRegister(reg_info, reg_name, alt_name, set_name);
       } else {
         break; // ensure exit before reg_num is incremented
       }
@@ -590,8 +594,8 @@ void ProcessGDBRemote::BuildDynamicRegisterInfo(bool force) {
     }
   }
 
-  if (m_register_info.GetNumRegisters() > 0) {
-    m_register_info.Finalize(GetTarget().GetArchitecture());
+  if (m_register_info_sp->GetNumRegisters() > 0) {
+    m_register_info_sp->Finalize(GetTarget().GetArchitecture());
     return;
   }
 
@@ -600,21 +604,21 @@ void ProcessGDBRemote::BuildDynamicRegisterInfo(bool force) {
   // updated debugserver down on the devices. On the other hand, if the
   // accumulated reg_num is positive, see if we can add composite registers to
   // the existing primordial ones.
-  bool from_scratch = (m_register_info.GetNumRegisters() == 0);
+  bool from_scratch = (m_register_info_sp->GetNumRegisters() == 0);
 
   if (!target_arch.IsValid()) {
     if (arch_to_use.IsValid() &&
         (arch_to_use.GetMachine() == llvm::Triple::arm ||
          arch_to_use.GetMachine() == llvm::Triple::thumb) &&
         arch_to_use.GetTriple().getVendor() == llvm::Triple::Apple)
-      m_register_info.HardcodeARMRegisters(from_scratch);
+      m_register_info_sp->HardcodeARMRegisters(from_scratch);
   } else if (target_arch.GetMachine() == llvm::Triple::arm ||
              target_arch.GetMachine() == llvm::Triple::thumb) {
-    m_register_info.HardcodeARMRegisters(from_scratch);
+    m_register_info_sp->HardcodeARMRegisters(from_scratch);
   }
 
   // At this point, we can finalize our register info.
-  m_register_info.Finalize(GetTarget().GetArchitecture());
+  m_register_info_sp->Finalize(GetTarget().GetArchitecture());
 }
 
 Status ProcessGDBRemote::WillLaunch(lldb_private::Module *module) {
@@ -1199,34 +1203,26 @@ Status ProcessGDBRemote::DoAttachToProcessWithName(
   return error;
 }
 
-lldb::user_id_t ProcessGDBRemote::StartTrace(const TraceOptions &options,
-                                             Status &error) {
-  return m_gdb_comm.SendStartTracePacket(options, error);
+llvm::Expected<TraceSupportedResponse> ProcessGDBRemote::TraceSupported() {
+  return m_gdb_comm.SendTraceSupported();
 }
 
-Status ProcessGDBRemote::StopTrace(lldb::user_id_t uid, lldb::tid_t thread_id) {
-  return m_gdb_comm.SendStopTracePacket(uid, thread_id);
+llvm::Error ProcessGDBRemote::TraceStop(const TraceStopRequest &request) {
+  return m_gdb_comm.SendTraceStop(request);
 }
 
-Status ProcessGDBRemote::GetData(lldb::user_id_t uid, lldb::tid_t thread_id,
-                                 llvm::MutableArrayRef<uint8_t> &buffer,
-                                 size_t offset) {
-  return m_gdb_comm.SendGetDataPacket(uid, thread_id, buffer, offset);
+llvm::Error ProcessGDBRemote::TraceStart(const llvm::json::Value &request) {
+  return m_gdb_comm.SendTraceStart(request);
 }
 
-Status ProcessGDBRemote::GetMetaData(lldb::user_id_t uid, lldb::tid_t thread_id,
-                                     llvm::MutableArrayRef<uint8_t> &buffer,
-                                     size_t offset) {
-  return m_gdb_comm.SendGetMetaDataPacket(uid, thread_id, buffer, offset);
+llvm::Expected<std::string>
+ProcessGDBRemote::TraceGetState(llvm::StringRef type) {
+  return m_gdb_comm.SendTraceGetState(type);
 }
 
-Status ProcessGDBRemote::GetTraceConfig(lldb::user_id_t uid,
-                                        TraceOptions &options) {
-  return m_gdb_comm.SendGetTraceConfigPacket(uid, options);
-}
-
-llvm::Expected<TraceTypeInfo> ProcessGDBRemote::GetSupportedTraceType() {
-  return m_gdb_comm.SendGetSupportedTraceType();
+llvm::Expected<std::vector<uint8_t>>
+ProcessGDBRemote::TraceGetBinaryData(const TraceGetBinaryDataRequest &request) {
+  return m_gdb_comm.SendTraceGetBinaryData(request);
 }
 
 void ProcessGDBRemote::DidExit() {
@@ -1602,8 +1598,8 @@ bool ProcessGDBRemote::UpdateThreadIDList() {
   return true;
 }
 
-bool ProcessGDBRemote::UpdateThreadList(ThreadList &old_thread_list,
-                                        ThreadList &new_thread_list) {
+bool ProcessGDBRemote::DoUpdateThreadList(ThreadList &old_thread_list,
+                                          ThreadList &new_thread_list) {
   // locker will keep a mutex locked until it goes out of scope
   Log *log(ProcessGDBRemoteLog::GetLogIfAllCategoriesSet(GDBR_LOG_THREAD));
   LLDB_LOGV(log, "pid = {0}", GetID());
@@ -1748,7 +1744,9 @@ ThreadSP ProcessGDBRemote::SetThreadStopInfo(
     if (thread_sp) {
       ThreadGDBRemote *gdb_thread =
           static_cast<ThreadGDBRemote *>(thread_sp.get());
-      gdb_thread->GetRegisterContext()->InvalidateIfNeeded(true);
+      RegisterContextSP gdb_reg_ctx_sp(gdb_thread->GetRegisterContext());
+
+      gdb_reg_ctx_sp->InvalidateIfNeeded(true);
 
       auto iter = std::find(m_thread_ids.begin(), m_thread_ids.end(), tid);
       if (iter != m_thread_ids.end()) {
@@ -1760,7 +1758,23 @@ ThreadSP ProcessGDBRemote::SetThreadStopInfo(
         DataBufferSP buffer_sp(new DataBufferHeap(
             reg_value_extractor.GetStringRef().size() / 2, 0));
         reg_value_extractor.GetHexBytes(buffer_sp->GetData(), '\xcc');
-        gdb_thread->PrivateSetRegisterValue(pair.first, buffer_sp->GetData());
+        uint32_t lldb_regnum =
+            gdb_reg_ctx_sp->ConvertRegisterKindToRegisterNumber(
+                eRegisterKindProcessPlugin, pair.first);
+        gdb_thread->PrivateSetRegisterValue(lldb_regnum, buffer_sp->GetData());
+      }
+
+      // AArch64 SVE specific code below calls AArch64SVEReconfigure to update
+      // SVE register sizes and offsets if value of VG register has changed
+      // since last stop.
+      const ArchSpec &arch = GetTarget().GetArchitecture();
+      if (arch.IsValid() && arch.GetTriple().isAArch64()) {
+        GDBRemoteRegisterContext *reg_ctx_sp =
+            static_cast<GDBRemoteRegisterContext *>(
+                gdb_thread->GetRegisterContext().get());
+
+        if (reg_ctx_sp)
+          reg_ctx_sp->AArch64SVEReconfigure();
       }
 
       thread_sp->SetName(thread_name.empty() ? nullptr : thread_name.c_str());
@@ -1884,6 +1898,9 @@ ThreadSP ProcessGDBRemote::SetThreadStopInfo(
               thread_sp->SetStopInfo(
                   StopInfo::CreateStopReasonWithExec(*thread_sp));
               handled = true;
+            } else if (reason == "processor trace") {
+              thread_sp->SetStopInfo(StopInfo::CreateStopReasonProcessorTrace(
+                  *thread_sp, description.c_str()));
             }
           } else if (!signo) {
             addr_t pc = thread_sp->GetRegisterContext()->GetPC();
@@ -4567,7 +4584,7 @@ bool ProcessGDBRemote::GetGDBServerRegisterInfoXMLAndProcess(
       // ABI is also potentially incorrect.
       ABISP abi_to_use_sp = ABI::FindPlugin(shared_from_this(), arch_to_use);
       for (auto &feature_node : feature_nodes) {
-        ParseRegisters(feature_node, target_info, this->m_register_info,
+        ParseRegisters(feature_node, target_info, *this->m_register_info_sp,
                        abi_to_use_sp, reg_num_remote, reg_num_local);
       }
 
@@ -4597,9 +4614,9 @@ bool ProcessGDBRemote::GetGDBServerRegisterInfo(ArchSpec &arch_to_use) {
   uint32_t reg_num_local = 0;
   if (GetGDBServerRegisterInfoXMLAndProcess(arch_to_use, "target.xml",
                                             reg_num_remote, reg_num_local))
-    this->m_register_info.Finalize(arch_to_use);
+    this->m_register_info_sp->Finalize(arch_to_use);
 
-  return m_register_info.GetNumRegisters() > 0;
+  return m_register_info_sp->GetNumRegisters() > 0;
 }
 
 llvm::Expected<LoadedModuleInfoList> ProcessGDBRemote::GetLoadedModuleList() {

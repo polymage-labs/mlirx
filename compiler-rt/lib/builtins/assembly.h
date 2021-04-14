@@ -14,8 +14,8 @@
 #ifndef COMPILERRT_ASSEMBLY_H
 #define COMPILERRT_ASSEMBLY_H
 
-#if defined(__POWERPC__) || defined(__powerpc__) || defined(__ppc__)
-#define SEPARATOR @
+#if defined(__APPLE__) && defined(__aarch64__)
+#define SEPARATOR %%
 #else
 #define SEPARATOR ;
 #endif
@@ -204,8 +204,11 @@
 #ifdef VISIBILITY_HIDDEN
 #define DECLARE_SYMBOL_VISIBILITY(name)                                        \
   HIDDEN(SYMBOL_NAME(name)) SEPARATOR
+#define DECLARE_SYMBOL_VISIBILITY_UNMANGLED(name) \
+  HIDDEN(name) SEPARATOR
 #else
 #define DECLARE_SYMBOL_VISIBILITY(name)
+#define DECLARE_SYMBOL_VISIBILITY_UNMANGLED(name)
 #endif
 
 #define DEFINE_COMPILERRT_FUNCTION(name)                                       \
@@ -248,7 +251,7 @@
   FUNC_ALIGN                                                                   \
   .globl name SEPARATOR                                                        \
   SYMBOL_IS_FUNC(name) SEPARATOR                                               \
-  DECLARE_SYMBOL_VISIBILITY(name) SEPARATOR                                    \
+  DECLARE_SYMBOL_VISIBILITY_UNMANGLED(name) SEPARATOR                          \
   CFI_START SEPARATOR                                                          \
   DECLARE_FUNC_ENCODING                                                        \
   name: SEPARATOR BTI_C

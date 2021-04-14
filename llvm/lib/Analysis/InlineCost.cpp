@@ -71,6 +71,20 @@ static cl::opt<int>
                           cl::init(45), cl::ZeroOrMore,
                           cl::desc("Threshold for inlining cold callsites"));
 
+static cl::opt<bool> InlineEnableCostBenefitAnalysis(
+    "inline-enable-cost-benefit-analysis", cl::Hidden, cl::init(false),
+    cl::desc("Enable the cost-benefit analysis for the inliner"));
+
+static cl::opt<int> InlineSavingsMultiplier(
+    "inline-savings-multiplier", cl::Hidden, cl::init(8), cl::ZeroOrMore,
+    cl::desc("Multiplier to multiply cycle savings by during inlining"));
+
+static cl::opt<int>
+    InlineSizeAllowance("inline-size-allowance", cl::Hidden, cl::init(100),
+                        cl::ZeroOrMore,
+                        cl::desc("The maximum size of a callee that get's "
+                                 "inlined without sufficient cycle savings"));
+
 // We introduce this threshold to help performance of instrumentation based
 // PGO before we actually hook up inliner with analysis passes such as BPI and
 // BFI.
@@ -183,6 +197,9 @@ protected:
   CallBase &CandidateCall;
 
   /// Extension points for handling callsite features.
+  // Called before a basic block was analyzed.
+  virtual void onBlockStart(const BasicBlock *BB) {}
+
   /// Called after a basic block was analyzed.
   virtual void onBlockAnalyzed(const BasicBlock *BB) {}
 
@@ -454,11 +471,26 @@ class InlineCostCallAnalyzer final : public CallAnalyzer {
   /// Ignore the threshold when finalizing analysis.
   const bool IgnoreThreshold;
 
+  // True if the cost-benefit-analysis-based inliner is enabled.
+  const bool CostBenefitAnalysisEnabled;
+
   /// Inlining cost measured in abstract units, accounts for all the
   /// instructions expected to be executed for a given function invocation.
   /// Instructions that are statically proven to be dead based on call-site
   /// arguments are not counted here.
   int Cost = 0;
+
+  // The cumulative cost at the beginning of the basic block being analyzed.  At
+  // the end of analyzing each basic block, "Cost - CostAtBBStart" represents
+  // the size of that basic block.
+  int CostAtBBStart = 0;
+
+  // The static size of live but cold basic blocks.  This is "static" in the
+  // sense that it's not weighted by profile counts at all.
+  int ColdSize = 0;
+
+  // Whether inlining is decided by cost-benefit analysis.
+  bool DecidedByCostBenefit = false;
 
   bool SingleBB = true;
 
@@ -597,7 +629,21 @@ class InlineCostCallAnalyzer final : public CallAnalyzer {
     SROACostSavings += InlineConstants::InstrCost;
   }
 
+  void onBlockStart(const BasicBlock *BB) override { CostAtBBStart = Cost; }
+
   void onBlockAnalyzed(const BasicBlock *BB) override {
+    if (CostBenefitAnalysisEnabled) {
+      // Keep track of the static size of live but cold basic blocks.  For now,
+      // we define a cold basic block to be one that's never executed.
+      assert(GetBFI && "GetBFI must be available");
+      BlockFrequencyInfo *BFI = &(GetBFI(F));
+      assert(BFI && "BFI must be available");
+      auto ProfileCount = BFI->getBlockProfileCount(BB);
+      assert(ProfileCount.hasValue());
+      if (ProfileCount.getValue() == 0)
+        ColdSize += Cost - CostAtBBStart;
+    }
+
     auto *TI = BB->getTerminator();
     // If we had any successors at this point, than post-inlining is likely to
     // have them as well. Note that we assume any basic blocks which existed
@@ -628,6 +674,137 @@ class InlineCostCallAnalyzer final : public CallAnalyzer {
     InstructionCostDetailMap[I].ThresholdAfter = Threshold;
   }
 
+  bool isCostBenefitAnalysisEnabled() {
+    if (!PSI || !PSI->hasProfileSummary())
+      return false;
+
+    if (!GetBFI)
+      return false;
+
+    if (InlineEnableCostBenefitAnalysis.getNumOccurrences()) {
+      // Honor the explicit request from the user.
+      if (!InlineEnableCostBenefitAnalysis)
+        return false;
+    } else {
+      // Otherwise, require instrumentation profile.
+      if (!PSI->hasInstrumentationProfile())
+        return false;
+    }
+
+    auto *Caller = CandidateCall.getParent()->getParent();
+    if (!Caller->getEntryCount())
+      return false;
+
+    BlockFrequencyInfo *CallerBFI = &(GetBFI(*Caller));
+    if (!CallerBFI)
+      return false;
+
+    // For now, limit to hot call site.
+    if (!PSI->isHotCallSite(CandidateCall, CallerBFI))
+      return false;
+
+    // Make sure we have a nonzero entry count.
+    auto EntryCount = F.getEntryCount();
+    if (!EntryCount || !EntryCount.getCount())
+      return false;
+
+    BlockFrequencyInfo *CalleeBFI = &(GetBFI(F));
+    if (!CalleeBFI)
+      return false;
+
+    return true;
+  }
+
+  // Determine whether we should inline the given call site, taking into account
+  // both the size cost and the cycle savings.  Return None if we don't have
+  // suficient profiling information to determine.
+  Optional<bool> costBenefitAnalysis() {
+    if (!CostBenefitAnalysisEnabled)
+      return None;
+
+    // buildInlinerPipeline in the pass builder sets HotCallSiteThreshold to 0
+    // for the prelink phase of the AutoFDO + ThinLTO build.  Honor the logic by
+    // falling back to the cost-based metric.
+    // TODO: Improve this hacky condition.
+    if (Threshold == 0)
+      return None;
+
+    assert(GetBFI);
+    BlockFrequencyInfo *CalleeBFI = &(GetBFI(F));
+    assert(CalleeBFI);
+
+    // The cycle savings expressed as the sum of InlineConstants::InstrCost
+    // multiplied by the estimated dynamic count of each instruction we can
+    // avoid.  Savings come from the call site cost, such as argument setup and
+    // the call instruction, as well as the instructions that are folded.
+    //
+    // We use 128-bit APInt here to avoid potential overflow.  This variable
+    // should stay well below 10^^24 (or 2^^80) in practice.  This "worst" case
+    // assumes that we can avoid or fold a billion instructions, each with a
+    // profile count of 10^^15 -- roughly the number of cycles for a 24-hour
+    // period on a 4GHz machine.
+    APInt CycleSavings(128, 0);
+
+    for (auto &BB : F) {
+      APInt CurrentSavings(128, 0);
+      for (auto &I : BB) {
+        if (BranchInst *BI = dyn_cast<BranchInst>(&I)) {
+          // Count a conditional branch as savings if it becomes unconditional.
+          if (BI->isConditional() &&
+              dyn_cast_or_null<ConstantInt>(
+                  SimplifiedValues.lookup(BI->getCondition()))) {
+            CurrentSavings += InlineConstants::InstrCost;
+          }
+        } else if (Value *V = dyn_cast<Value>(&I)) {
+          // Count an instruction as savings if we can fold it.
+          if (SimplifiedValues.count(V)) {
+            CurrentSavings += InlineConstants::InstrCost;
+          }
+        }
+      }
+
+      auto ProfileCount = CalleeBFI->getBlockProfileCount(&BB);
+      assert(ProfileCount.hasValue());
+      CurrentSavings *= ProfileCount.getValue();
+      CycleSavings += CurrentSavings;
+    }
+
+    // Compute the cycle savings per call.
+    auto EntryProfileCount = F.getEntryCount();
+    assert(EntryProfileCount.hasValue() && EntryProfileCount.getCount());
+    auto EntryCount = EntryProfileCount.getCount();
+    CycleSavings += EntryCount / 2;
+    CycleSavings = CycleSavings.udiv(EntryCount);
+
+    // Compute the total savings for the call site.
+    auto *CallerBB = CandidateCall.getParent();
+    BlockFrequencyInfo *CallerBFI = &(GetBFI(*(CallerBB->getParent())));
+    CycleSavings += getCallsiteCost(this->CandidateCall, DL);
+    CycleSavings *= CallerBFI->getBlockProfileCount(CallerBB).getValue();
+
+    // Remove the cost of the cold basic blocks.
+    int Size = Cost - ColdSize;
+
+    // Allow tiny callees to be inlined regardless of whether they meet the
+    // savings threshold.
+    Size = Size > InlineSizeAllowance ? Size - InlineSizeAllowance : 1;
+
+    // Return true if the savings justify the cost of inlining.  Specifically,
+    // we evaluate the following inequality:
+    //
+    //  CycleSavings      PSI->getOrCompHotCountThreshold()
+    // -------------- >= -----------------------------------
+    //       Size              InlineSavingsMultiplier
+    //
+    // Note that the left hand side is specific to a call site.  The right hand
+    // side is a constant for the entire executable.
+    APInt LHS = CycleSavings;
+    LHS *= InlineSavingsMultiplier;
+    APInt RHS(128, PSI->getOrCompHotCountThreshold());
+    RHS *= Size;
+    return LHS.uge(RHS);
+  }
+
   InlineResult finalizeAnalysis() override {
     // Loops generally act a lot like calls in that they act like barriers to
     // movement, require a certain amount of setup, etc. So when optimising for
@@ -655,6 +832,14 @@ class InlineCostCallAnalyzer final : public CallAnalyzer {
       Threshold -= VectorBonus;
     else if (NumVectorInstructions <= NumInstructions / 2)
       Threshold -= VectorBonus / 2;
+
+    if (auto Result = costBenefitAnalysis()) {
+      DecidedByCostBenefit = true;
+      if (Result.getValue())
+        return InlineResult::success();
+      else
+        return InlineResult::failure("Cost over threshold.");
+    }
 
     if (IgnoreThreshold || Cost < std::max(1, Threshold))
       return InlineResult::success();
@@ -726,9 +911,11 @@ public:
       bool IgnoreThreshold = false)
       : CallAnalyzer(Callee, Call, TTI, GetAssumptionCache, GetBFI, PSI, ORE),
         ComputeFullInlineCost(OptComputeFullInlineCost ||
-                              Params.ComputeFullInlineCost || ORE),
+                              Params.ComputeFullInlineCost || ORE ||
+                              isCostBenefitAnalysisEnabled()),
         Params(Params), Threshold(Params.DefaultThreshold),
         BoostIndirectCalls(BoostIndirect), IgnoreThreshold(IgnoreThreshold),
+        CostBenefitAnalysisEnabled(isCostBenefitAnalysisEnabled()),
         Writer(this) {}
 
   /// Annotation Writer for instruction details
@@ -749,6 +936,7 @@ public:
   virtual ~InlineCostCallAnalyzer() {}
   int getThreshold() { return Threshold; }
   int getCost() { return Cost; }
+  bool wasDecidedByCostBenefit() { return DecidedByCostBenefit; }
 };
 } // namespace
 
@@ -846,9 +1034,9 @@ bool CallAnalyzer::isGEPFree(GetElementPtrInst &GEP) {
       Operands.push_back(SimpleOp);
     else
       Operands.push_back(Op);
-  return TargetTransformInfo::TCC_Free ==
-         TTI.getUserCost(&GEP, Operands,
-                         TargetTransformInfo::TCK_SizeAndLatency);
+  return TTI.getUserCost(&GEP, Operands,
+                         TargetTransformInfo::TCK_SizeAndLatency) ==
+         TargetTransformInfo::TCC_Free;
 }
 
 bool CallAnalyzer::visitAlloca(AllocaInst &I) {
@@ -1118,8 +1306,8 @@ bool CallAnalyzer::visitPtrToInt(PtrToIntInst &I) {
   if (auto *SROAArg = getSROAArgForValueOrNull(I.getOperand(0)))
     SROAArgValues[&I] = SROAArg;
 
-  return TargetTransformInfo::TCC_Free ==
-         TTI.getUserCost(&I, TargetTransformInfo::TCK_SizeAndLatency);
+  return TTI.getUserCost(&I, TargetTransformInfo::TCK_SizeAndLatency) ==
+         TargetTransformInfo::TCC_Free;
 }
 
 bool CallAnalyzer::visitIntToPtr(IntToPtrInst &I) {
@@ -1143,8 +1331,8 @@ bool CallAnalyzer::visitIntToPtr(IntToPtrInst &I) {
   if (auto *SROAArg = getSROAArgForValueOrNull(Op))
     SROAArgValues[&I] = SROAArg;
 
-  return TargetTransformInfo::TCC_Free ==
-         TTI.getUserCost(&I, TargetTransformInfo::TCK_SizeAndLatency);
+  return TTI.getUserCost(&I, TargetTransformInfo::TCK_SizeAndLatency) ==
+         TargetTransformInfo::TCC_Free;
 }
 
 bool CallAnalyzer::visitCastInst(CastInst &I) {
@@ -1175,8 +1363,8 @@ bool CallAnalyzer::visitCastInst(CastInst &I) {
     break;
   }
 
-  return TargetTransformInfo::TCC_Free ==
-         TTI.getUserCost(&I, TargetTransformInfo::TCK_SizeAndLatency);
+  return TTI.getUserCost(&I, TargetTransformInfo::TCK_SizeAndLatency) ==
+         TargetTransformInfo::TCC_Free;
 }
 
 bool CallAnalyzer::visitUnaryInstruction(UnaryInstruction &I) {
@@ -1399,6 +1587,8 @@ void InlineCostCallAnalyzer::updateThreshold(CallBase &Call, Function &Callee) {
       }
     }
   }
+
+  Threshold += TTI.adjustInliningThreshold(&Call);
 
   // Finally, take the target-specific inlining threshold multiplier into
   // account.
@@ -1878,8 +2068,8 @@ bool CallAnalyzer::visitUnreachableInst(UnreachableInst &I) {
 bool CallAnalyzer::visitInstruction(Instruction &I) {
   // Some instructions are free. All of the free intrinsics can also be
   // handled by SROA, etc.
-  if (TargetTransformInfo::TCC_Free ==
-      TTI.getUserCost(&I, TargetTransformInfo::TCK_SizeAndLatency))
+  if (TTI.getUserCost(&I, TargetTransformInfo::TCK_SizeAndLatency) ==
+      TargetTransformInfo::TCC_Free)
     return true;
 
   // We found something we don't understand or can't handle. Mark any SROA-able
@@ -2145,6 +2335,8 @@ InlineResult CallAnalyzer::analyze() {
     BasicBlock *BB = BBWorklist[Idx];
     if (BB->empty())
       continue;
+
+    onBlockStart(BB);
 
     // Disallow inlining a blockaddress with uses other than strictly callbr.
     // A blockaddress only has defined behavior for an indirect branch in the
@@ -2427,6 +2619,16 @@ InlineCost llvm::getInlineCost(
   InlineResult ShouldInline = CA.analyze();
 
   LLVM_DEBUG(CA.dump());
+
+  // Always make cost benefit based decision explicit.
+  // We use always/never here since threshold is not meaningful,
+  // as it's not what drives cost-benefit analysis.
+  if (CA.wasDecidedByCostBenefit()) {
+    if (ShouldInline.isSuccess())
+      return InlineCost::getAlways("benefit over cost");
+    else
+      return InlineCost::getNever("cost over benefit");
+  }
 
   // Check if there was a reason to force inlining or no inlining.
   if (!ShouldInline.isSuccess() && CA.getCost() < CA.getThreshold())

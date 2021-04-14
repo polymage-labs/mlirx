@@ -82,6 +82,15 @@ bool isDeducedAsLambda(const SelectionTree::Node *Node, SourceLocation Loc) {
   return false;
 }
 
+// Returns true iff "auto" in Node is really part of the template parameter,
+// which we cannot expand.
+bool isTemplateParam(const SelectionTree::Node *Node) {
+  if (Node->Parent)
+    if (Node->Parent->ASTNode.get<NonTypeTemplateParmDecl>())
+      return true;
+  return false;
+}
+
 bool ExpandAutoType::prepare(const Selection& Inputs) {
   CachedLocation = llvm::None;
   if (auto *Node = Inputs.ASTSelection.commonAncestor()) {
@@ -90,7 +99,8 @@ bool ExpandAutoType::prepare(const Selection& Inputs) {
         // Code in apply() does handle 'decltype(auto)' yet.
         if (!Result.getTypePtr()->isDecltypeAuto() &&
             !isStructuredBindingType(Node) &&
-            !isDeducedAsLambda(Node, Result.getBeginLoc()))
+            !isDeducedAsLambda(Node, Result.getBeginLoc()) &&
+            !isTemplateParam(Node))
           CachedLocation = Result;
       }
     }
@@ -106,12 +116,12 @@ Expected<Tweak::Effect> ExpandAutoType::apply(const Selection& Inputs) {
       Inputs.AST->getASTContext(), CachedLocation->getBeginLoc());
 
   // if we can't resolve the type, return an error message
-  if (DeducedType == llvm::None)
+  if (DeducedType == llvm::None || (*DeducedType)->isUndeducedAutoType())
     return error("Could not deduce type for 'auto' type");
 
   // if it's a lambda expression, return an error message
   if (isa<RecordType>(*DeducedType) &&
-      dyn_cast<RecordType>(*DeducedType)->getDecl()->isLambda()) {
+      cast<RecordType>(*DeducedType)->getDecl()->isLambda()) {
     return error("Could not expand type of lambda expression");
   }
 

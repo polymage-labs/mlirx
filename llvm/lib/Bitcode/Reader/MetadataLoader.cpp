@@ -550,8 +550,7 @@ class MetadataLoader::MetadataLoaderImpl {
               SmallVector<uint64_t, 8> Ops;
               Ops.append(std::next(DIExpr->elements_begin()),
                          DIExpr->elements_end());
-              auto *E = DIExpression::get(Context, Ops);
-              DDI->setOperand(2, MetadataAsValue::get(Context, E));
+              DDI->setExpression(DIExpression::get(Context, Ops));
             }
   }
 
@@ -1565,19 +1564,20 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
   }
 
   case bitc::METADATA_MODULE: {
-    if (Record.size() < 5 || Record.size() > 8)
+    if (Record.size() < 5 || Record.size() > 9)
       return error("Invalid record");
 
-    unsigned Offset = Record.size() >= 7 ? 2 : 1;
+    unsigned Offset = Record.size() >= 8 ? 2 : 1;
     IsDistinct = Record[0];
     MetadataList.assignValue(
         GET_OR_DISTINCT(
             DIModule,
-            (Context, Record.size() >= 7 ? getMDOrNull(Record[1]) : nullptr,
+            (Context, Record.size() >= 8 ? getMDOrNull(Record[1]) : nullptr,
              getMDOrNull(Record[0 + Offset]), getMDString(Record[1 + Offset]),
              getMDString(Record[2 + Offset]), getMDString(Record[3 + Offset]),
              getMDString(Record[4 + Offset]),
-             Record.size() <= 7 ? 0 : Record[7])),
+             Record.size() <= 7 ? 0 : Record[7],
+             Record.size() <= 8 ? false : Record[8])),
         NextMetadataNo);
     NextMetadataNo++;
     break;
@@ -2073,6 +2073,16 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
     // block with METADATA_BLOCK_ID.
     if (Error Err = parseMetadataKindRecord(Record))
       return Err;
+    break;
+  }
+  case bitc::METADATA_ARG_LIST: {
+    SmallVector<ValueAsMetadata *, 4> Elts;
+    Elts.reserve(Record.size());
+    for (uint64_t Elt : Record)
+      Elts.push_back(dyn_cast_or_null<ValueAsMetadata>(getMDOrNull(Elt)));
+
+    MetadataList.assignValue(DIArgList::get(Context, Elts), NextMetadataNo);
+    NextMetadataNo++;
     break;
   }
   }

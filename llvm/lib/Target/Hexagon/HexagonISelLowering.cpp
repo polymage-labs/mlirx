@@ -308,6 +308,8 @@ Register HexagonTargetLowering::getRegisterByName(
                      .Case("m1", Hexagon::M1)
                      .Case("usr", Hexagon::USR)
                      .Case("ugp", Hexagon::UGP)
+                     .Case("cs0", Hexagon::CS0)
+                     .Case("cs1", Hexagon::CS1)
                      .Default(Register());
   if (Reg)
     return Reg;
@@ -701,7 +703,7 @@ SDValue HexagonTargetLowering::LowerREADCYCLECOUNTER(SDValue Op,
                                                      SelectionDAG &DAG) const {
   SDValue Chain = Op.getOperand(0);
   SDLoc dl(Op);
-  SDVTList VTs = DAG.getVTList(MVT::i32, MVT::Other);
+  SDVTList VTs = DAG.getVTList(MVT::i64, MVT::Other);
   return DAG.getNode(HexagonISD::READCYCLE, dl, VTs, Chain);
 }
 
@@ -3151,10 +3153,12 @@ HexagonTargetLowering::ReplaceNodeResults(SDNode *N,
     case ISD::BITCAST:
       // Handle a bitcast from v8i1 to i8.
       if (N->getValueType(0) == MVT::i8) {
-        SDValue P = getInstr(Hexagon::C2_tfrpr, dl, MVT::i32,
-                             N->getOperand(0), DAG);
-        SDValue T = DAG.getAnyExtOrTrunc(P, dl, MVT::i8);
-        Results.push_back(T);
+        if (N->getOperand(0).getValueType() == MVT::v8i1) {
+          SDValue P = getInstr(Hexagon::C2_tfrpr, dl, MVT::i32,
+                               N->getOperand(0), DAG);
+          SDValue T = DAG.getAnyExtOrTrunc(P, dl, MVT::i8);
+          Results.push_back(T);
+        }
       }
       break;
   }
@@ -3440,8 +3444,8 @@ bool HexagonTargetLowering::allowsMemoryAccess(
 }
 
 bool HexagonTargetLowering::allowsMisalignedMemoryAccesses(
-      EVT VT, unsigned AddrSpace, unsigned Alignment,
-      MachineMemOperand::Flags Flags, bool *Fast) const {
+    EVT VT, unsigned AddrSpace, Align Alignment, MachineMemOperand::Flags Flags,
+    bool *Fast) const {
   MVT SVT = VT.getSimpleVT();
   if (Subtarget.isHVXVectorType(SVT, true))
     return allowsHvxMisalignedMemoryAccesses(SVT, Flags, Fast);

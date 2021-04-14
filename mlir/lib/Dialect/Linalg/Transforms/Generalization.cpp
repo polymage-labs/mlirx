@@ -45,11 +45,11 @@ static linalg::GenericOp createGenericOpFromNamedOp(linalg::LinalgOp namedOp,
   SmallVector<Type, 4> types(resultTypes.begin(), resultTypes.end());
 
   return builder.create<linalg::GenericOp>(
-      namedOp.getLoc(), types, namedOp.getInputs(), namedOp.getOutputBuffers(),
-      namedOp.getInitTensors(), indexingMaps, iterators,
+      namedOp.getLoc(), types, namedOp.getInputs(), namedOp.getOutputs(),
+      indexingMaps, iterators,
       [&regionBuilder](OpBuilder &bodyBuilder, Location loc, ValueRange) {
         edsc::ScopedContext scope(bodyBuilder, loc);
-        regionBuilder(*bodyBuilder.getBlock());
+        regionBuilder(*bodyBuilder.getBlock(), /*captures=*/{});
       });
 }
 
@@ -63,7 +63,8 @@ namespace {
 // into auto-generated ones.
 template <typename ConcretePattern, typename RootOp>
 struct LinalgGeneralizationPattern : OpRewritePattern<RootOp> {
-  LinalgGeneralizationPattern(MLIRContext *context, linalg::LinalgMarker marker,
+  LinalgGeneralizationPattern(MLIRContext *context,
+                              linalg::LinalgTransformationFilter marker,
                               PatternBenefit benefit = 1)
       : OpRewritePattern<RootOp>(context, benefit), marker(std::move(marker)) {}
 
@@ -81,12 +82,13 @@ struct LinalgGeneralizationPattern : OpRewritePattern<RootOp> {
       return failure();
 
     rewriter.replaceOp(rootOp, genericOp.getResults());
-    marker.replaceLinalgMarker(rewriter, genericOp.getOperation());
+    marker.replaceLinalgTransformationFilter(rewriter,
+                                             genericOp.getOperation());
     return success();
   }
 
 private:
-  linalg::LinalgMarker marker;
+  linalg::LinalgTransformationFilter marker;
 };
 
 struct GeneralizeConvOp
@@ -100,9 +102,9 @@ struct GeneralizeConvOp
 /// linalg.generic.
 struct LinalgNamedOpGeneralizationPattern : RewritePattern {
   LinalgNamedOpGeneralizationPattern(MLIRContext *context,
-                                     linalg::LinalgMarker marker,
+                                     linalg::LinalgTransformationFilter marker,
                                      PatternBenefit benefit = 1)
-      : RewritePattern(benefit, MatchAnyOpTypeTag()),
+      : RewritePattern(MatchAnyOpTypeTag(), benefit, context),
         marker(std::move(marker)) {}
 
   LogicalResult matchAndRewrite(Operation *rootOp,
@@ -123,12 +125,13 @@ struct LinalgNamedOpGeneralizationPattern : RewritePattern {
       return failure();
 
     rewriter.replaceOp(rootOp, genericOp.getResults());
-    marker.replaceLinalgMarker(rewriter, genericOp.getOperation());
+    marker.replaceLinalgTransformationFilter(rewriter,
+                                             genericOp.getOperation());
     return success();
   }
 
 private:
-  linalg::LinalgMarker marker;
+  linalg::LinalgTransformationFilter marker;
 };
 
 struct LinalgGeneralizationPass
@@ -140,10 +143,10 @@ struct LinalgGeneralizationPass
 
 void LinalgGeneralizationPass::runOnFunction() {
   FuncOp func = getFunction();
-  OwningRewritePatternList patterns;
-  linalg::populateLinalgConvGeneralizationPatterns(&getContext(), patterns);
-  linalg::populateLinalgNamedOpsGeneralizationPatterns(&getContext(), patterns);
-  applyPatternsAndFoldGreedily(func.getBody(), std::move(patterns));
+  RewritePatternSet patterns(&getContext());
+  linalg::populateLinalgConvGeneralizationPatterns(patterns);
+  linalg::populateLinalgNamedOpsGeneralizationPatterns(patterns);
+  (void)applyPatternsAndFoldGreedily(func.getBody(), std::move(patterns));
 }
 
 linalg::GenericOp GeneralizeConvOp::createGenericOp(linalg::ConvOp convOp,
@@ -153,8 +156,8 @@ linalg::GenericOp GeneralizeConvOp::createGenericOp(linalg::ConvOp convOp,
       llvm::to_vector<4>(convOp.iterator_types().getAsValueRange<StringAttr>());
   return builder.create<linalg::GenericOp>(
       convOp.getLoc(), /*resultTensorTypes=*/ArrayRef<Type>(),
-      convOp.getInputBuffers(), convOp.getOutputBuffers(),
-      /*initTensors=*/ValueRange(), indexingMaps, iterators,
+      convOp.getInputBuffers(), convOp.getOutputBuffers(), indexingMaps,
+      iterators,
       [](OpBuilder &bodyBuilder, Location bodyLoc, ValueRange bodyArgs) {
         Value mul =
             bodyBuilder.create<MulFOp>(bodyLoc, bodyArgs[0], bodyArgs[1]);
@@ -164,15 +167,14 @@ linalg::GenericOp GeneralizeConvOp::createGenericOp(linalg::ConvOp convOp,
 }
 
 void mlir::linalg::populateLinalgConvGeneralizationPatterns(
-    MLIRContext *context, OwningRewritePatternList &patterns,
-    linalg::LinalgMarker marker) {
-  patterns.insert<GeneralizeConvOp>(context, marker);
+    RewritePatternSet &patterns, linalg::LinalgTransformationFilter marker) {
+  patterns.add<GeneralizeConvOp>(patterns.getContext(), marker);
 }
 
 void mlir::linalg::populateLinalgNamedOpsGeneralizationPatterns(
-    MLIRContext *context, OwningRewritePatternList &patterns,
-    linalg::LinalgMarker marker) {
-  patterns.insert<LinalgNamedOpGeneralizationPattern>(context, marker);
+    RewritePatternSet &patterns, linalg::LinalgTransformationFilter marker) {
+  patterns.add<LinalgNamedOpGeneralizationPattern>(patterns.getContext(),
+                                                   marker);
 }
 
 std::unique_ptr<OperationPass<FuncOp>> mlir::createLinalgGeneralizationPass() {

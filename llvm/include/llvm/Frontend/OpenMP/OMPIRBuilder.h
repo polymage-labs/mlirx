@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_OPENMP_IR_IRBUILDER_H
-#define LLVM_OPENMP_IR_IRBUILDER_H
+#ifndef LLVM_FRONTEND_OPENMP_OMPIRBUILDER_H
+#define LLVM_FRONTEND_OPENMP_OMPIRBUILDER_H
 
 #include "llvm/Frontend/OpenMP/OMPConstants.h"
 #include "llvm/IR/DebugLoc.h"
@@ -31,6 +31,7 @@ public:
   /// Create a new OpenMPIRBuilder operating on the given module \p M. This will
   /// not have an effect on \p M (see initialize).
   OpenMPIRBuilder(Module &M) : M(M), Builder(M.getContext()) {}
+  ~OpenMPIRBuilder();
 
   /// Initialize the internal state, this will put structures types and
   /// potentially other helpers into the underlying module. Must be called
@@ -38,7 +39,12 @@ public:
   void initialize();
 
   /// Finalize the underlying module, e.g., by outlining regions.
-  void finalize();
+  /// \param Fn                    The function to be finalized. If not used,
+  ///                              all functions are finalized.
+  /// \param AllowExtractorSinking Flag to include sinking instructions,
+  ///                              emitted by CodeExtractor, in the
+  ///                              outlined region. Default is false.
+  void finalize(Function *Fn = nullptr, bool AllowExtractorSinking = false);
 
   /// Add attributes known for \p FnID to \p Fn.
   void addAttributes(omp::RuntimeFunction FnID, Function &Fn);
@@ -201,15 +207,19 @@ public:
   /// convert the logical iteration variable to the loop counter variable in the
   /// loop body.
   ///
-  /// \param Loc       The insert and source location description.
+  /// \param Loc       The insert and source location description. The insert
+  ///                  location can be between two instructions or the end of a
+  ///                  degenerate block (e.g. a BB under construction).
   /// \param BodyGenCB Callback that will generate the loop body code.
   /// \param TripCount Number of iterations the loop body is executed.
+  /// \param Name      Base name used to derive BB and instruction names.
   ///
   /// \returns An object representing the created control flow structure which
   ///          can be used for loop-associated directives.
   CanonicalLoopInfo *createCanonicalLoop(const LocationDescription &Loc,
                                          LoopBodyGenCallbackTy BodyGenCB,
-                                         Value *TripCount);
+                                         Value *TripCount,
+                                         const Twine &Name = "loop");
 
   /// Generator for the control flow structure of an OpenMP canonical loop.
   ///
@@ -233,7 +243,7 @@ public:
   ///      for (uint8_t i = 100u; i > 0; i += 127u)
   ///
   ///
-  /// TODO: May need to add addtional parameters to represent:
+  /// TODO: May need to add additional parameters to represent:
   ///
   ///  * Allow representing downcounting with unsigned integers.
   ///
@@ -252,13 +262,84 @@ public:
   ///                  and Stop are signed integers.
   /// \param InclusiveStop Whether  \p Stop itself is a valid value for the loop
   ///                      counter.
+  /// \param ComputeIP Insertion point for instructions computing the trip
+  ///                  count. Can be used to ensure the trip count is available
+  ///                  at the outermost loop of a loop nest. If not set,
+  ///                  defaults to the preheader of the generated loop.
+  /// \param Name      Base name used to derive BB and instruction names.
   ///
   /// \returns An object representing the created control flow structure which
   ///          can be used for loop-associated directives.
   CanonicalLoopInfo *createCanonicalLoop(const LocationDescription &Loc,
                                          LoopBodyGenCallbackTy BodyGenCB,
                                          Value *Start, Value *Stop, Value *Step,
-                                         bool IsSigned, bool InclusiveStop);
+                                         bool IsSigned, bool InclusiveStop,
+                                         InsertPointTy ComputeIP = {},
+                                         const Twine &Name = "loop");
+
+  /// Collapse a loop nest into a single loop.
+  ///
+  /// Merges loops of a loop nest into a single CanonicalLoopNest representation
+  /// that has the same number of innermost loop iterations as the origin loop
+  /// nest. The induction variables of the input loops are derived from the
+  /// collapsed loop's induction variable. This is intended to be used to
+  /// implement OpenMP's collapse clause. Before applying a directive,
+  /// collapseLoops normalizes a loop nest to contain only a single loop and the
+  /// directive's implementation does not need to handle multiple loops itself.
+  /// This does not remove the need to handle all loop nest handling by
+  /// directives, such as the ordered(<n>) clause or the simd schedule-clause
+  /// modifier of the worksharing-loop directive.
+  ///
+  /// Example:
+  /// \code
+  ///   for (int i = 0; i < 7; ++i) // Canonical loop "i"
+  ///     for (int j = 0; j < 9; ++j) // Canonical loop "j"
+  ///       body(i, j);
+  /// \endcode
+  ///
+  /// After collapsing with Loops={i,j}, the loop is changed to
+  /// \code
+  ///   for (int ij = 0; ij < 63; ++ij) {
+  ///     int i = ij / 9;
+  ///     int j = ij % 9;
+  ///     body(i, j);
+  ///   }
+  /// \endcode
+  ///
+  /// In the current implementation, the following limitations apply:
+  ///
+  ///  * All input loops have an induction variable of the same type.
+  ///
+  ///  * The collapsed loop will have the same trip count integer type as the
+  ///    input loops. Therefore it is possible that the collapsed loop cannot
+  ///    represent all iterations of the input loops. For instance, assuming a
+  ///    32 bit integer type, and two input loops both iterating 2^16 times, the
+  ///    theoretical trip count of the collapsed loop would be 2^32 iteration,
+  ///    which cannot be represented in an 32-bit integer. Behavior is undefined
+  ///    in this case.
+  ///
+  ///  * The trip counts of every input loop must be available at \p ComputeIP.
+  ///    Non-rectangular loops are not yet supported.
+  ///
+  ///  * At each nest level, code between a surrounding loop and its nested loop
+  ///    is hoisted into the loop body, and such code will be executed more
+  ///    often than before collapsing (or not at all if any inner loop iteration
+  ///    has a trip count of 0). This is permitted by the OpenMP specification.
+  ///
+  /// \param DL        Debug location for instructions added for collapsing,
+  ///                  such as instructions to compute derive the input loop's
+  ///                  induction variables.
+  /// \param Loops     Loops in the loop nest to collapse. Loops are specified
+  ///                  from outermost-to-innermost and every control flow of a
+  ///                  loop's body must pass through its directly nested loop.
+  /// \param ComputeIP Where additional instruction that compute the collapsed
+  ///                  trip count. If not set, defaults to before the generated
+  ///                  loop.
+  ///
+  /// \returns The CanonicalLoopInfo object representing the collapsed loop.
+  CanonicalLoopInfo *collapseLoops(DebugLoc DL,
+                                   ArrayRef<CanonicalLoopInfo *> Loops,
+                                   InsertPointTy ComputeIP);
 
   /// Modifies the canonical loop to be a statically-scheduled workshare loop.
   ///
@@ -285,6 +366,76 @@ public:
                                                InsertPointTy AllocaIP,
                                                bool NeedsBarrier,
                                                Value *Chunk = nullptr);
+
+  /// Modifies the canonical loop to be a workshare loop.
+  ///
+  /// This takes a \p LoopInfo representing a canonical loop, such as the one
+  /// created by \p createCanonicalLoop and emits additional instructions to
+  /// turn it into a workshare loop. In particular, it calls to an OpenMP
+  /// runtime function in the preheader to obtain the loop bounds to be used in
+  /// the current thread, updates the relevant instructions in the canonical
+  /// loop and calls to an OpenMP runtime finalization function after the loop.
+  ///
+  /// \param Loc      The source location description, the insertion location
+  ///                 is not used.
+  /// \param CLI      A descriptor of the canonical loop to workshare.
+  /// \param AllocaIP An insertion point for Alloca instructions usable in the
+  ///                 preheader of the loop.
+  /// \param NeedsBarrier Indicates whether a barrier must be insterted after
+  ///                     the loop.
+  ///
+  /// \returns Updated CanonicalLoopInfo.
+  CanonicalLoopInfo *createWorkshareLoop(const LocationDescription &Loc,
+                                         CanonicalLoopInfo *CLI,
+                                         InsertPointTy AllocaIP,
+                                         bool NeedsBarrier);
+
+  /// Tile a loop nest.
+  ///
+  /// Tiles the loops of \p Loops by the tile sizes in \p TileSizes. Loops in
+  /// \p/ Loops must be perfectly nested, from outermost to innermost loop
+  /// (i.e. Loops.front() is the outermost loop). The trip count llvm::Value
+  /// of every loop and every tile sizes must be usable in the outermost
+  /// loop's preheader. This implies that the loop nest is rectangular.
+  ///
+  /// Example:
+  /// \code
+  ///   for (int i = 0; i < 15; ++i) // Canonical loop "i"
+  ///     for (int j = 0; j < 14; ++j) // Canonical loop "j"
+  ///         body(i, j);
+  /// \endcode
+  ///
+  /// After tiling with Loops={i,j} and TileSizes={5,7}, the loop is changed to
+  /// \code
+  ///   for (int i1 = 0; i1 < 3; ++i1)
+  ///     for (int j1 = 0; j1 < 2; ++j1)
+  ///       for (int i2 = 0; i2 < 5; ++i2)
+  ///         for (int j2 = 0; j2 < 7; ++j2)
+  ///           body(i1*3+i2, j1*3+j2);
+  /// \endcode
+  ///
+  /// The returned vector are the loops {i1,j1,i2,j2}. The loops i1 and j1 are
+  /// referred to the floor, and the loops i2 and j2 are the tiles. Tiling also
+  /// handles non-constant trip counts, non-constant tile sizes and trip counts
+  /// that are not multiples of the tile size. In the latter case the tile loop
+  /// of the last floor-loop iteration will have fewer iterations than specified
+  /// as its tile size.
+  ///
+  ///
+  /// @param DL        Debug location for instructions added by tiling, for
+  ///                  instance the floor- and tile trip count computation.
+  /// @param Loops     Loops to tile. The CanonicalLoopInfo objects are
+  ///                  invalidated by this method, i.e. should not used after
+  ///                  tiling.
+  /// @param TileSizes For each loop in \p Loops, the tile size for that
+  ///                  dimensions.
+  ///
+  /// \returns A list of generated loops. Contains twice as many loops as the
+  ///          input loop nest; the first half are the floor loops and the
+  ///          second half are the tile loops.
+  std::vector<CanonicalLoopInfo *>
+  tileLoops(DebugLoc DL, ArrayRef<CanonicalLoopInfo *> Loops,
+            ArrayRef<Value *> TileSizes);
 
   /// Generator for '#omp flush'
   ///
@@ -418,6 +569,9 @@ public:
     /// vector and set.
     void collectBlocks(SmallPtrSetImpl<BasicBlock *> &BlockSet,
                        SmallVectorImpl<BasicBlock *> &BlockVector);
+
+    /// Return the function that contains the region to be outlined.
+    Function *getFunction() const { return EntryBB->getParent(); }
   };
 
   /// Collection of regions that need to be outlined during finalization.
@@ -644,6 +798,28 @@ private:
   /// \param CriticalName Name of the critical region.
   ///
   Value *getOMPCriticalRegionLock(StringRef CriticalName);
+
+  /// Create the control flow structure of a canonical OpenMP loop.
+  ///
+  /// The emitted loop will be disconnected, i.e. no edge to the loop's
+  /// preheader and no terminator in the AfterBB. The OpenMPIRBuilder's
+  /// IRBuilder location is not preserved.
+  ///
+  /// \param DL        DebugLoc used for the instructions in the skeleton.
+  /// \param TripCount Value to be used for the trip count.
+  /// \param F         Function in which to insert the BasicBlocks.
+  /// \param PreInsertBefore  Where to insert BBs that execute before the body,
+  ///                         typically the body itself.
+  /// \param PostInsertBefore Where to insert BBs that execute after the body.
+  /// \param Name      Base name used to derive BB
+  ///                  and instruction names.
+  ///
+  /// \returns The CanonicalLoopInfo that represents the emitted loop.
+  CanonicalLoopInfo *createLoopSkeleton(DebugLoc DL, Value *TripCount,
+                                        Function *F,
+                                        BasicBlock *PreInsertBefore,
+                                        BasicBlock *PostInsertBefore,
+                                        const Twine &Name = {});
 };
 
 /// Class to represented the control flow structure of an OpenMP canonical loop.
@@ -693,8 +869,11 @@ private:
   BasicBlock *Exit;
   BasicBlock *After;
 
-  /// Delete this loop if unused.
-  void eraseFromParent();
+  /// Add the control blocks of this loop to \p BBs.
+  ///
+  /// This does not include any block from the body, including the one returned
+  /// by getBody().
+  void collectControlBlocks(SmallVectorImpl<BasicBlock *> &BBs);
 
 public:
   /// The preheader ensures that there is only a single edge entering the loop.
@@ -748,10 +927,25 @@ public:
     return IndVarPHI;
   }
 
+  /// Return the type of the induction variable (and the trip count).
+  Type *getIndVarType() const { return getIndVar()->getType(); }
+
+  /// Return the insertion point for user code before the loop.
+  OpenMPIRBuilder::InsertPointTy getPreheaderIP() const {
+    return {Preheader, std::prev(Preheader->end())};
+  };
+
+  /// Return the insertion point for user code in the body.
+  OpenMPIRBuilder::InsertPointTy getBodyIP() const {
+    return {Body, Body->begin()};
+  };
+
   /// Return the insertion point for user code after the loop.
   OpenMPIRBuilder::InsertPointTy getAfterIP() const {
     return {After, After->begin()};
   };
+
+  Function *getFunction() const { return Header->getParent(); }
 
   /// Consistency self-check.
   void assertOK() const;
@@ -759,4 +953,4 @@ public:
 
 } // end namespace llvm
 
-#endif // LLVM_IR_IRBUILDER_H
+#endif // LLVM_FRONTEND_OPENMP_OMPIRBUILDER_H

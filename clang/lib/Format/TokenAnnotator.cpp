@@ -896,7 +896,8 @@ private:
       } else if (CurrentToken && CurrentToken->is(tok::numeric_constant)) {
         Tok->setType(TT_BitFieldColon);
       } else if (Contexts.size() == 1 &&
-                 !Line.First->isOneOf(tok::kw_enum, tok::kw_case)) {
+                 !Line.First->isOneOf(tok::kw_enum, tok::kw_case,
+                                      tok::kw_default)) {
         FormatToken *Prev = Tok->getPreviousNonComment();
         if (Prev->isOneOf(tok::r_paren, tok::kw_noexcept))
           Tok->setType(TT_CtorInitializerColon);
@@ -1367,7 +1368,8 @@ private:
             TT_ImplicitStringLiteral, TT_InlineASMBrace, TT_JsFatArrow,
             TT_LambdaArrow, TT_NamespaceMacro, TT_OverloadedOperator,
             TT_RegexLiteral, TT_TemplateString, TT_ObjCStringLiteral,
-            TT_UntouchableMacroFunc, TT_ConstraintJunctions))
+            TT_UntouchableMacroFunc, TT_ConstraintJunctions,
+            TT_StatementAttributeLikeMacro))
       CurrentToken->setType(TT_Unknown);
     CurrentToken->Role.reset();
     CurrentToken->MatchingParen = nullptr;
@@ -1915,6 +1917,13 @@ private:
     if (Tok.Next->isOneOf(tok::identifier, tok::kw_this))
       return true;
 
+    if (Tok.Next->is(tok::l_paren) &&
+        !(Tok.Previous && Tok.Previous->is(tok::identifier) &&
+          Tok.Previous->Previous &&
+          Tok.Previous->Previous->isOneOf(tok::arrowstar, tok::arrow,
+                                          tok::star)))
+      return true;
+
     if (!Tok.Next->Next)
       return false;
 
@@ -1964,8 +1973,9 @@ private:
 
     if (PrevToken->isOneOf(tok::l_paren, tok::l_square, tok::l_brace,
                            tok::comma, tok::semi, tok::kw_return, tok::colon,
-                           tok::equal, tok::kw_delete, tok::kw_sizeof,
-                           tok::kw_throw) ||
+                           tok::kw_co_return, tok::kw_co_await,
+                           tok::kw_co_yield, tok::equal, tok::kw_delete,
+                           tok::kw_sizeof, tok::kw_throw) ||
         PrevToken->isOneOf(TT_BinaryOperator, TT_ConditionalExpr,
                            TT_UnaryOperator, TT_CastRParen))
       return TT_UnaryOperator;
@@ -2947,6 +2957,8 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
     // Space between the type and the * in:
     //   operator void*()
     //   operator char*()
+    //   operator void const*()
+    //   operator void volatile*()
     //   operator /*comment*/ const char*()
     //   operator volatile /*comment*/ char*()
     //   operator Foo*()
@@ -2954,11 +2966,15 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
     //   operator std::Foo*()
     //   operator C<T>::D<U>*()
     // dependent on PointerAlignment style.
-    if (Previous &&
-        (Previous->endsSequence(tok::kw_operator) ||
-         Previous->endsSequence(tok::kw_const, tok::kw_operator) ||
-         Previous->endsSequence(tok::kw_volatile, tok::kw_operator)))
-      return (Style.PointerAlignment != FormatStyle::PAS_Left);
+    if (Previous) {
+      if (Previous->endsSequence(tok::kw_operator))
+        return (Style.PointerAlignment != FormatStyle::PAS_Left);
+      if (Previous->is(tok::kw_const) || Previous->is(tok::kw_volatile))
+        return (Style.PointerAlignment != FormatStyle::PAS_Left) ||
+               (Style.SpaceAroundPointerQualifiers ==
+                FormatStyle::SAPQ_After) ||
+               (Style.SpaceAroundPointerQualifiers == FormatStyle::SAPQ_Both);
+    }
   }
   const auto SpaceRequiredForArrayInitializerLSquare =
       [](const FormatToken &LSquareTok, const FormatStyle &Style) {
@@ -3339,8 +3355,9 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
     return Style.BitFieldColonSpacing == FormatStyle::BFCS_Both ||
            Style.BitFieldColonSpacing == FormatStyle::BFCS_After;
   if (Right.is(tok::colon)) {
-    if (Line.First->isOneOf(tok::kw_case, tok::kw_default) ||
-        !Right.getNextNonComment() || Right.getNextNonComment()->is(tok::semi))
+    if (Line.First->isOneOf(tok::kw_default, tok::kw_case))
+      return Style.SpaceBeforeCaseColon;
+    if (!Right.getNextNonComment() || Right.getNextNonComment()->is(tok::semi))
       return false;
     if (Right.is(TT_ObjCMethodExpr))
       return false;
@@ -3359,6 +3376,12 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
              Style.BitFieldColonSpacing == FormatStyle::BFCS_Before;
     return true;
   }
+  // Do not merge "- -" into "--".
+  if ((Left.isOneOf(tok::minus, tok::minusminus) &&
+       Right.isOneOf(tok::minus, tok::minusminus)) ||
+      (Left.isOneOf(tok::plus, tok::plusplus) &&
+       Right.isOneOf(tok::plus, tok::plusplus)))
+    return true;
   if (Left.is(TT_UnaryOperator)) {
     if (!Right.is(tok::l_paren)) {
       // The alternative operators for ~ and ! are "compl" and "not".

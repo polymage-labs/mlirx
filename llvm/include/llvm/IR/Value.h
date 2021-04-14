@@ -281,6 +281,10 @@ public:
   /// \note It is an error to call V->takeName(V).
   void takeName(Value *V);
 
+#ifndef NDEBUG
+  std::string getNameOrAsOperand() const;
+#endif
+
   /// Change all uses of this to point to a new Value.
   ///
   /// Go through the uses list for this definition and make each use point to
@@ -430,11 +434,7 @@ public:
   ///
   /// This is specialized because it is a common request and does not require
   /// traversing the whole use list.
-  bool hasOneUse() const {
-    const_use_iterator I = use_begin(), E = use_end();
-    if (I == E) return false;
-    return ++I == E;
-  }
+  bool hasOneUse() const { return hasSingleElement(uses()); }
 
   /// Return true if this Value has exactly N uses.
   bool hasNUses(unsigned N) const;
@@ -460,6 +460,9 @@ public:
   /// This is specialized because it is a common request and does not require
   /// traversing the whole use list.
   Use *getSingleUndroppableUse();
+  const Use *getSingleUndroppableUse() const {
+    return const_cast<Value *>(this)->getSingleUndroppableUse();
+  }
 
   /// Return true if there this value.
   ///
@@ -651,15 +654,16 @@ public:
                                    ->stripPointerCastsSameRepresentation());
   }
 
-  /// Strip off pointer casts, all-zero GEPs and invariant group info.
+  /// Strip off pointer casts, all-zero GEPs, single-argument phi nodes and
+  /// invariant group info.
   ///
   /// Returns the original uncasted value.  If this is called on a non-pointer
   /// value, it returns 'this'. This function should be used only in
   /// Alias analysis.
-  const Value *stripPointerCastsAndInvariantGroups() const;
-  Value *stripPointerCastsAndInvariantGroups() {
+  const Value *stripPointerCastsForAliasAnalysis() const;
+  Value *stripPointerCastsForAliasAnalysis() {
     return const_cast<Value *>(static_cast<const Value *>(this)
-                                   ->stripPointerCastsAndInvariantGroups());
+                                   ->stripPointerCastsForAliasAnalysis());
   }
 
   /// Strip off pointer casts and all-constant inbounds GEPs.
@@ -734,13 +738,24 @@ public:
         static_cast<const Value *>(this)->stripInBoundsOffsets(Func));
   }
 
+  /// Return true if the memory object referred to by V can by freed in the
+  /// scope for which the SSA value defining the allocation is statically
+  /// defined.  E.g.  deallocation after the static scope of a value does not
+  /// count, but a deallocation before that does.
+  bool canBeFreed() const;
+
   /// Returns the number of bytes known to be dereferenceable for the
   /// pointer value.
   ///
   /// If CanBeNull is set by this function the pointer can either be null or be
   /// dereferenceable up to the returned number of bytes.
+  ///
+  /// IF CanBeFreed is true, the pointer is known to be dereferenceable at
+  /// point of definition only.  Caller must prove that allocation is not
+  /// deallocated between point of definition and use.
   uint64_t getPointerDereferenceableBytes(const DataLayout &DL,
-                                          bool &CanBeNull) const;
+                                          bool &CanBeNull,
+                                          bool &CanBeFreed) const;
 
   /// Returns an alignment of the pointer value.
   ///

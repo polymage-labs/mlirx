@@ -10,6 +10,8 @@
 #ifndef _LIBCPP_CONFIG
 #define _LIBCPP_CONFIG
 
+#include <__config_site>
+
 #if defined(_MSC_VER) && !defined(__clang__)
 #  if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
 #    define _LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER
@@ -32,7 +34,7 @@
 #  define _GNUC_VER_NEW 0
 #endif
 
-#define _LIBCPP_VERSION 12000
+#define _LIBCPP_VERSION 13000
 
 #ifndef _LIBCPP_ABI_VERSION
 #  define _LIBCPP_ABI_VERSION 1
@@ -49,8 +51,10 @@
 #    define _LIBCPP_STD_VER 14
 #  elif __cplusplus <= 201703L
 #    define _LIBCPP_STD_VER 17
+#  elif __cplusplus <= 202002L
+#    define _LIBCPP_STD_VER 20
 #  else
-#    define _LIBCPP_STD_VER 18  // current year, or date of c++2a ratification
+#    define _LIBCPP_STD_VER 21  // current year, or date of c++2b ratification
 #  endif
 #endif  // _LIBCPP_STD_VER
 
@@ -179,11 +183,12 @@
 #define __has_include(...) 0
 #endif
 
-#if defined(__clang__)
-#  define _LIBCPP_COMPILER_CLANG
-#  ifndef __apple_build_version__
-#    define _LIBCPP_CLANG_VER (__clang_major__ * 100 + __clang_minor__)
-#  endif
+#if defined(__apple_build_version__)
+#  define _LIBCPP_COMPILER_CLANG_BASED
+#  define _LIBCPP_APPLE_CLANG_VER (__apple_build_version__ / 10000)
+#elif defined(__clang__)
+#  define _LIBCPP_COMPILER_CLANG_BASED
+#  define _LIBCPP_CLANG_VER (__clang_major__ * 100 + __clang_minor__)
 #elif defined(__GNUC__)
 #  define _LIBCPP_COMPILER_GCC
 #elif defined(_MSC_VER)
@@ -262,14 +267,14 @@
 #  endif  // __LONG_LONG_SUPPORTED
 #endif  // __FreeBSD__
 
-#ifdef __NetBSD__
+#if defined(__NetBSD__) || defined(__OpenBSD__)
 #  include <sys/endian.h>
 #  if _BYTE_ORDER == _LITTLE_ENDIAN
 #    define _LIBCPP_LITTLE_ENDIAN
 #  else  // _BYTE_ORDER == _LITTLE_ENDIAN
 #    define _LIBCPP_BIG_ENDIAN
 #  endif  // _BYTE_ORDER == _LITTLE_ENDIAN
-#endif  // __NetBSD__
+#endif  // defined(__NetBSD__) || defined(__OpenBSD__)
 
 #if defined(_WIN32)
 #  define _LIBCPP_WIN32API
@@ -310,7 +315,7 @@
 #  endif
 #endif // __sun__
 
-#if defined(__CloudABI__)
+#if defined(__OpenBSD__) || defined(__CloudABI__)
    // Certain architectures provide arc4random(). Prefer using
    // arc4random() over /dev/{u,}random to make it possible to obtain
    // random data even when using sandboxing mechanisms such as chroots,
@@ -346,7 +351,7 @@
 #  define _LIBCPP_NO_CFI
 #endif
 
-#if __ISO_C_VISIBLE >= 2011 || __cplusplus >= 201103L
+#if (defined(__ISO_C_VISIBLE) && (__ISO_C_VISIBLE >= 2011)) || __cplusplus >= 201103L
 #  if defined(__FreeBSD__)
 #    define _LIBCPP_HAS_ALIGNED_ALLOC
 #    define _LIBCPP_HAS_QUICK_EXIT
@@ -367,6 +372,9 @@
 #  elif defined(__Fuchsia__) || defined(__wasi__) || defined(__NetBSD__)
 #    define _LIBCPP_HAS_ALIGNED_ALLOC
 #    define _LIBCPP_HAS_QUICK_EXIT
+#    define _LIBCPP_HAS_TIMESPEC_GET
+#  elif defined(__OpenBSD__)
+#    define _LIBCPP_HAS_ALIGNED_ALLOC
 #    define _LIBCPP_HAS_TIMESPEC_GET
 #  elif defined(__linux__)
 #    if !defined(_LIBCPP_HAS_MUSL_LIBC)
@@ -397,7 +405,7 @@
 
 #ifndef _LIBCPP_CXX03_LANG
 # define _LIBCPP_ALIGNOF(_Tp) alignof(_Tp)
-#elif defined(_LIBCPP_COMPILER_CLANG)
+#elif defined(_LIBCPP_COMPILER_CLANG_BASED)
 # define _LIBCPP_ALIGNOF(_Tp) _Alignof(_Tp)
 #else
 # error "We don't know a correct way to implement alignof(T) in C++03 outside of Clang"
@@ -405,7 +413,7 @@
 
 #define _LIBCPP_PREFERRED_ALIGNOF(_Tp) __alignof(_Tp)
 
-#if defined(_LIBCPP_COMPILER_CLANG)
+#if defined(_LIBCPP_COMPILER_CLANG_BASED)
 
 #if defined(_LIBCPP_ALTERNATE_STRING_LAYOUT)
 #  error _LIBCPP_ALTERNATE_STRING_LAYOUT is deprecated, please use _LIBCPP_ABI_ALTERNATE_STRING_LAYOUT instead
@@ -503,8 +511,8 @@ typedef __char32_t char32_t;
 #define _LIBCPP_ALWAYS_INLINE __attribute__ ((__always_inline__))
 
 // Literal operators ""d and ""y are supported starting with LLVM Clang 8 and AppleClang 10.0.1
-#if (defined(_LIBCPP_CLANG_VER) && _LIBCPP_CLANG_VER < 800) || \
-    (defined(__apple_build_version__) && __apple_build_version__ < 10010000)
+#if (defined(_LIBCPP_CLANG_VER) && _LIBCPP_CLANG_VER < 800) ||                 \
+    (defined(_LIBCPP_APPLE_CLANG_VER) && _LIBCPP_APPLE_CLANG_VER < 1001)
 #define _LIBCPP_HAS_NO_CXX20_CHRONO_LITERALS
 #endif
 
@@ -635,6 +643,7 @@ typedef __char32_t char32_t;
 #define _LIBCPP_HIDDEN
 #define _LIBCPP_METHOD_TEMPLATE_IMPLICIT_INSTANTIATION_VIS
 #define _LIBCPP_TEMPLATE_VIS
+#define _LIBCPP_TEMPLATE_DATA_VIS
 #define _LIBCPP_ENUM_VIS
 
 #endif // defined(_LIBCPP_OBJECT_FORMAT_COFF)
@@ -684,6 +693,14 @@ typedef __char32_t char32_t;
 #  endif
 #endif
 
+#ifndef _LIBCPP_TEMPLATE_DATA_VIS
+#  if !defined(_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS)
+#    define _LIBCPP_TEMPLATE_DATA_VIS __attribute__ ((__visibility__("default")))
+#  else
+#    define _LIBCPP_TEMPLATE_DATA_VIS
+#  endif
+#endif
+
 #ifndef _LIBCPP_EXPORTED_FROM_ABI
 #  if !defined(_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS)
 #    define _LIBCPP_EXPORTED_FROM_ABI __attribute__((__visibility__("default")))
@@ -713,7 +730,7 @@ typedef __char32_t char32_t;
 #endif
 
 #ifndef _LIBCPP_EXTERN_TEMPLATE_TYPE_VIS
-#  if !defined(_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS) && __has_attribute(__type_visibility__)
+#  if !defined(_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS)
 #    define _LIBCPP_EXTERN_TEMPLATE_TYPE_VIS __attribute__ ((__visibility__("default")))
 #  else
 #    define _LIBCPP_EXTERN_TEMPLATE_TYPE_VIS
@@ -827,6 +844,10 @@ typedef unsigned int   char32_t;
 #  define _LIBCPP_CONSTEVAL consteval
 #endif
 
+#if !defined(__cpp_concepts) || __cpp_concepts < 201907L
+#define _LIBCPP_HAS_NO_CONCEPTS
+#endif
+
 #ifdef _LIBCPP_CXX03_LANG
 #  define _LIBCPP_DEFAULT {}
 #else
@@ -880,16 +901,28 @@ typedef unsigned int   char32_t;
 #endif
 
 // _LIBCPP_DEBUG_LEVEL is always defined to one of [0, 1, 2] at this point
-#if _LIBCPP_DEBUG_LEVEL >= 1
-# define _LIBCPP_DISABLE_EXTERN_TEMPLATE
+#if _LIBCPP_DEBUG_LEVEL >= 1 && !defined(_LIBCPP_DISABLE_EXTERN_TEMPLATE)
+# define _LIBCPP_EXTERN_TEMPLATE(...)
 #endif
 
 #ifdef _LIBCPP_DISABLE_EXTERN_TEMPLATE
-#define _LIBCPP_EXTERN_TEMPLATE(...)
+# define _LIBCPP_EXTERN_TEMPLATE(...)
+# define _LIBCPP_EXTERN_TEMPLATE_EVEN_IN_DEBUG_MODE(...)
 #endif
 
 #ifndef _LIBCPP_EXTERN_TEMPLATE
 #define _LIBCPP_EXTERN_TEMPLATE(...) extern template __VA_ARGS__;
+#endif
+
+// When the Debug mode is enabled, we disable extern declarations because we
+// don't want to use the functions compiled in the library, which might not
+// have had the debug mode enabled when built. However, some extern declarations
+// need to be used, because code correctness depends on it (several instances
+// in the <locale>). Those special declarations are declared with
+// _LIBCPP_EXTERN_TEMPLATE_EVEN_IN_DEBUG_MODE, which is enabled even
+// when the debug mode is enabled.
+#ifndef _LIBCPP_EXTERN_TEMPLATE_EVEN_IN_DEBUG_MODE
+# define _LIBCPP_EXTERN_TEMPLATE_EVEN_IN_DEBUG_MODE(...) extern template __VA_ARGS__;
 #endif
 
 #ifndef _LIBCPP_EXTERN_TEMPLATE_DEFINE
@@ -996,8 +1029,8 @@ typedef unsigned int   char32_t;
 #endif
 
 // Macros to enter and leave a state where deprecation warnings are suppressed.
-#if !defined(_LIBCPP_SUPPRESS_DEPRECATED_PUSH) && \
-    (defined(_LIBCPP_COMPILER_CLANG) || defined(_LIBCPP_COMPILER_GCC))
+#if !defined(_LIBCPP_SUPPRESS_DEPRECATED_PUSH) &&                              \
+    (defined(_LIBCPP_COMPILER_CLANG_BASED) || defined(_LIBCPP_COMPILER_GCC))
 #  define _LIBCPP_SUPPRESS_DEPRECATED_PUSH \
     _Pragma("GCC diagnostic push") \
     _Pragma("GCC diagnostic ignored \"-Wdeprecated\"")
@@ -1037,7 +1070,7 @@ typedef unsigned int   char32_t;
 // NODISCARD macros to the correct attribute.
 #if __has_cpp_attribute(nodiscard) || defined(_LIBCPP_COMPILER_MSVC)
 #  define _LIBCPP_NODISCARD_ATTRIBUTE [[nodiscard]]
-#elif defined(_LIBCPP_COMPILER_CLANG) && !defined(_LIBCPP_CXX03_LANG)
+#elif defined(_LIBCPP_COMPILER_CLANG_BASED) && !defined(_LIBCPP_CXX03_LANG)
 #  define _LIBCPP_NODISCARD_ATTRIBUTE [[clang::warn_unused_result]]
 #else
 // We can't use GCC's [[gnu::warn_unused_result]] and
@@ -1082,12 +1115,12 @@ typedef unsigned int   char32_t;
 #endif
 
 #ifndef _LIBCPP_HAS_NO_ASAN
-_LIBCPP_FUNC_VIS extern "C" void __sanitizer_annotate_contiguous_container(
+extern "C" _LIBCPP_FUNC_VIS void __sanitizer_annotate_contiguous_container(
   const void *, const void *, const void *, const void *);
 #endif
 
 // Try to find out if RTTI is disabled.
-#if defined(_LIBCPP_COMPILER_CLANG) && !__has_feature(cxx_rtti)
+#if defined(_LIBCPP_COMPILER_CLANG_BASED) && !__has_feature(cxx_rtti)
 #  define _LIBCPP_NO_RTTI
 #elif defined(__GNUC__) && !defined(__GXX_RTTI)
 #  define _LIBCPP_NO_RTTI
@@ -1107,6 +1140,7 @@ _LIBCPP_FUNC_VIS extern "C" void __sanitizer_annotate_contiguous_container(
 #  if defined(__FreeBSD__) || \
       defined(__wasi__) || \
       defined(__NetBSD__) || \
+      defined(__OpenBSD__) || \
       defined(__NuttX__) || \
       defined(__linux__) || \
       defined(__GNU__) || \
@@ -1114,6 +1148,7 @@ _LIBCPP_FUNC_VIS extern "C" void __sanitizer_annotate_contiguous_container(
       defined(__CloudABI__) || \
       defined(__sun__) || \
       defined(__MVS__) || \
+      defined(_AIX) || \
       (defined(__MINGW32__) && __has_include(<pthread.h>))
 #    define _LIBCPP_HAS_THREAD_API_PTHREAD
 #  elif defined(__Fuchsia__)
@@ -1202,14 +1237,15 @@ _LIBCPP_FUNC_VIS extern "C" void __sanitizer_annotate_contiguous_container(
 // Some systems do not provide gets() in their C library, for security reasons.
 #ifndef _LIBCPP_C_HAS_NO_GETS
 #  if defined(_LIBCPP_MSVCRT) || \
-      (defined(__FreeBSD_version) && __FreeBSD_version >= 1300043)
+      (defined(__FreeBSD_version) && __FreeBSD_version >= 1300043) || \
+      defined(__OpenBSD__)
 #    define _LIBCPP_C_HAS_NO_GETS
 #  endif
 #endif
 
 #if defined(__BIONIC__) || defined(__CloudABI__) || defined(__NuttX__) ||      \
     defined(__Fuchsia__) || defined(__wasi__) || defined(_LIBCPP_HAS_MUSL_LIBC) || \
-    defined(__MVS__)
+    defined(__MVS__) || defined(__OpenBSD__)
 #define _LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE
 #endif
 
@@ -1318,6 +1354,12 @@ _LIBCPP_FUNC_VIS extern "C" void __sanitizer_annotate_contiguous_container(
 #endif
 #endif // !defined(_LIBCPP_NODEBUG_TYPE)
 
+#if __has_attribute(__preferred_name__)
+#define _LIBCPP_PREFERRED_NAME(x) __attribute__((__preferred_name__(x)))
+#else
+#define _LIBCPP_PREFERRED_NAME(x)
+#endif
+
 #if defined(_LIBCPP_ABI_MICROSOFT) && \
     (defined(_LIBCPP_COMPILER_MSVC) || __has_declspec_attribute(empty_bases))
 #  define _LIBCPP_DECLSPEC_EMPTY_BASES __declspec(empty_bases)
@@ -1418,6 +1460,13 @@ _LIBCPP_FUNC_VIS extern "C" void __sanitizer_annotate_contiguous_container(
 # define _LIBCPP_INIT_PRIORITY_MAX __attribute__((init_priority(101)))
 #else
 # define _LIBCPP_INIT_PRIORITY_MAX
+#endif
+
+#if defined(__GNUC__) || defined(__clang__)
+#define _LIBCPP_FORMAT_PRINTF(a, b)                                            \
+  __attribute__((__format__(__printf__, a, b)))
+#else
+#define _LIBCPP_FORMAT_PRINTF(a, b)
 #endif
 
 #endif // __cplusplus

@@ -19,6 +19,8 @@
 #include "deltas/ReduceBasicBlocks.h"
 #include "deltas/ReduceFunctionBodies.h"
 #include "deltas/ReduceFunctions.h"
+#include "deltas/ReduceGlobalValues.h"
+#include "deltas/ReduceGlobalVarInitializers.h"
 #include "deltas/ReduceGlobalVars.h"
 #include "deltas/ReduceInstructions.h"
 #include "deltas/ReduceMetadata.h"
@@ -34,6 +36,8 @@ inline void runDeltaPasses(TestRunner &Tester) {
   reduceFunctionBodiesDeltaPass(Tester);
   reduceFunctionsDeltaPass(Tester);
   reduceBasicBlocksDeltaPass(Tester);
+  reduceGlobalValuesDeltaPass(Tester);
+  reduceGlobalsInitializersDeltaPass(Tester);
   reduceGlobalsDeltaPass(Tester);
   reduceMetadataDeltaPass(Tester);
   reduceArgumentsDeltaPass(Tester);

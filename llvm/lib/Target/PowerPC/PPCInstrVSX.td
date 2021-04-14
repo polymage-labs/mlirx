@@ -145,12 +145,14 @@ def PPCSToV : SDNode<"PPCISD::SCALAR_TO_VECTOR_PERMUTED",
 def HasVSX : Predicate<"Subtarget->hasVSX()">;
 def IsLittleEndian : Predicate<"Subtarget->isLittleEndian()">;
 def IsBigEndian : Predicate<"!Subtarget->isLittleEndian()">;
+def IsPPC64 : Predicate<"Subtarget->isPPC64()">;
 def HasOnlySwappingMemOps : Predicate<"!Subtarget->hasP9Vector()">;
 def HasP8Vector : Predicate<"Subtarget->hasP8Vector()">;
 def HasDirectMove : Predicate<"Subtarget->hasDirectMove()">;
 def NoP9Vector : Predicate<"!Subtarget->hasP9Vector()">;
 def HasP9Vector : Predicate<"Subtarget->hasP9Vector()">;
 def NoP9Altivec : Predicate<"!Subtarget->hasP9Altivec()">;
+def NoP10Vector: Predicate<"!Subtarget->hasP10Vector()">;
 
 //--------------------- VSX-specific instruction formats ---------------------//
 // By default, all VSX instructions are to be selected over their Altivec
@@ -1008,13 +1010,13 @@ let hasSideEffects = 0 in {
                         (outs vsrc:$XT), (ins vsrc:$XA, vsrc:$XB),
                         "xxlandc $XT, $XA, $XB", IIC_VecGeneral,
                         [(set v4i32:$XT, (and v4i32:$XA,
-                                              (vnot_ppc v4i32:$XB)))]>;
+                                              (vnot v4i32:$XB)))]>;
   let isCommutable = 1 in {
   def XXLNOR : XX3Form<60, 162,
                        (outs vsrc:$XT), (ins vsrc:$XA, vsrc:$XB),
                        "xxlnor $XT, $XA, $XB", IIC_VecGeneral,
-                       [(set v4i32:$XT, (vnot_ppc (or v4i32:$XA,
-                                                   v4i32:$XB)))]>;
+                       [(set v4i32:$XT, (vnot (or v4i32:$XA,
+                                               v4i32:$XB)))]>;
   def XXLOR : XX3Form<60, 146,
                       (outs vsrc:$XT), (ins vsrc:$XA, vsrc:$XB),
                       "xxlor $XT, $XA, $XB", IIC_VecGeneral,
@@ -1091,12 +1093,11 @@ let Predicates = [HasVSX, HasP8Vector] in {
     def XXLEQV : XX3Form<60, 186,
                          (outs vsrc:$XT), (ins vsrc:$XA, vsrc:$XB),
                          "xxleqv $XT, $XA, $XB", IIC_VecGeneral,
-                         [(set v4i32:$XT, (vnot_ppc (xor v4i32:$XA, v4i32:$XB)))]>;
+                         [(set v4i32:$XT, (vnot (xor v4i32:$XA, v4i32:$XB)))]>;
     def XXLNAND : XX3Form<60, 178,
                           (outs vsrc:$XT), (ins vsrc:$XA, vsrc:$XB),
                           "xxlnand $XT, $XA, $XB", IIC_VecGeneral,
-                          [(set v4i32:$XT, (vnot_ppc (and v4i32:$XA,
-                                                    v4i32:$XB)))]>;
+                          [(set v4i32:$XT, (vnot (and v4i32:$XA, v4i32:$XB)))]>;
   } // isCommutable
 
   let isCodeGenOnly = 1, isMoveImm = 1, isAsCheapAsAMove = 1,
@@ -1109,7 +1110,7 @@ let Predicates = [HasVSX, HasP8Vector] in {
   def XXLORC : XX3Form<60, 170,
                        (outs vsrc:$XT), (ins vsrc:$XA, vsrc:$XB),
                        "xxlorc $XT, $XA, $XB", IIC_VecGeneral,
-                       [(set v4i32:$XT, (or v4i32:$XA, (vnot_ppc v4i32:$XB)))]>;
+                       [(set v4i32:$XT, (or v4i32:$XA, (vnot v4i32:$XB)))]>;
 
   // VSX scalar loads introduced in ISA 2.07
   let mayLoad = 1, mayStore = 0 in {
@@ -1810,6 +1811,14 @@ let PPC970_Single = 1, AddedComplexity = 400 in {
 }
 
 //----------------------------- DAG Definitions ------------------------------//
+
+// Output dag used to bitcast f32 to i32 and f64 to i64
+def Bitcast {
+  dag FltToInt = (i32 (MFVSRWZ (EXTRACT_SUBREG (XXSLDWI (XSCVDPSPN $A),
+                      (XSCVDPSPN $A), 3), sub_64)));
+  dag DblToLong = (i64 (MFVSRD $A));
+}
+
 def FpMinMax {
   dag F32Min = (COPY_TO_REGCLASS (XSMINDP (COPY_TO_REGCLASS $A, VSFRC),
                                           (COPY_TO_REGCLASS $B, VSFRC)),
@@ -2407,39 +2416,56 @@ def MrgWords {
 // arbitrarily chosen to be Big, Little.
 //
 // Predicate combinations available:
+// [HasVSX, IsLittleEndian, HasP8Altivec] Altivec patterns using VSX instr.
+// [HasVSX, IsBigEndian, HasP8Altivec] Altivec patterns using VSX instr.
 // [HasVSX]
 // [HasVSX, IsBigEndian]
 // [HasVSX, IsLittleEndian]
 // [HasVSX, NoP9Vector]
+// [HasVSX, NoP9Vector, IsLittleEndian]
 // [HasVSX, HasOnlySwappingMemOps]
 // [HasVSX, HasOnlySwappingMemOps, IsBigEndian]
 // [HasVSX, HasP8Vector]
-// [HasVSX, HasP8Vector, IsBigEndian]
+// [HasVSX, HasP8Vector, IsBigEndian, IsPPC64]
 // [HasVSX, HasP8Vector, IsLittleEndian]
-// [HasVSX, HasP8Vector, NoP9Vector, IsBigEndian]
+// [HasVSX, HasP8Vector, NoP9Vector, IsBigEndian, IsPPC64]
 // [HasVSX, HasP8Vector, NoP9Vector, IsLittleEndian]
 // [HasVSX, HasDirectMove]
 // [HasVSX, HasDirectMove, IsBigEndian]
 // [HasVSX, HasDirectMove, IsLittleEndian]
-// [HasVSX, HasDirectMove, NoP9Altivec, IsBigEndian]
+// [HasVSX, HasDirectMove, NoP9Altivec, IsBigEndian, IsPPC64]
+// [HasVSX, HasDirectMove, NoP9Vector, IsBigEndian, IsPPC64]
 // [HasVSX, HasDirectMove, NoP9Altivec, IsLittleEndian]
-// [HasVSX, HasDirectMove, NoP9Vector, IsBigEndian]
 // [HasVSX, HasDirectMove, NoP9Vector, IsLittleEndian]
 // [HasVSX, HasP9Vector]
+// [HasVSX, HasP9Vector, NoP10Vector]
 // [HasVSX, HasP9Vector, IsBigEndian]
+// [HasVSX, HasP9Vector, IsBigEndian, IsPPC64]
 // [HasVSX, HasP9Vector, IsLittleEndian]
 // [HasVSX, HasP9Altivec]
-// [HasVSX, HasP9Altivec, IsBigEndian]
+// [HasVSX, HasP9Altivec, IsBigEndian, IsPPC64]
 // [HasVSX, HasP9Altivec, IsLittleEndian]
-// [HasVSX, IsISA3_0, HasDirectMove, IsBigEndian]
+// [HasVSX, IsISA3_0, HasDirectMove, IsBigEndian, IsPPC64]
 // [HasVSX, IsISA3_0, HasDirectMove, IsLittleEndian]
+
+// These Altivec patterns are here because we need a VSX instruction to match
+// the intrinsic (but only for little endian system).
+let Predicates = [HasVSX, IsLittleEndian, HasP8Altivec] in
+  def : Pat<(v16i8 (int_ppc_altivec_crypto_vpermxor v16i8:$a,
+                                                    v16i8:$b, v16i8:$c)),
+            (v16i8 (VPERMXOR $a, $b, (XXLNOR (COPY_TO_REGCLASS $c, VSRC),
+                                             (COPY_TO_REGCLASS $c, VSRC))))>;
+let Predicates = [HasVSX, IsBigEndian, HasP8Altivec] in
+  def : Pat<(v16i8 (int_ppc_altivec_crypto_vpermxor v16i8:$a,
+                                                    v16i8:$b, v16i8:$c)),
+            (v16i8 (VPERMXOR $a, $b, $c))>;
 
 let AddedComplexity = 400 in {
 // Valid for any VSX subtarget, regardless of endianness.
 let Predicates = [HasVSX] in {
-def : Pat<(v4i32 (vnot_ppc v4i32:$A)),
+def : Pat<(v4i32 (vnot v4i32:$A)),
           (v4i32 (XXLNOR $A, $A))>;
-def : Pat<(v4i32 (or (and (vnot_ppc v4i32:$C), v4i32:$A),
+def : Pat<(v4i32 (or (and (vnot v4i32:$C), v4i32:$A),
                      (and v4i32:$B, v4i32:$C))),
           (v4i32 (XXSEL $A, $B, $C))>;
 
@@ -3004,6 +3030,19 @@ defm : ScalToVecWPermute<
                                                         VSFRC)), sub_64)>;
 } // HasVSX, NoP9Vector
 
+// Any little endian pre-Power9 VSX subtarget.
+let Predicates = [HasVSX, NoP9Vector, IsLittleEndian] in {
+// Load-and-splat using only X-Form VSX loads.
+defm : ScalToVecWPermute<
+  v2i64, (i64 (load xoaddr:$src)),
+  (XXPERMDIs (XFLOADf64 xoaddr:$src), 2),
+  (SUBREG_TO_REG (i64 1), (XFLOADf64 xoaddr:$src), sub_64)>;
+defm : ScalToVecWPermute<
+  v2f64, (f64 (load xoaddr:$src)),
+  (XXPERMDIs (XFLOADf64 xoaddr:$src), 2),
+  (SUBREG_TO_REG (i64 1), (XFLOADf64 xoaddr:$src), sub_64)>;
+} // HasVSX, NoP9Vector, IsLittleEndian
+
 // Any VSX subtarget that only has loads and stores that load in big endian
 // order regardless of endianness. This is really pre-Power9 subtargets.
 let Predicates = [HasVSX, HasOnlySwappingMemOps] in {
@@ -3015,8 +3054,8 @@ let Predicates = [HasVSX, HasOnlySwappingMemOps] in {
   def : Pat<(PPCstxvd2x v2f64:$rS, xoaddr:$dst), (STXVD2X $rS, xoaddr:$dst)>;
 } // HasVSX, HasOnlySwappingMemOps
 
-// Big endian VSX subtarget that only has loads and stores that always load
-// in big endian order. Really big endian pre-Power9 subtargets.
+// Big endian VSX subtarget that only has loads and stores that always
+// load in big endian order. Really big endian pre-Power9 subtargets.
 let Predicates = [HasVSX, HasOnlySwappingMemOps, IsBigEndian] in {
   def : Pat<(v2f64 (load xoaddr:$src)), (LXVD2X xoaddr:$src)>;
   def : Pat<(v2i64 (load xoaddr:$src)), (LXVD2X xoaddr:$src)>;
@@ -3109,7 +3148,7 @@ def : Pat<(v16i8 (bitconvert (v16i8 immAllOnesV))),
 } // HasVSX, HasP8Vector
 
 // Big endian Power8 VSX subtarget.
-let Predicates = [HasVSX, HasP8Vector, IsBigEndian] in {
+let Predicates = [HasVSX, HasP8Vector, IsBigEndian, IsPPC64] in {
 def : Pat<DWToSPExtractConv.El0SS1,
           (f32 (XSCVSXDSP (COPY_TO_REGCLASS $S1, VSFRC)))>;
 def : Pat<DWToSPExtractConv.El1SS1,
@@ -3187,7 +3226,7 @@ foreach Idx = [ [0,3], [2,1], [3,2] ] in {
             (STIWX (EXTRACT_SUBREG (XXSLDWI $A, $A, !head(!tail(Idx))),
                                    sub_64), xoaddr:$src)>;
 }
-} // HasVSX, HasP8Vector, IsBigEndian
+} // HasVSX, HasP8Vector, IsBigEndian, IsPPC64
 
 // Little endian Power8 VSX subtarget.
 let Predicates = [HasVSX, HasP8Vector, IsLittleEndian] in {
@@ -3286,7 +3325,7 @@ foreach Idx = [ [0,2], [1,1], [3,3] ] in {
 } // HasVSX, HasP8Vector, IsLittleEndian
 
 // Big endian pre-Power9 VSX subtarget.
-let Predicates = [HasVSX, HasP8Vector, NoP9Vector, IsBigEndian] in {
+let Predicates = [HasVSX, HasP8Vector, NoP9Vector, IsBigEndian, IsPPC64] in {
 def : Pat<(store (i64 (extractelt v2i64:$A, 0)), xoaddr:$src),
           (XFSTOREf64 (EXTRACT_SUBREG $A, sub_64), xoaddr:$src)>;
 def : Pat<(store (f64 (extractelt v2f64:$A, 0)), xoaddr:$src),
@@ -3297,7 +3336,7 @@ def : Pat<(store (i64 (extractelt v2i64:$A, 1)), xoaddr:$src),
 def : Pat<(store (f64 (extractelt v2f64:$A, 1)), xoaddr:$src),
           (XFSTOREf64 (EXTRACT_SUBREG (XXPERMDI $A, $A, 2), sub_64),
                       xoaddr:$src)>;
-} // HasVSX, HasP8Vector, NoP9Vector, IsBigEndian
+} // HasVSX, HasP8Vector, NoP9Vector, IsBigEndian, IsPPC64
 
 // Little endian pre-Power9 VSX subtarget.
 let Predicates = [HasVSX, HasP8Vector, NoP9Vector, IsLittleEndian] in {
@@ -3317,10 +3356,8 @@ def : Pat<(store (f64 (extractelt v2f64:$A, 1)), xoaddr:$src),
 let Predicates = [HasVSX, HasDirectMove] in {
 // bitconvert f32 -> i32
 // (convert to 32-bit fp single, shift right 1 word, move to GPR)
-def : Pat<(i32 (bitconvert f32:$S)),
-          (i32 (MFVSRWZ (EXTRACT_SUBREG
-                          (XXSLDWI (XSCVDPSPN $S), (XSCVDPSPN $S), 3),
-                          sub_64)))>;
+def : Pat<(i32 (bitconvert f32:$A)), Bitcast.FltToInt>;
+
 // bitconvert i32 -> f32
 // (move to FPR, shift left 1 word, convert to 64-bit fp single)
 def : Pat<(f32 (bitconvert i32:$A)),
@@ -3329,8 +3366,7 @@ def : Pat<(f32 (bitconvert i32:$A)),
 
 // bitconvert f64 -> i64
 // (move to GPR, nothing else needed)
-def : Pat<(i64 (bitconvert f64:$S)),
-          (i64 (MFVSRD $S))>;
+def : Pat<(i64 (bitconvert f64:$A)), Bitcast.DblToLong>;
 
 // bitconvert i64 -> f64
 // (move to FPR, nothing else needed)
@@ -3554,8 +3590,8 @@ def : Pat<(i32 (vector_extract v4i32:$S, i64:$Idx)),
           (i32 VectorExtractions.LE_VARIABLE_WORD)>;
 } // HasVSX, HasDirectMove, NoP9Altivec, IsLittleEndian
 
-// Big endian pre-Power9 VSX subtarget that has direct moves.
-let Predicates = [HasVSX, HasDirectMove, NoP9Vector, IsBigEndian] in {
+// Big endian pre-Power9 64Bit VSX subtarget that has direct moves.
+let Predicates = [HasVSX, HasDirectMove, NoP9Vector, IsBigEndian, IsPPC64] in {
 // Big endian integer vectors using direct moves.
 def : Pat<(v2i64 (build_vector i64:$A, i64:$B)),
           (v2i64 (XXPERMDI
@@ -3569,7 +3605,7 @@ def : Pat<(v4i32 (build_vector i32:$A, i32:$B, i32:$C, i32:$D)),
               (MTVSRD (RLDIMI AnyExts.D, AnyExts.C, 32, 0)), VSRC), 0)>;
 def : Pat<(v4i32 (build_vector i32:$A, i32:$A, i32:$A, i32:$A)),
           (XXSPLTW (COPY_TO_REGCLASS (MTVSRWZ $A), VSRC), 1)>;
-} // HasVSX, HasDirectMove, NoP9Vector, IsBigEndian
+} // HasVSX, HasDirectMove, NoP9Vector, IsBigEndian, IsPPC64
 
 // Little endian pre-Power9 VSX subtarget that has direct moves.
 let Predicates = [HasVSX, HasDirectMove, NoP9Vector, IsLittleEndian] in {
@@ -3702,9 +3738,6 @@ def : Pat<(int_ppc_vsx_stxvd2x v2f64:$rS, xoaddr:$dst),
           (STXVX $rS, xoaddr:$dst)>;
 
 // Build vectors from i8 loads
-defm : ScalToVecWPermute<v16i8, ScalarLoads.Li8,
-                         (VSPLTBs 7, (LXSIBZX xoaddr:$src)),
-                         (VSPLTBs 7, (LXSIBZX xoaddr:$src))>;
 defm : ScalToVecWPermute<v8i16, ScalarLoads.ZELi8,
                          (VSPLTHs 3, (LXSIBZX xoaddr:$src)),
                          (VSPLTHs 3, (LXSIBZX xoaddr:$src))>;
@@ -3722,9 +3755,6 @@ defm : ScalToVecWPermute<v2i64, ScalarLoads.SELi8i64,
                          (XXPERMDIs (VEXTSB2Ds (LXSIBZX xoaddr:$src)), 0)>;
 
 // Build vectors from i16 loads
-defm : ScalToVecWPermute<v8i16, ScalarLoads.Li16,
-                         (VSPLTHs 3, (LXSIHZX xoaddr:$src)),
-                         (VSPLTHs 3, (LXSIHZX xoaddr:$src))>;
 defm : ScalToVecWPermute<v4i32, ScalarLoads.ZELi16,
                          (XXSPLTWs (LXSIHZX xoaddr:$src), 1),
                          (XXSPLTWs (LXSIHZX xoaddr:$src), 1)>;
@@ -3922,8 +3952,40 @@ def : Pat<(v4i32 (PPCldsplat xoaddr:$A)),
           (v4i32 (LXVWSX xoaddr:$A))>;
 } // HasVSX, HasP9Vector
 
-// Big endian Power9 subtarget.
+// Any Power9 VSX subtarget with equivalent length but better Power10 VSX
+// patterns.
+// Two identical blocks are required due to the slightly different predicates:
+// One without P10 instructions, the other is BigEndian only with P10 instructions.
+let Predicates = [HasVSX, HasP9Vector, NoP10Vector] in {
+// Little endian Power10 subtargets produce a shorter pattern but require a
+// COPY_TO_REGCLASS. The COPY_TO_REGCLASS makes it appear to need two instructions 
+// to perform the operation, when only one instruction is produced in practice.
+// The NoP10Vector predicate excludes these patterns from Power10 VSX subtargets.
+defm : ScalToVecWPermute<v16i8, ScalarLoads.Li8,
+                         (VSPLTBs 7, (LXSIBZX xoaddr:$src)),
+                         (VSPLTBs 7, (LXSIBZX xoaddr:$src))>;
+// Build vectors from i16 loads
+defm : ScalToVecWPermute<v8i16, ScalarLoads.Li16,
+                         (VSPLTHs 3, (LXSIHZX xoaddr:$src)),
+                         (VSPLTHs 3, (LXSIHZX xoaddr:$src))>;
+} // HasVSX, HasP9Vector, NoP10Vector
+
+// Any big endian Power9 VSX subtarget
 let Predicates = [HasVSX, HasP9Vector, IsBigEndian] in {
+// Power10 VSX subtargets produce a shorter pattern for little endian targets
+// but this is still the best pattern for Power9 and Power10 VSX big endian
+// Build vectors from i8 loads
+defm : ScalToVecWPermute<v16i8, ScalarLoads.Li8,
+                         (VSPLTBs 7, (LXSIBZX xoaddr:$src)),
+                         (VSPLTBs 7, (LXSIBZX xoaddr:$src))>;
+// Build vectors from i16 loads
+defm : ScalToVecWPermute<v8i16, ScalarLoads.Li16,
+                         (VSPLTHs 3, (LXSIHZX xoaddr:$src)),
+                         (VSPLTHs 3, (LXSIHZX xoaddr:$src))>;
+} // HasVSX, HasP9Vector, NoP10Vector
+
+// Big endian 64Bit Power9 subtarget.
+let Predicates = [HasVSX, HasP9Vector, IsBigEndian, IsPPC64] in {
 def : Pat<(f32 (PPCfcfidus (f64 (PPCmtvsrz (i32 (extractelt v4i32:$A, 0)))))),
           (f32 (XSCVUXDSP (XXEXTRACTUW $A, 0)))>;
 def : Pat<(f32 (PPCfcfidus (f64 (PPCmtvsrz (i32 (extractelt v4i32:$A, 1)))))),
@@ -4096,7 +4158,7 @@ foreach Idx = 0-15 in {
 def : Pat<(f128 (uint_to_fp (i32 (PPCmfvsr f64:$src)))),
           (f128 (XSCVUDQP
                   (XXEXTRACTUW (SUBREG_TO_REG (i64 1), $src, sub_64), 4)))>;
-} // HasVSX, HasP9Vector, IsBigEndian
+} // HasVSX, HasP9Vector, IsBigEndian, IsPPC64
 
 // Little endian Power9 subtarget.
 let Predicates = [HasVSX, HasP9Vector, IsLittleEndian] in {
@@ -4321,8 +4383,8 @@ def : Pat<(v4i32 (PPCvabsd v4i32:$A, v4i32:$B, (i32 1))),
           (v4i32 (VABSDUW (XVNEGSP $A), (XVNEGSP $B)))>;
 } // HasVSX, HasP9Altivec
 
-// Big endian Power9 VSX subtargets with P9 Altivec support.
-let Predicates = [HasVSX, HasP9Altivec, IsBigEndian] in {
+// Big endian Power9 64Bit VSX subtargets with P9 Altivec support.
+let Predicates = [HasVSX, HasP9Altivec, IsBigEndian, IsPPC64] in {
 def : Pat<(i64 (anyext (i32 (vector_extract v16i8:$S, i64:$Idx)))),
           (VEXTUBLX $Idx, $S)>;
 
@@ -4455,7 +4517,7 @@ def : Pat<(v4i32 (build_vector ByteToWord.BE_A0, ByteToWord.BE_A1,
           (v4i32 (VEXTSB2W $A))>;
 def : Pat<(v2i64 (build_vector ByteToDWord.BE_A0, ByteToDWord.BE_A1)),
           (v2i64 (VEXTSB2D $A))>;
-} // HasVSX, HasP9Altivec, IsBigEndian
+} // HasVSX, HasP9Altivec, IsBigEndian, IsPPC64
 
 // Little endian Power9 VSX subtargets with P9 Altivec support.
 let Predicates = [HasVSX, HasP9Altivec, IsLittleEndian] in {
@@ -4592,8 +4654,9 @@ def : Pat<(v2i64 (build_vector ByteToDWord.LE_A0, ByteToDWord.LE_A1)),
           (v2i64 (VEXTSB2D $A))>;
 } // HasVSX, HasP9Altivec, IsLittleEndian
 
-// Big endian VSX subtarget that supports additional direct moves from ISA3.0.
-let Predicates = [HasVSX, IsISA3_0, HasDirectMove, IsBigEndian] in {
+// Big endian 64Bit VSX subtarget that supports additional direct moves from
+// ISA3.0.
+let Predicates = [HasVSX, IsISA3_0, HasDirectMove, IsBigEndian, IsPPC64] in {
 def : Pat<(i64 (extractelt v2i64:$A, 1)),
           (i64 (MFVSRLD $A))>;
 // Better way to build integer vectors if we have MTVSRDD. Big endian.
@@ -4606,7 +4669,7 @@ def : Pat<(v4i32 (build_vector i32:$A, i32:$B, i32:$C, i32:$D)),
 
 def : Pat<(f128 (PPCbuild_fp128 i64:$rB, i64:$rA)),
           (f128 (COPY_TO_REGCLASS (MTVSRDD $rB, $rA), VRRC))>;
-} // HasVSX, IsISA3_0, HasDirectMove, IsBigEndian
+} // HasVSX, IsISA3_0, HasDirectMove, IsBigEndian, IsPPC64
 
 // Little endian VSX subtarget that supports direct moves from ISA3.0.
 let Predicates = [HasVSX, IsISA3_0, HasDirectMove, IsLittleEndian] in {
@@ -4631,20 +4694,24 @@ def : InstAlias<"xvmovdp $XT, $XB",
 def : InstAlias<"xvmovsp $XT, $XB",
                 (XVCPSGNSP vsrc:$XT, vsrc:$XB, vsrc:$XB)>;
 
-def : InstAlias<"xxspltd $XT, $XB, 0",
-                (XXPERMDI vsrc:$XT, vsrc:$XB, vsrc:$XB, 0)>;
-def : InstAlias<"xxspltd $XT, $XB, 1",
-                (XXPERMDI vsrc:$XT, vsrc:$XB, vsrc:$XB, 3)>;
+// Certain versions of the AIX assembler may missassemble these mnemonics.
+let Predicates = [ModernAs] in {
+  def : InstAlias<"xxspltd $XT, $XB, 0",
+                  (XXPERMDI vsrc:$XT, vsrc:$XB, vsrc:$XB, 0)>;
+  def : InstAlias<"xxspltd $XT, $XB, 1",
+                  (XXPERMDI vsrc:$XT, vsrc:$XB, vsrc:$XB, 3)>;
+  def : InstAlias<"xxspltd $XT, $XB, 0",
+                  (XXPERMDIs vsrc:$XT, vsfrc:$XB, 0)>;
+  def : InstAlias<"xxspltd $XT, $XB, 1",
+                  (XXPERMDIs vsrc:$XT, vsfrc:$XB, 3)>;
+}
+
 def : InstAlias<"xxmrghd $XT, $XA, $XB",
                 (XXPERMDI vsrc:$XT, vsrc:$XA, vsrc:$XB, 0)>;
 def : InstAlias<"xxmrgld $XT, $XA, $XB",
                 (XXPERMDI vsrc:$XT, vsrc:$XA, vsrc:$XB, 3)>;
 def : InstAlias<"xxswapd $XT, $XB",
                 (XXPERMDI vsrc:$XT, vsrc:$XB, vsrc:$XB, 2)>;
-def : InstAlias<"xxspltd $XT, $XB, 0",
-                (XXPERMDIs vsrc:$XT, vsfrc:$XB, 0)>;
-def : InstAlias<"xxspltd $XT, $XB, 1",
-                (XXPERMDIs vsrc:$XT, vsfrc:$XB, 3)>;
 def : InstAlias<"xxswapd $XT, $XB",
                 (XXPERMDIs vsrc:$XT, vsfrc:$XB, 2)>;
 def : InstAlias<"mfvrd $rA, $XT",

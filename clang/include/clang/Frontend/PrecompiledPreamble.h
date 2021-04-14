@@ -17,6 +17,7 @@
 #include "clang/Lex/Preprocessor.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/AlignOf.h"
 #include "llvm/Support/MD5.h"
 #include <cstddef>
 #include <memory>
@@ -104,8 +105,8 @@ public:
   /// Check whether PrecompiledPreamble can be reused for the new contents(\p
   /// MainFileBuffer) of the main file.
   bool CanReuse(const CompilerInvocation &Invocation,
-                const llvm::MemoryBuffer *MainFileBuffer, PreambleBounds Bounds,
-                llvm::vfs::FileSystem *VFS) const;
+                const llvm::MemoryBufferRef &MainFileBuffer,
+                PreambleBounds Bounds, llvm::vfs::FileSystem &VFS) const;
 
   /// Changes options inside \p CI to use PCH from this preamble. Also remaps
   /// main file to \p MainFileBuffer and updates \p VFS to ensure the preamble
@@ -197,7 +198,7 @@ private:
 
   private:
     Kind StorageKind = Kind::Empty;
-    std::aligned_union_t<1, TempPCHFile, InMemoryPreamble> Storage = {};
+    llvm::AlignedCharArrayUnion<TempPCHFile, InMemoryPreamble> Storage = {};
   };
 
   /// Data used to determine if a file used in the preamble has been changed.

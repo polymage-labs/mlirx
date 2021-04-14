@@ -660,6 +660,30 @@ simply uniquely match a single line in the file being verified.
 
 ``CHECK-LABEL:`` directives cannot contain variable definitions or uses.
 
+Directive modifiers
+~~~~~~~~~~~~~~~~~~~
+
+A directive modifier can be append to a directive by following the directive
+with ``{<modifier>}`` where the only supported value for ``<modifier>`` is
+``LITERAL``.
+
+The ``LITERAL`` directive modifier can be used to perform a literal match. The
+modifier results in the directive not recognizing any syntax to perform regex
+matching, variable capture or any substitutions. This is useful when the text
+to match would require excessive escaping otherwise. For example, the
+following will perform literal matches rather than considering these as
+regular expressions:
+
+.. code-block:: text
+
+   Input: [[[10, 20]], [[30, 40]]]
+   Output %r10: [[10, 20]]
+   Output %r10: [[30, 40]]
+
+   ; CHECK{LITERAL}: [[[10, 20]], [[30, 40]]]
+   ; CHECK-DAG{LITERAL}: [[30, 40]]
+   ; CHECK-DAG{LITERAL}: [[10, 20]]
+
 FileCheck Regex Matching Syntax
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -749,8 +773,11 @@ The syntax to capture a numeric value is
 * ``<NUMVAR>:`` is an optional definition of variable ``<NUMVAR>`` from the
   captured value.
 
-The syntax of ``<fmtspec>`` is: ``.<precision><conversion specifier>`` where:
+The syntax of ``<fmtspec>`` is: ``#.<precision><conversion specifier>`` where:
 
+* ``#`` is an optional flag available for hex values (see
+  ``<conversion specifier>`` below) which requires the value matched to be
+  prefixed by ``0x``.
 * ``.<precision>`` is an optional printf-style precision specifier in which
   ``<precision>`` indicates the minimum number of digits that the value matched
   must have, expecting leading zeros if needed.

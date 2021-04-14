@@ -29,6 +29,7 @@ import logging
 import os
 import platform
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -272,21 +273,13 @@ def parseOptionsAndInitTestdirs():
     elif platform_system == 'Darwin':
         configuration.dsymutil = seven.get_command_output(
             'xcrun -find -toolchain default dsymutil')
-
-
-    # The lldb-dotest script produced by the CMake build passes in a path to a
-    # working FileCheck and yaml2obj binary. So does one specific Xcode
-    # project target. However, when invoking dotest.py directly, a valid
-    # --filecheck and --yaml2obj option needs to be given.
-    if args.filecheck:
-        configuration.filecheck = os.path.abspath(args.filecheck)
-
-    if args.yaml2obj:
-        configuration.yaml2obj = os.path.abspath(args.yaml2obj)
+    if args.llvm_tools_dir:
+        configuration.filecheck = shutil.which("FileCheck", path=args.llvm_tools_dir)
+        configuration.yaml2obj = shutil.which("yaml2obj", path=args.llvm_tools_dir)
 
     if not configuration.get_filecheck_path():
         logging.warning('No valid FileCheck executable; some tests may fail...')
-        logging.warning('(Double-check the --filecheck argument to dotest.py)')
+        logging.warning('(Double-check the --llvm-tools-dir argument to dotest.py)')
 
     if args.channels:
         lldbtest_config.channels = args.channels
@@ -372,12 +365,6 @@ def parseOptionsAndInitTestdirs():
                     '%s is not a valid executable to test; aborting...',
                     args.executable)
             sys.exit(-1)
-
-    if args.server and args.out_of_tree_debugserver:
-        logging.warning('Both --server and --out-of-tree-debugserver are set')
-
-    if args.server and not args.out_of_tree_debugserver:
-        os.environ['LLDB_DEBUGSERVER_PATH'] = args.server
 
     if args.excluded:
         for excl_file in args.excluded:
@@ -761,8 +748,6 @@ def canRunLibcxxTests():
         return True, "libc++ always present"
 
     if platform == "linux":
-        if os.path.isdir("/usr/include/c++/v1"):
-            return True, "Headers found, let's hope they work"
         with tempfile.NamedTemporaryFile() as f:
             cmd = [configuration.compiler, "-xc++", "-stdlib=libc++", "-o", f.name, "-"]
             p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
@@ -816,6 +801,10 @@ def canRunWatchpointTests():
         except subprocess.CalledProcessError:
             pass
         return False, "security.models.extensions.user_set_dbregs disabled"
+    elif platform == "freebsd" and configuration.arch == "aarch64":
+        import lldb
+        if lldb.SBPlatform.GetHostPlatform().GetOSMajorVersion() < 13:
+            return False, "Watchpoint support on arm64 requires FreeBSD 13.0"
     return True, "watchpoint support available"
 
 def checkWatchpointSupport():
@@ -849,6 +838,23 @@ def checkDebugInfoSupport():
         skipped.append(cat)
     if skipped:
         print("Skipping following debug info categories:", skipped)
+
+def checkDebugServerSupport():
+    from lldbsuite.test import lldbplatformutil
+    import lldb
+
+    skip_msg = "Skipping %s tests, as they are not compatible with remote testing on this platform"
+    if lldbplatformutil.platformIsDarwin():
+        configuration.skip_categories.append("llgs")
+        if lldb.remote_platform:
+            # <rdar://problem/34539270>
+            configuration.skip_categories.append("debugserver")
+            print(skip_msg%"debugserver");
+    else:
+        configuration.skip_categories.append("debugserver")
+        if lldb.remote_platform and lldbplatformutil.getPlatform() == "windows":
+            configuration.skip_categories.append("llgs")
+            print(skip_msg%"lldb-server");
 
 def run_suite():
     # On MacOS X, check to make sure that domain for com.apple.DebugSymbols defaults
@@ -944,14 +950,8 @@ def run_suite():
     checkLibstdcxxSupport()
     checkWatchpointSupport()
     checkDebugInfoSupport()
+    checkDebugServerSupport()
     checkObjcSupport()
-
-    # Perform LLGS tests only on platforms using it.
-    configuration.llgs_platform = (
-        target_platform in ["freebsd", "linux", "netbsd", "windows"])
-
-    # Perform debugserver tests elsewhere (i.e. on Darwin platforms).
-    configuration.debugserver_platform = not configuration.llgs_platform
 
     for testdir in configuration.testdirs:
         for (dirpath, dirnames, filenames) in os.walk(testdir):

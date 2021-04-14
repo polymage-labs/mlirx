@@ -11,7 +11,7 @@ from lit.llvm.subst import ToolSubst
 
 
 def _get_lldb_init_path(config):
-    return os.path.join(config.test_exec_root, 'Shell', 'lit-lldb-init')
+    return os.path.join(config.test_exec_root, 'lit-lldb-init')
 
 
 def _disallow(config, execName):
@@ -53,6 +53,10 @@ def use_lldb_substitutions(config):
         ToolSubst('%lldb-init',
                   command=FindTool('lldb'),
                   extra_args=['-S', lldb_init],
+                  unresolved='fatal'),
+        ToolSubst('%lldb-noinit',
+                  command=FindTool('lldb'),
+                  extra_args=['--no-lldbinit'],
                   unresolved='fatal'),
         ToolSubst('%lldb-server',
                   command=FindTool("lldb-server"),

@@ -133,7 +133,7 @@ bool HexagonSubtarget::isHVXElementType(MVT Ty, bool IncludeBool) const {
   if (IncludeBool && Ty == MVT::i1)
     return true;
   ArrayRef<MVT> ElemTypes = getHVXElementTypes();
-  return llvm::find(ElemTypes, Ty) != ElemTypes.end();
+  return llvm::is_contained(ElemTypes, Ty);
 }
 
 bool HexagonSubtarget::isHVXVectorType(MVT VecTy, bool IncludeBool) const {
@@ -159,7 +159,7 @@ bool HexagonSubtarget::isHVXVectorType(MVT VecTy, bool IncludeBool) const {
   unsigned VecWidth = VecTy.getSizeInBits();
   if (VecWidth != 8 * HwLen && VecWidth != 16 * HwLen)
     return false;
-  return llvm::find(ElemTypes, ElemTy) != ElemTypes.end();
+  return llvm::is_contained(ElemTypes, ElemTy);
 }
 
 bool HexagonSubtarget::isTypeForHVX(Type *VecTy, bool IncludeBool) const {
@@ -527,7 +527,7 @@ void HexagonSubtarget::restoreLatency(SUnit *Src, SUnit *Dst) const {
 
     // Update the latency of opposite edge too.
     T.setSUnit(Src);
-    auto F = std::find(Dst->Preds.begin(), Dst->Preds.end(), T);
+    auto F = find(Dst->Preds, T);
     assert(F != Dst->Preds.end());
     F->setLatency(I.getLatency());
   }
@@ -544,7 +544,7 @@ void HexagonSubtarget::changeLatency(SUnit *Src, SUnit *Dst, unsigned Lat)
 
     // Update the latency of opposite edge too.
     T.setSUnit(Src);
-    auto F = std::find(Dst->Preds.begin(), Dst->Preds.end(), T);
+    auto F = find(Dst->Preds, T);
     assert(F != Dst->Preds.end());
     F->setLatency(Lat);
   }

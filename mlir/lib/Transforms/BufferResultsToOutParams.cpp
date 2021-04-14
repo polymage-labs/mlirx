@@ -8,6 +8,7 @@
 
 #include "PassDetail.h"
 #include "mlir/Dialect/Linalg/IR/LinalgOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Pass/Pass.h"
@@ -35,8 +36,8 @@ static void updateFuncOp(FuncOp func,
   // Add the new arguments to the function type.
   auto newArgTypes = llvm::to_vector<6>(
       llvm::concat<const Type>(functionType.getInputs(), erasedResultTypes));
-  auto newFunctionType = FunctionType::get(
-      newArgTypes, functionType.getResults(), func.getContext());
+  auto newFunctionType = FunctionType::get(func.getContext(), newArgTypes,
+                                           functionType.getResults());
   func.setType(newFunctionType);
 
   // Transfer the result attributes to arg attributes.
@@ -99,7 +100,7 @@ static LogicalResult updateCalls(ModuleOp module) {
         didFail = true;
         return;
       }
-      Value outParam = builder.create<AllocOp>(
+      Value outParam = builder.create<memref::AllocOp>(
           op.getLoc(), memref.getType().cast<MemRefType>());
       memref.replaceAllUsesWith(outParam);
       outParams.push_back(outParam);

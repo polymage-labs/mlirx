@@ -285,6 +285,7 @@ entry:
 ; CHECK-I686-DAG:	calll	___tls_get_addr@PLT
 ; CHECK-I686-DAG:	leal	tlssrcgd@TLSGD(,%ebx), %eax
 ; CHECK-I686-DAG:	calll	___tls_get_addr@PLT
+; CHECK-X32-NOT:	data16
 ; CHECK-X32-DAG:	leaq	tlsdstgd@TLSGD(%rip), %rdi
 ; CHECK-X32-DAG:	callq	__tls_get_addr@PLT
 ; CHECK-X32-DAG:	leaq	tlsptrgd@TLSGD(%rip), %rdi
@@ -335,17 +336,18 @@ entry:
 ; CHECK-I686-DAG:	movl	%gs:0,
 ; CHECK-X32-DAG:	movl	tlsdstie@GOTTPOFF(%rip),
 ; CHECK-X32-DAG:	movl	%fs:0,
-; CHECK:	addl
+; CHECK-I686:	addl
+; CHECK-X32:	leal	({{%.*,%.*}}),
 ; CHECK-I686:	movl	tlsptrie@GOTNTPOFF(
 ; CHECK-X32:	movl	tlsptrie@GOTTPOFF(%rip),
 ; CHECK-I686:	movl	{{%.*}}, %gs:(
-; CHECK-X32:	movl	{{%.*}}, %fs:(
+; CHECK-X32:	movl	{{%.*}}, ({{%.*,%.*}})
 ; CHECK-I686:	movl	tlssrcie@GOTNTPOFF(
 ; CHECK-X32:	movl	tlssrcie@GOTTPOFF(%rip),
 ; CHECK-I686:	movl	%gs:(
-; CHECK-X32:	movl	%fs:(
+; CHECK-X32:	movl	({{%.*,%.*}}),
 ; CHECK-I686:	movl	{{%.*}}, %gs:(
-; CHECK-X32:	movl	{{%.*}}, %fs:(
+; CHECK-X32:	movl	{{%.*}}, ({{%.*,%.*}})
 ; CHECK-I686:	ret
 ; CHECK-X32:	retq
 }

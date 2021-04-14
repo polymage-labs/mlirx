@@ -57,6 +57,55 @@ global variable or function should be in after translation.
   let Heading = "section, __declspec(allocate)";
 }
 
+def UsedDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+This attribute, when attached to a function or variable definition, indicates
+that there may be references to the entity which are not apparent in the source
+code.  For example, it may be referenced from inline ``asm``, or it may be
+found through a dynamic symbol or section lookup.
+
+The compiler must emit the definition even if it appears to be unused, and it
+must not apply optimizations which depend on fully understanding how the entity
+is used.
+
+Whether this attribute has any effect on the linker depends on the target and
+the linker. Most linkers support the feature of section garbage collection
+(``--gc-sections``), also known as "dead stripping" (``ld64 -dead_strip``) or
+discarding unreferenced sections (``link.exe /OPT:REF``). On COFF and Mach-O
+targets (Windows and Apple platforms), the `used` attribute prevents symbols
+from being removed by linker section GC. On ELF targets, it has no effect on its
+own, and the linker may remove the definition if it is not otherwise referenced.
+This linker GC can be avoided by also adding the ``retain`` attribute.  Note
+that ``retain`` requires special support from the linker; see that attribute's
+documentation for further information.
+  }];
+}
+
+def RetainDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+This attribute, when attached to a function or variable definition, prevents
+section garbage collection in the linker. It does not prevent other discard
+mechanisms, such as archive member selection, and COMDAT group resolution.
+
+If the compiler does not emit the definition, e.g. because it was not used in
+the translation unit or the compiler was able to eliminate all of the uses,
+this attribute has no effect.  This attribute is typically combined with the
+``used`` attribute to force the definition to be emitted and preserved into the
+final linked image.
+
+This attribute is only necessary on ELF targets; other targets prevent section
+garbage collection by the linker when using the ``used`` attribute alone.
+Using the attributes together should result in consistent behavior across
+targets.
+
+This attribute requires the linker to support the ``SHF_GNU_RETAIN`` extension.
+This support is available in GNU ``ld`` and ``gold`` as of binutils 2.36, as
+well as in ``ld.lld`` 13.
+  }];
+}
+
 def InitPriorityDocs : Documentation {
   let Category = DocCatVariable;
   let Content = [{
@@ -386,7 +435,11 @@ location of certain calls. For example, it will prevent tail merging otherwise
 identical code sequences that raise an exception or terminate the program. Tail
 merging normally reduces the precision of source location information, making
 stack traces less useful for debugging. This attribute gives the user control
-over the tradeoff between code size and debug information precision.
+over the tradeoff between code size and debug information precision. 
+
+``nomerge`` attribute can also be used as function attribute to prevent all 
+calls to the specified function from merging. It has no effect on indirect 
+calls.
   }];
 }
 
@@ -1044,8 +1097,18 @@ def NoDebugDocs : Documentation {
   let Category = DocCatVariable;
   let Content = [{
 The ``nodebug`` attribute allows you to suppress debugging information for a
-function or method, or for a variable that is not a parameter or a non-static
-data member.
+function or method, for a variable that is not a parameter or a non-static
+data member, or for a typedef or using declaration.
+  }];
+}
+
+def StandaloneDebugDocs : Documentation {
+  let Category = DocCatVariable;
+  let Content = [{
+The ``standalone_debug`` attribute causes debug info to be emitted for a record
+type regardless of the debug info optimizations that are enabled with
+-fno-standalone-debug. This attribute only has an effect when debug info
+optimizations are enabled (e.g. with -fno-standalone-debug), and is C++-only.
   }];
 }
 
@@ -2963,16 +3026,55 @@ It is only supported when using the Microsoft C++ ABI.
 def LifetimeBoundDocs : Documentation {
   let Category = DocCatFunction;
   let Content = [{
-The ``lifetimebound`` attribute indicates that a resource owned by
-a function parameter or implicit object parameter
-is retained by the return value of the annotated function
-(or, for a parameter of a constructor, in the value of the constructed object).
-It is only supported in C++.
+The ``lifetimebound`` attribute on a function parameter or implicit object
+parameter indicates that objects that are referred to by that parameter may
+also be referred to by the return value of the annotated function (or, for a
+parameter of a constructor, by the value of the constructed object). It is only
+supported in C++.
 
-This attribute provides an experimental implementation of the facility
-described in the C++ committee paper `P0936R0 <http://wg21.link/p0936r0>`_,
-and is subject to change as the design of the corresponding functionality
-changes.
+By default, a reference is considered to refer to its referenced object, a
+pointer is considered to refer to its pointee, a ``std::initializer_list<T>``
+is considered to refer to its underlying array, and aggregates (arrays and
+simple ``struct``\s) are considered to refer to all objects that their
+transitive subobjects refer to.
+
+Clang warns if it is able to detect that an object or reference refers to
+another object with a shorter lifetime. For example, Clang will warn if a
+function returns a reference to a local variable, or if a reference is bound to
+a temporary object whose lifetime is not extended. By using the
+``lifetimebound`` attribute, this determination can be extended to look through
+user-declared functions. For example:
+
+.. code-block:: c++
+
+    // Returns m[key] if key is present, or default_value if not.
+    template<typename T, typename U>
+    const U &get_or_default(const std::map<T, U> &m [[clang::lifetimebound]],
+                            const T &key, /* note, not lifetimebound */
+                            const U &default_value [[clang::lifetimebound]]);
+
+    std::map<std::string, std::string> m;
+    // warning: temporary "bar"s that might be bound to local reference 'val'
+    // will be destroyed at the end of the full-expression
+    const std::string &val = get_or_default(m, "foo"s, "bar"s);
+
+    // No warning in this case.
+    std::string def_val = "bar"s;
+    const std::string &val = get_or_default(m, "foo"s, def_val);
+
+The attribute can be applied to the implicit ``this`` parameter of a member
+function by writing the attribute after the function type:
+
+.. code-block:: c++
+
+    struct string {
+      // The returned pointer should not outlive ``*this``.
+      const char *data() const [[clang::lifetimebound]];
+    };
+
+This attribute is inspired by the C++ committee paper `P0936R0
+<http://wg21.link/p0936r0>`_, but does not affect whether temporary objects
+have their lifetimes extended.
   }];
 }
 
@@ -3346,7 +3448,7 @@ As ``global_device`` and ``global_host`` are a subset of
 ``__global/opencl_global`` address spaces it is allowed to convert
 ``global_device`` and ``global_host`` address spaces to
 ``__global/opencl_global`` address spaces (following ISO/IEC TR 18037 5.1.3
-"Address space nesting and rules for pointers).
+"Address space nesting and rules for pointers").
   }];
 }
 
@@ -3976,6 +4078,57 @@ are used to instantiate the specialization.
   }];
 }
 
+def LeafDocs : Documentation {
+  let Category = DocCatVariable;
+  let Content = [{
+
+The ``leaf`` attribute is used as a compiler hint to improve dataflow analysis
+in library functions. Functions marked with the ``leaf`` attribute are not allowed
+to jump back into the caller's translation unit, whether through invoking a
+callback function, an external function call, use of ``longjmp``, or other means.
+Therefore, they cannot use or modify any data that does not escape the caller function's
+compilation unit.
+
+For more information see
+`gcc documentation <https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html>`
+}];
+}
+
+def AssumptionDocs : Documentation {
+  let Category = DocCatFunction;
+  let Heading = "assume";
+  let Content = [{
+Clang supports the ``__attribute__((assume("assumption")))`` attribute to
+provide additional information to the optimizer. The string-literal, here
+"assumption", will be attached to the function declaration such that later
+analysis and optimization passes can assume the "assumption" to hold.
+This is similar to :ref:`__builtin_assume <langext-__builtin_assume>` but
+instead of an expression that can be assumed to be non-zero, the assumption is
+expressed as a string and it holds for the entire function.
+
+A function can have multiple assume attributes and they propagate from prior
+declarations to later definitions. Multiple assumptions are aggregated into a
+single comma separated string. Thus, one can provide multiple assumptions via
+a comma separated string, i.a.,
+``__attribute__((assume("assumption1,assumption2")))``.
+
+While LLVM plugins might provide more assumption strings, the default LLVM
+optimization passes are aware of the following assumptions:
+
+  .. code-block:: none
+
+    "omp_no_openmp"
+    "omp_no_openmp_routines"
+    "omp_no_parallelism"
+
+The OpenMP standard defines the meaning of OpenMP assumptions ("omp_XYZ" is
+spelled "XYZ" in the `OpenMP 5.1 Standard`_).
+
+.. _`OpenMP 5.1 Standard`: https://www.openmp.org/spec-html/5.1/openmpsu37.html#x56-560002.5.2
+
+}];
+}
+
 def NoStackProtectorDocs : Documentation {
   let Category = DocCatFunction;
   let Content = [{
@@ -4002,9 +4155,8 @@ def NotTailCalledDocs : Documentation {
   let Category = DocCatFunction;
   let Content = [{
 The ``not_tail_called`` attribute prevents tail-call optimization on statically
-bound calls. It has no effect on indirect calls. Virtual functions, objective-c
-methods, and functions marked as ``always_inline`` cannot be marked as
-``not_tail_called``.
+bound calls. Objective-c methods, and functions marked as ``always_inline``
+cannot be marked as ``not_tail_called``.
 
 For example, it prevents tail-call optimization in the following case:
 
@@ -4030,28 +4182,25 @@ However, it doesn't prevent tail-call optimization in this case:
       return (*fn)(a);
     }
 
-Marking virtual functions as ``not_tail_called`` is an error:
+Generally, marking an overriding virtual function as ``not_tail_called`` is
+not useful, because this attribute is a property of the static type. Calls
+made through a pointer or reference to the base class type will respect
+the ``not_tail_called`` attribute of the base class's member function,
+regardless of the runtime destination of the call:
 
   .. code-block:: c++
 
-    class Base {
-    public:
-      // not_tail_called on a virtual function is an error.
-      [[clang::not_tail_called]] virtual int foo1();
-
-      virtual int foo2();
-
-      // Non-virtual functions can be marked ``not_tail_called``.
-      [[clang::not_tail_called]] int foo3();
+    struct Foo { virtual void f(); };
+    struct Bar : Foo {
+      [[clang::not_tail_called]] void f() override;
     };
-
-    class Derived1 : public Base {
-    public:
-      int foo1() override;
-
-      // not_tail_called on a virtual function is an error.
-      [[clang::not_tail_called]] int foo2() override;
-    };
+    void callera(Bar& bar) {
+      Foo& foo = bar;
+      // not_tail_called has no effect on here, even though the
+      // underlying method is f from Bar.
+      foo.f();
+      bar.f(); // No tail-call optimization on here.
+    }
   }];
 }
 
@@ -4431,6 +4580,47 @@ argument is the index of the completion handler parameter.
   }];
 }
 
+def SwiftAsyncErrorDocs : Documentation {
+  let Category = SwiftDocs;
+  let Heading = "swift_async_error";
+  let Content = [{
+The ``swift_async_error`` attribute specifies how an error state will be
+represented in a swift async method. It's a bit analogous to the ``swift_error``
+attribute for the generated async method. The ``swift_async_error`` attribute
+can indicate a variety of different ways of representing an error.
+
+- ``__attribute__((swift_async_error(zero_argument, N)))``, specifies that the
+  async method is considered to have failed if the Nth argument to the
+  completion handler is zero.
+
+- ``__attribute__((swift_async_error(nonzero_argument, N)))``, specifies that
+  the async method is considered to have failed if the Nth argument to the
+  completion handler is non-zero.
+
+- ``__attribute__((swift_async_error(nonnull_error)))``, specifies that the
+  async method is considered to have failed if the ``NSError *`` argument to the
+  completion handler is non-null.
+
+- ``__attribute__((swift_async_error(none)))``, specifies that the async method
+  cannot fail.
+
+
+For instance:
+
+.. code-block:: objc
+
+  @interface MyClass : NSObject
+  -(void)asyncMethod:(void (^)(char, int, float))handler
+      __attribute__((swift_async(swift_private, 1)))
+      __attribute__((swift_async_error(zero_argument, 2)));
+  @end
+
+Here, the ``swift_async`` attribute specifies that ``handler`` is the completion
+handler for this method, and the ``swift_async_error`` attribute specifies that
+the ``int`` parameter is the one that represents the error.
+}];
+}
+
 def SuppressDocs : Documentation {
   let Category = DocCatStmt;
   let Content = [{
@@ -4468,6 +4658,30 @@ could have a different set of data members and thus have a different size. Using
 the ``abi_tag`` attribute, it is possible to have different mangled names for
 a global variable of the class type. Therefore, the old code could keep using
 the old mangled name and the new code will use the new mangled name with tags.
+  }];
+}
+
+def PreferredNameDocs : Documentation {
+  let Category = DocCatDecl;
+  let Content = [{
+The ``preferred_name`` attribute can be applied to a class template, and
+specifies a preferred way of naming a specialization of the template. The
+preferred name will be used whenever the corresponding template specialization
+would otherwise be printed in a diagnostic or similar context.
+
+The preferred name must be a typedef or type alias declaration that refers to a
+specialization of the class template (not including any type qualifiers). In
+general this requires the template to be declared at least twice. For example:
+
+.. code-block:: c++
+
+  template<typename T> struct basic_string;
+  using string = basic_string<char>;
+  using wstring = basic_string<wchar_t>;
+  template<typename T> struct [[clang::preferred_name(string),
+                                clang::preferred_name(wstring)]] basic_string {
+    // ...
+  };
   }];
 }
 
@@ -4635,6 +4849,9 @@ def PatchableFunctionEntryDocs : Documentation {
 before the function entry and N-M NOPs after the function entry. This attribute
 takes precedence over the command line option ``-fpatchable-function-entry=N,M``.
 ``M`` defaults to 0 if omitted.
+
+This attribute is only supported on
+aarch64/aarch64-be/riscv32/riscv64/i386/x86-64 targets.
 }];
 }
 
@@ -5083,6 +5300,59 @@ in the future.
   }];
 }
 
+def CalledOnceDocs : Documentation {
+  let Category = DocCatVariable;
+  let Content = [{
+The ``called_once`` attribute specifies that the annotated function or method
+parameter is invoked exactly once on all execution paths. It only applies
+to parameters with function-like types, i.e. function pointers or blocks. This
+concept is particularly useful for asynchronous programs.
+
+Clang implements a check for ``called_once`` parameters,
+``-Wcalled-once-parameter``. It is on by default and finds the following
+violations:
+
+* Parameter is not called at all.
+
+* Parameter is called more than once.
+
+* Parameter is not called on one of the execution paths.
+
+In the latter case, Clang pinpoints the path where parameter is not invoked
+by showing the control-flow statement where the path diverges.
+
+.. code-block:: objc
+
+  void fooWithCallback(void (^callback)(void) __attribute__((called_once))) {
+    if (somePredicate()) {
+      ...
+      callback();
+    } esle {
+      callback(); // OK: callback is called on every path
+    }
+  }
+
+  void barWithCallback(void (^callback)(void) __attribute__((called_once))) {
+    if (somePredicate()) {
+      ...
+      callback(); // note: previous call is here
+    }
+    callback(); // warning: callback is called twice
+  }
+
+  void foobarWithCallback(void (^callback)(void) __attribute__((called_once))) {
+    if (somePredicate()) {  // warning: callback is not called when condition is false
+      ...
+      callback();
+    }
+  }
+
+This attribute is useful for API developers who want to double-check if they
+implemented their method correctly.
+
+  }];
+}
+
 def GnuInlineDocs : Documentation {
   let Category = DocCatFunction;
   let Content = [{
@@ -5284,6 +5554,17 @@ template when declaring the texture reference. A texture reference variable
 could be accessed on the host side and, on the device side, might be translated
 into an internal texture object, which is established through texture bind and
 unbind runtime APIs.
+  }];
+}
+
+def HIPManagedAttrDocs : Documentation {
+  let Category = DocCatDecl;
+  let Content = [{
+The ``__managed__`` attribute can be applied to a global variable declaration in HIP.
+A managed variable is emitted as an undefined global symbol in the device binary and is
+registered by ``__hipRegisterManagedVariable`` in init functions. The HIP runtime allocates
+managed memory and uses it to define the symbol when loading the device binary.
+A managed variable can be accessed in both device and host code.
   }];
 }
 
@@ -5572,5 +5853,49 @@ to and from secure state, respectively, and prevent flow of information
 to non-secure state, except via return values. See `ARMv8-M Security Extensions:
 Requirements on Development Tools - Engineering Specification Documentation
 <https://developer.arm.com/docs/ecm0359818/latest/>`_ for more information.
+  }];
+}
+
+def AlwaysInlineDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+Inlining heuristics are disabled and inlining is always attempted regardless of
+optimization level.
+
+Does not guarantee that inline substitution actually occurs.
+
+See also `the Microsoft Docs on Inline Functions`_, `the GCC Common Function
+Attribute docs`_, and `the GCC Inline docs`_.
+
+.. _the Microsoft Docs on Inline Functions: https://docs.microsoft.com/en-us/cpp/cpp/inline-functions-cpp
+.. _the GCC Common Function Attribute docs: https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html
+.. _the GCC Inline docs: https://gcc.gnu.org/onlinedocs/gcc/Inline.html
+
+}];
+  let Heading = "always_inline, __force_inline";
+}
+
+def EnforceTCBDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+  The ``enforce_tcb`` attribute can be placed on functions to enforce that a
+  trusted compute base (TCB) does not call out of the TCB. This generates a
+  warning every time a function not marked with an ``enforce_tcb`` attribute is
+  called from a function with the ``enforce_tcb`` attribute. A function may be a
+  part of multiple TCBs. Invocations through function pointers are currently
+  not checked. Builtins are considered to a part of every TCB.
+
+  - ``enforce_tcb(Name)`` indicates that this function is a part of the TCB named ``Name``
+  }];
+}
+
+def EnforceTCBLeafDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+  The ``enforce_tcb_leaf`` attribute satisfies the requirement enforced by
+  ``enforce_tcb`` for the marked function to be in the named TCB but does not
+  continue to check the functions called from within the leaf function.
+
+  - ``enforce_tcb_leaf(Name)`` indicates that this function is a part of the TCB named ``Name``
   }];
 }

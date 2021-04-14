@@ -241,7 +241,7 @@ static Value *simplifyX86immShift(const IntrinsicInst &II,
     if (KnownLowerBits.getMaxValue().ult(BitWidth) &&
         (DemandedUpper.isNullValue() || KnownUpperBits.isZero())) {
       SmallVector<int, 16> ZeroSplat(VWidth, 0);
-      Amt = Builder.CreateShuffleVector(Amt, Amt, ZeroSplat);
+      Amt = Builder.CreateShuffleVector(Amt, ZeroSplat);
       return (LogicalShift ? (ShiftLeft ? Builder.CreateShl(Vec, Amt)
                                         : Builder.CreateLShr(Vec, Amt))
                            : Builder.CreateAShr(Vec, Amt));
@@ -889,8 +889,7 @@ static Value *simplifyX86vpermilvar(const IntrinsicInst &II,
   }
 
   auto V1 = II.getArgOperand(0);
-  auto V2 = UndefValue::get(V1->getType());
-  return Builder.CreateShuffleVector(V1, V2, makeArrayRef(Indexes, NumElts));
+  return Builder.CreateShuffleVector(V1, makeArrayRef(Indexes, NumElts));
 }
 
 /// Attempt to convert vpermd/vpermps to shufflevector if the mask is constant.
@@ -924,8 +923,7 @@ static Value *simplifyX86vpermv(const IntrinsicInst &II,
   }
 
   auto V1 = II.getArgOperand(0);
-  auto V2 = UndefValue::get(VecTy);
-  return Builder.CreateShuffleVector(V1, V2, makeArrayRef(Indexes, Size));
+  return Builder.CreateShuffleVector(V1, makeArrayRef(Indexes, Size));
 }
 
 Optional<Instruction *>
@@ -1916,13 +1914,20 @@ Optional<Value *> X86TTIImpl::simplifyDemandedVectorEltsIntrinsic(
   case Intrinsic::x86_sse3_addsub_ps:
   case Intrinsic::x86_avx_addsub_pd_256:
   case Intrinsic::x86_avx_addsub_ps_256: {
+    // If none of the even or none of the odd lanes are required, turn this
+    // into a generic FP math instruction.
     APInt SubMask = APInt::getSplat(VWidth, APInt(2, 0x1));
-    if (DemandedElts.isSubsetOf(SubMask))
-      return IC.Builder.CreateFSub(II.getArgOperand(0), II.getArgOperand(1));
-
     APInt AddMask = APInt::getSplat(VWidth, APInt(2, 0x2));
-    if (DemandedElts.isSubsetOf(AddMask))
-      return IC.Builder.CreateFAdd(II.getArgOperand(0), II.getArgOperand(1));
+    bool IsSubOnly = DemandedElts.isSubsetOf(SubMask);
+    bool IsAddOnly = DemandedElts.isSubsetOf(AddMask);
+    if (IsSubOnly || IsAddOnly) {
+      assert((IsSubOnly ^ IsAddOnly) && "Can't be both add-only and sub-only");
+      IRBuilderBase::InsertPointGuard Guard(IC.Builder);
+      IC.Builder.SetInsertPoint(&II);
+      Value *Arg0 = II.getArgOperand(0), *Arg1 = II.getArgOperand(1);
+      return IC.Builder.CreateBinOp(
+          IsSubOnly ? Instruction::FSub : Instruction::FAdd, Arg0, Arg1);
+    }
 
     simplifyAndSetOp(&II, 0, DemandedElts, UndefElts);
     simplifyAndSetOp(&II, 1, DemandedElts, UndefElts2);

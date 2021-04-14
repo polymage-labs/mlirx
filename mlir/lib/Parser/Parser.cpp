@@ -94,6 +94,59 @@ ParseResult Parser::parseToken(Token::Kind expectedToken,
   return emitError(message);
 }
 
+/// Parse an optional integer value from the stream.
+OptionalParseResult Parser::parseOptionalInteger(uint64_t &result) {
+  Token curToken = getToken();
+  if (curToken.isNot(Token::integer, Token::minus))
+    return llvm::None;
+
+  bool negative = consumeIf(Token::minus);
+  Token curTok = getToken();
+  if (parseToken(Token::integer, "expected integer value"))
+    return failure();
+
+  auto val = curTok.getUInt64IntegerValue();
+  if (!val)
+    return emitError(curTok.getLoc(), "integer value too large");
+  result = negative ? -*val : *val;
+  return success();
+}
+
+/// Parse a floating point value from an integer literal token.
+ParseResult Parser::parseFloatFromIntegerLiteral(
+    Optional<APFloat> &result, const Token &tok, bool isNegative,
+    const llvm::fltSemantics &semantics, size_t typeSizeInBits) {
+  llvm::SMLoc loc = tok.getLoc();
+  StringRef spelling = tok.getSpelling();
+  bool isHex = spelling.size() > 1 && spelling[1] == 'x';
+  if (!isHex) {
+    return emitError(loc, "unexpected decimal integer literal for a "
+                          "floating point value")
+               .attachNote()
+           << "add a trailing dot to make the literal a float";
+  }
+  if (isNegative) {
+    return emitError(loc, "hexadecimal float literal should not have a "
+                          "leading minus");
+  }
+
+  Optional<uint64_t> value = tok.getUInt64IntegerValue();
+  if (!value.hasValue())
+    return emitError(loc, "hexadecimal float constant out of range for type");
+
+  if (&semantics == &APFloat::IEEEdouble()) {
+    result = APFloat(semantics, APInt(typeSizeInBits, *value));
+    return success();
+  }
+
+  APInt apInt(typeSizeInBits, *value);
+  if (apInt != *value)
+    return emitError(loc, "hexadecimal float constant out of range for type");
+  result = APFloat(semantics, apInt);
+
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // OperationParser
 //===----------------------------------------------------------------------===//
@@ -324,6 +377,14 @@ OperationParser::~OperationParser() {
     // defining operation.
     fwd.first.dropAllUses();
     fwd.first.getDefiningOp()->destroy();
+  }
+  for (const auto &scope : forwardRef) {
+    for (const auto &fwd : scope) {
+      // Delete all blocks that were created as forward references but never
+      // included into a region.
+      fwd.first->dropAllUses();
+      delete fwd.first;
+    }
   }
 }
 
@@ -790,7 +851,7 @@ Operation *OperationParser::parseGenericOperation() {
   if (getToken().is(Token::l_square)) {
     // Check if the operation is a known terminator.
     const AbstractOperation *abstractOp = result.name.getAbstractOperation();
-    if (abstractOp && !abstractOp->hasProperty(OperationProperty::Terminator))
+    if (abstractOp && !abstractOp->hasTrait<OpTrait::IsTerminator>())
       return emitError("successors in non-terminator"), nullptr;
 
     SmallVector<Block *, 2> successors;
@@ -864,17 +925,18 @@ Operation *OperationParser::parseGenericOperation(Block *insertBlock,
 namespace {
 class CustomOpAsmParser : public OpAsmParser {
 public:
-  CustomOpAsmParser(SMLoc nameLoc,
-                    ArrayRef<OperationParser::ResultRecord> resultIDs,
-                    const AbstractOperation *opDefinition,
-                    OperationParser &parser)
-      : nameLoc(nameLoc), resultIDs(resultIDs), opDefinition(opDefinition),
+  CustomOpAsmParser(
+      SMLoc nameLoc, ArrayRef<OperationParser::ResultRecord> resultIDs,
+      function_ref<ParseResult(OpAsmParser &, OperationState &)> parseAssembly,
+      bool isIsolatedFromAbove, StringRef opName, OperationParser &parser)
+      : nameLoc(nameLoc), resultIDs(resultIDs), parseAssembly(parseAssembly),
+        isIsolatedFromAbove(isIsolatedFromAbove), opName(opName),
         parser(parser) {}
 
   /// Parse an instance of the operation described by 'opDefinition' into the
   /// provided operation state.
   ParseResult parseOperation(OperationState &opState) {
-    if (opDefinition->parseAssembly(*this, opState))
+    if (parseAssembly(*this, opState))
       return failure();
     // Verify that the parsed attributes does not have duplicate attributes.
     // This can happen if an attribute set during parsing is also specified in
@@ -903,8 +965,7 @@ public:
   /// Emit a diagnostic at the specified location and return failure.
   InFlightDiagnostic emitError(llvm::SMLoc loc, const Twine &message) override {
     emittedError = true;
-    return parser.emitError(loc, "custom op '" + opDefinition->name.strref() +
-                                     "' " + message);
+    return parser.emitError(loc, "custom op '" + opName + "' " + message);
   }
 
   llvm::SMLoc getCurrentLocation() override {
@@ -1107,6 +1168,11 @@ public:
   /// Parses a '*' token if present.
   ParseResult parseOptionalStar() override {
     return success(parser.consumeIf(Token::star));
+  }
+
+  /// Parse an optional integer value from the stream.
+  OptionalParseResult parseOptionalInteger(uint64_t &result) override {
+    return parser.parseOptionalInteger(result);
   }
 
   //===--------------------------------------------------------------------===//
@@ -1424,8 +1490,7 @@ public:
     }
 
     // Try to parse the region.
-    assert((!enableNameShadowing ||
-            opDefinition->hasProperty(OperationProperty::IsolatedFromAbove)) &&
+    assert((!enableNameShadowing || isIsolatedFromAbove) &&
            "name shadowing is only allowed on isolated regions");
     if (parser.parseRegion(region, regionArguments, enableNameShadowing))
       return failure();
@@ -1590,7 +1655,9 @@ private:
   ArrayRef<OperationParser::ResultRecord> resultIDs;
 
   /// The abstract information of the operation.
-  const AbstractOperation *opDefinition;
+  function_ref<ParseResult(OpAsmParser &, OperationState &)> parseAssembly;
+  bool isIsolatedFromAbove;
+  StringRef opName;
 
   /// The main operation parser.
   OperationParser &parser;
@@ -1604,31 +1671,51 @@ Operation *
 OperationParser::parseCustomOperation(ArrayRef<ResultRecord> resultIDs) {
   llvm::SMLoc opLoc = getToken().getLoc();
   StringRef opName = getTokenSpelling();
-
   auto *opDefinition = AbstractOperation::lookup(opName, getContext());
-  if (!opDefinition) {
+  Dialect *dialect = nullptr;
+  if (opDefinition) {
+    dialect = &opDefinition->dialect;
+  } else {
     if (opName.contains('.')) {
       // This op has a dialect, we try to check if we can register it in the
       // context on the fly.
       StringRef dialectName = opName.split('.').first;
-      if (!getContext()->getLoadedDialect(dialectName) &&
-          getContext()->getOrLoadDialect(dialectName)) {
+      dialect = getContext()->getLoadedDialect(dialectName);
+      if (!dialect && (dialect = getContext()->getOrLoadDialect(dialectName)))
         opDefinition = AbstractOperation::lookup(opName, getContext());
-      }
     } else {
       // If the operation name has no namespace prefix we treat it as a standard
       // operation and prefix it with "std".
       // TODO: Would it be better to just build a mapping of the registered
       // operations in the standard dialect?
-      if (getContext()->getOrLoadDialect("std"))
+      if (getContext()->getOrLoadDialect("std")) {
         opDefinition = AbstractOperation::lookup(Twine("std." + opName).str(),
                                                  getContext());
+        if (opDefinition)
+          opName = opDefinition->name.strref();
+      }
     }
   }
 
-  if (!opDefinition) {
-    emitError(opLoc) << "custom op '" << opName << "' is unknown";
-    return nullptr;
+  // This is the actual hook for the custom op parsing, usually implemented by
+  // the op itself (`Op::parse()`). We retrieve it either from the
+  // AbstractOperation or from the Dialect.
+  std::function<ParseResult(OpAsmParser &, OperationState &)> parseAssemblyFn;
+  bool isIsolatedFromAbove = false;
+
+  if (opDefinition) {
+    parseAssemblyFn = opDefinition->getParseAssemblyFn();
+    isIsolatedFromAbove =
+        opDefinition->hasTrait<OpTrait::IsIsolatedFromAbove>();
+  } else {
+    Optional<Dialect::ParseOpHook> dialectHook;
+    if (dialect)
+      dialectHook = dialect->getParseOperationHook(opName);
+    if (!dialectHook.hasValue()) {
+      emitError(opLoc) << "custom op '" << opName << "' is unknown";
+      return nullptr;
+    }
+    parseAssemblyFn = *dialectHook;
   }
 
   consumeToken();
@@ -1643,9 +1730,10 @@ OperationParser::parseCustomOperation(ArrayRef<ResultRecord> resultIDs) {
   auto srcLocation = getEncodedSourceLocation(opLoc);
 
   // Have the op implementation take a crack and parsing this.
-  OperationState opState(srcLocation, opDefinition->name);
+  OperationState opState(srcLocation, opName);
   CleanupOpStateRegions guard{opState};
-  CustomOpAsmParser opAsmParser(opLoc, resultIDs, opDefinition, *this);
+  CustomOpAsmParser opAsmParser(opLoc, resultIDs, parseAssemblyFn,
+                                isIsolatedFromAbove, opName, *this);
   if (opAsmParser.parseOperation(opState))
     return nullptr;
 
@@ -2033,7 +2121,7 @@ ParseResult TopLevelOperationParser::parse(Block *topLevelBlock,
       auto &parsedOps = (*topLevelOp)->getRegion(0).front().getOperations();
       auto &destOps = topLevelBlock->getOperations();
       destOps.splice(destOps.empty() ? destOps.end() : std::prev(destOps.end()),
-                     parsedOps, parsedOps.begin(), std::prev(parsedOps.end()));
+                     parsedOps, parsedOps.begin(), parsedOps.end());
       return success();
     }
 
@@ -2065,8 +2153,8 @@ LogicalResult mlir::parseSourceFile(const llvm::SourceMgr &sourceMgr,
                                     LocationAttr *sourceFileLoc) {
   const auto *sourceBuf = sourceMgr.getMemoryBuffer(sourceMgr.getMainFileID());
 
-  Location parserLoc = FileLineColLoc::get(sourceBuf->getBufferIdentifier(),
-                                           /*line=*/0, /*column=*/0, context);
+  Location parserLoc = FileLineColLoc::get(
+      context, sourceBuf->getBufferIdentifier(), /*line=*/0, /*column=*/0);
   if (sourceFileLoc)
     *sourceFileLoc = parserLoc;
 

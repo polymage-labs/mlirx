@@ -544,6 +544,7 @@ VarDecl *Sema::buildCoroutinePromise(SourceLocation Loc) {
   auto *VD = VarDecl::Create(Context, FD, FD->getLocation(), FD->getLocation(),
                              &PP.getIdentifierTable().get("__promise"), T,
                              Context.getTrivialTypeSourceInfo(T, Loc), SC_None);
+  VD->setImplicit();
   CheckVariableDeclarationType(VD);
   if (VD->isInvalidDecl())
     return nullptr;
@@ -995,7 +996,8 @@ StmtResult Sema::BuildCoreturnStmt(SourceLocation Loc, Expr *E,
 
   // Move the return value if we can
   if (E) {
-    auto NRVOCandidate = this->getCopyElisionCandidate(E->getType(), E, CES_AsIfByStdMove);
+    const VarDecl *NRVOCandidate = this->getCopyElisionCandidate(
+        E->getType(), E, CES_ImplicitlyMovableCXX20);
     if (NRVOCandidate) {
       InitializedEntity Entity =
           InitializedEntity::InitializeResult(Loc, E->getType(), NRVOCandidate);
@@ -1577,6 +1579,7 @@ bool CoroutineStmtBuilder::makeGroDeclAndReturnStmt() {
       S.Context, &FD, FD.getLocation(), FD.getLocation(),
       &S.PP.getIdentifierTable().get("__coro_gro"), GroType,
       S.Context.getTrivialTypeSourceInfo(GroType, Loc), SC_None);
+  GroDecl->setImplicit();
 
   S.CheckVariableDeclarationType(GroDecl);
   if (GroDecl->isInvalidDecl())

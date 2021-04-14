@@ -802,8 +802,8 @@ public:
   void setPredicate(Predicate P) { setSubclassData<PredicateField>(P); }
 
   static bool isFPPredicate(Predicate P) {
-    assert(FIRST_FCMP_PREDICATE == 0 &&
-           "FIRST_FCMP_PREDICATE is required to be 0");
+    static_assert(FIRST_FCMP_PREDICATE == 0,
+                  "FIRST_FCMP_PREDICATE is required to be 0");
     return P <= LAST_FCMP_PREDICATE;
   }
 
@@ -845,20 +845,38 @@ public:
   /// Return the predicate as if the operands were swapped.
   static Predicate getSwappedPredicate(Predicate pred);
 
-  /// For predicate of kind "is X or equal to 0" returns the predicate "is X".
-  /// For predicate of kind "is X" returns the predicate "is X or equal to 0".
-  /// does not support other kind of predicates.
-  /// @returns the predicate that does not contains is equal to zero if
-  /// it had and vice versa.
-  /// Return the flipped strictness of predicate
-  Predicate getFlippedStrictnessPredicate() const {
-    return getFlippedStrictnessPredicate(getPredicate());
+  /// This is a static version that you can use without an instruction
+  /// available.
+  /// @returns true if the comparison predicate is strict, false otherwise.
+  static bool isStrictPredicate(Predicate predicate);
+
+  /// @returns true if the comparison predicate is strict, false otherwise.
+  /// Determine if this instruction is using an strict comparison predicate.
+  bool isStrictPredicate() const { return isStrictPredicate(getPredicate()); }
+
+  /// This is a static version that you can use without an instruction
+  /// available.
+  /// @returns true if the comparison predicate is non-strict, false otherwise.
+  static bool isNonStrictPredicate(Predicate predicate);
+
+  /// @returns true if the comparison predicate is non-strict, false otherwise.
+  /// Determine if this instruction is using an non-strict comparison predicate.
+  bool isNonStrictPredicate() const {
+    return isNonStrictPredicate(getPredicate());
+  }
+
+  /// For example, SGE -> SGT, SLE -> SLT, ULE -> ULT, UGE -> UGT.
+  /// Returns the strict version of non-strict comparisons.
+  Predicate getStrictPredicate() const {
+    return getStrictPredicate(getPredicate());
   }
 
   /// This is a static version that you can use without an instruction
   /// available.
-  /// Return the flipped strictness of predicate
-  static Predicate getFlippedStrictnessPredicate(Predicate pred);
+  /// @returns the strict version of comparison provided in \p pred.
+  /// If \p pred is not a strict comparison predicate, returns \p pred.
+  /// Returns the strict version of non-strict comparisons.
+  static Predicate getStrictPredicate(Predicate pred);
 
   /// For example, SGT -> SGE, SLT -> SLE, ULT -> ULE, UGT -> UGE.
   /// Returns the non-strict version of strict comparisons.
@@ -872,6 +890,21 @@ public:
   /// If \p pred is not a strict comparison predicate, returns \p pred.
   /// Returns the non-strict version of strict comparisons.
   static Predicate getNonStrictPredicate(Predicate pred);
+
+  /// This is a static version that you can use without an instruction
+  /// available.
+  /// Return the flipped strictness of predicate
+  static Predicate getFlippedStrictnessPredicate(Predicate pred);
+
+  /// For predicate of kind "is X or equal to 0" returns the predicate "is X".
+  /// For predicate of kind "is X" returns the predicate "is X or equal to 0".
+  /// does not support other kind of predicates.
+  /// @returns the predicate that does not contains is equal to zero if
+  /// it had and vice versa.
+  /// Return the flipped strictness of predicate
+  Predicate getFlippedStrictnessPredicate() const {
+    return getFlippedStrictnessPredicate(getPredicate());
+  }
 
   /// Provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
@@ -1093,7 +1126,7 @@ public:
 
   explicit OperandBundleDefT(const OperandBundleUse &OBU) {
     Tag = std::string(OBU.getTagName());
-    Inputs.insert(Inputs.end(), OBU.Inputs.begin(), OBU.Inputs.end());
+    llvm::append_range(Inputs, OBU.Inputs);
   }
 
   ArrayRef<InputTy> inputs() const { return Inputs; }
@@ -1180,6 +1213,24 @@ public:
   /// in \p Bundles.
   static CallBase *Create(CallBase *CB, ArrayRef<OperandBundleDef> Bundles,
                           Instruction *InsertPt = nullptr);
+
+  /// Create a clone of \p CB with the operand bundle with the tag matching
+  /// \p Bundle's tag replaced with Bundle, and insert it before \p InsertPt.
+  ///
+  /// The returned call instruction is identical \p CI in every way except that
+  /// the specified operand bundle has been replaced.
+  static CallBase *Create(CallBase *CB,
+                          OperandBundleDef Bundle,
+                          Instruction *InsertPt = nullptr);
+
+  /// Create a clone of \p CB with operand bundle \p OB added.
+  static CallBase *addOperandBundle(CallBase *CB, uint32_t ID,
+                                    OperandBundleDef OB,
+                                    Instruction *InsertPt = nullptr);
+
+  /// Create a clone of \p CB with operand bundle \p ID removed.
+  static CallBase *removeOperandBundle(CallBase *CB, uint32_t ID,
+                                       Instruction *InsertPt = nullptr);
 
   static bool classof(const Instruction *I) {
     return I->getOpcode() == Instruction::Call ||
@@ -1504,6 +1555,15 @@ public:
     setAttributes(PAL);
   }
 
+  /// Removes noundef and other attributes that imply undefined behavior if a
+  /// `undef` or `poison` value is passed from the given argument.
+  void removeParamUndefImplyingAttrs(unsigned ArgNo) {
+    assert(ArgNo < getNumArgOperands() && "Out of bounds");
+    AttributeList PAL = getAttributes();
+    PAL = PAL.removeParamUndefImplyingAttributes(getContext(), ArgNo);
+    setAttributes(PAL);
+  }
+
   /// adds the dereferenceable attribute to the list of attributes.
   void addDereferenceableAttr(unsigned i, uint64_t Bytes) {
     AttributeList PAL = getAttributes();
@@ -1520,7 +1580,11 @@ public:
   }
 
   /// Determine whether the return value has the given attribute.
-  bool hasRetAttr(Attribute::AttrKind Kind) const;
+  bool hasRetAttr(Attribute::AttrKind Kind) const {
+    return hasRetAttrImpl(Kind);
+  }
+  /// Determine whether the return value has the given attribute.
+  bool hasRetAttr(StringRef Kind) const { return hasRetAttrImpl(Kind); }
 
   /// Determine whether the argument or parameter has the given attribute.
   bool paramHasAttr(unsigned ArgNo, Attribute::AttrKind Kind) const;
@@ -1605,6 +1669,17 @@ public:
     return paramHasAttr(ArgNo, Attribute::ByVal) ||
            paramHasAttr(ArgNo, Attribute::InAlloca) ||
            paramHasAttr(ArgNo, Attribute::Preallocated);
+  }
+
+  /// Determine whether passing undef to this argument is undefined behavior.
+  /// If passing undef to this argument is UB, passing poison is UB as well
+  /// because poison is more undefined than undef.
+  bool isPassingUndefUB(unsigned ArgNo) const {
+    return paramHasAttr(ArgNo, Attribute::NoUndef) ||
+           // dereferenceable implies noundef.
+           paramHasAttr(ArgNo, Attribute::Dereferenceable) ||
+           // dereferenceable implies noundef, and null is a well-defined value.
+           paramHasAttr(ArgNo, Attribute::DereferenceableOrNull);
   }
 
   /// Determine if there are is an inalloca argument. Only the last argument can
@@ -1719,6 +1794,7 @@ public:
   bool onlyReadsMemory() const {
     return doesNotAccessMemory() || hasFnAttr(Attribute::ReadOnly);
   }
+
   void setOnlyReadsMemory() {
     addAttribute(AttributeList::FunctionIndex, Attribute::ReadOnly);
   }
@@ -1946,12 +2022,7 @@ public:
 
   /// Return true if this operand bundle user has operand bundles that
   /// may read from the heap.
-  bool hasReadingOperandBundles() const {
-    // Implementation note: this is a conservative implementation of operand
-    // bundle semantics, where *any* operand bundle forces a callsite to be at
-    // least readonly.
-    return hasOperandBundles();
-  }
+  bool hasReadingOperandBundles() const;
 
   /// Return true if this operand bundle user has operand bundles that
   /// may write to the heap.
@@ -2198,6 +2269,18 @@ private:
       return false;
 
     return hasFnAttrOnCalledFunction(Kind);
+  }
+
+  /// Determine whether the return value has the given attribute. Supports
+  /// Attribute::AttrKind and StringRef as \p AttrKind types.
+  template <typename AttrKind> bool hasRetAttrImpl(AttrKind Kind) const {
+    if (Attrs.hasAttribute(AttributeList::ReturnIndex, Kind))
+      return true;
+
+    // Look at the callee, if available.
+    if (const Function *F = getCalledFunction())
+      return F->getAttributes().hasAttribute(AttributeList::ReturnIndex, Kind);
+    return false;
   }
 };
 

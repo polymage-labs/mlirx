@@ -1400,9 +1400,7 @@ void Target::SetExecutableModule(ModuleSP &executable_sp,
   ClearModules(false);
 
   if (executable_sp) {
-    static Timer::Category func_cat(LLVM_PRETTY_FUNCTION);
-    Timer scoped_timer(func_cat,
-                       "Target::SetExecutableModule (executable = '%s')",
+    LLDB_SCOPED_TIMERF("Target::SetExecutableModule (executable = '%s')",
                        executable_sp->GetFileSpec().GetPath().c_str());
 
     const bool notify = true;
@@ -2927,6 +2925,28 @@ Status Target::Launch(ProcessLaunchInfo &launch_info, Stream *stream) {
 
   launch_info.GetFlags().Set(eLaunchFlagDebug);
 
+  if (launch_info.IsScriptedProcess()) {
+    TargetPropertiesSP properties_sp = GetGlobalProperties();
+
+    if (!properties_sp) {
+      LLDB_LOGF(log, "Target::%s Couldn't fetch target global properties.",
+                __FUNCTION__);
+      return error;
+    }
+
+    // Only copy scripted process launch options.
+    ProcessLaunchInfo &default_launch_info =
+        const_cast<ProcessLaunchInfo &>(properties_sp->GetProcessLaunchInfo());
+
+    default_launch_info.SetProcessPluginName("ScriptedProcess");
+    default_launch_info.SetScriptedProcessClassName(
+        launch_info.GetScriptedProcessClassName());
+    default_launch_info.SetScriptedProcessDictionarySP(
+        launch_info.GetScriptedProcessDictionarySP());
+
+    SetProcessLaunchInfo(launch_info);
+  }
+
   // Get the value of synchronous execution here.  If you wait till after you
   // have started to run, then you could have hit a breakpoint, whose command
   // might switch the value, and then you'll pick up that incorrect value.
@@ -3055,7 +3075,27 @@ Status Target::Launch(ProcessLaunchInfo &launch_info, Stream *stream) {
 
 void Target::SetTrace(const TraceSP &trace_sp) { m_trace_sp = trace_sp; }
 
-const TraceSP &Target::GetTrace() { return m_trace_sp; }
+TraceSP &Target::GetTrace() { return m_trace_sp; }
+
+llvm::Expected<TraceSP &> Target::GetTraceOrCreate() {
+  if (!m_trace_sp && m_process_sp) {
+    llvm::Expected<TraceSupportedResponse> trace_type =
+        m_process_sp->TraceSupported();
+    if (!trace_type)
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(), "Tracing is not supported. %s",
+          llvm::toString(trace_type.takeError()).c_str());
+    if (llvm::Expected<TraceSP> trace_sp =
+            Trace::FindPluginForLiveProcess(trace_type->name, *m_process_sp))
+      m_trace_sp = *trace_sp;
+    else
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "Couldn't start tracing the process. %s",
+          llvm::toString(trace_sp.takeError()).c_str());
+  }
+  return m_trace_sp;
+}
 
 Status Target::Attach(ProcessAttachInfo &attach_info, Stream *stream) {
   auto state = eStateInvalid;
@@ -3351,7 +3391,7 @@ Target::StopHookCommandLine::HandleStop(ExecutionContext &exc_ctx,
   // Force Async:
   bool old_async = debugger.GetAsyncExecution();
   debugger.SetAsyncExecution(true);
-  debugger.GetCommandInterpreter().HandleCommands(GetCommands(), &exc_ctx,
+  debugger.GetCommandInterpreter().HandleCommands(GetCommands(), exc_ctx,
                                                   options, result);
   debugger.SetAsyncExecution(old_async);
   lldb::ReturnStatus status = result.GetStatus();
@@ -3516,6 +3556,28 @@ static constexpr OptionEnumValueElement g_x86_dis_flavor_value_types[] = {
     },
 };
 
+static constexpr OptionEnumValueElement g_import_std_module_value_types[] = {
+    {
+        eImportStdModuleFalse,
+        "false",
+        "Never import the 'std' C++ module in the expression parser.",
+    },
+    {
+        eImportStdModuleFallback,
+        "fallback",
+        "Retry evaluating expressions with an imported 'std' C++ module if they"
+        " failed to parse without the module. This allows evaluating more "
+        "complex expressions involving C++ standard library types."
+    },
+    {
+        eImportStdModuleTrue,
+        "true",
+        "Always import the 'std' C++ module. This allows evaluating more "
+        "complex expressions involving C++ standard library types. This feature"
+        " is experimental."
+    },
+};
+
 static constexpr OptionEnumValueElement g_hex_immediate_style_values[] = {
     {
         Disassembler::eHexStyleC,
@@ -3595,15 +3657,10 @@ enum {
   ePropertyExperimental,
 };
 
-class TargetOptionValueProperties : public OptionValueProperties {
+class TargetOptionValueProperties
+    : public Cloneable<TargetOptionValueProperties, OptionValueProperties> {
 public:
-  TargetOptionValueProperties(ConstString name) : OptionValueProperties(name) {}
-
-  // This constructor is used when creating TargetOptionValueProperties when it
-  // is part of a new lldb_private::Target instance. It will copy all current
-  // global property values as needed
-  TargetOptionValueProperties(const TargetPropertiesSP &target_properties_sp)
-      : OptionValueProperties(*target_properties_sp->GetValueProperties()) {}
+  TargetOptionValueProperties(ConstString name) : Cloneable(name) {}
 
   const Property *GetPropertyAtIndex(const ExecutionContext *exe_ctx,
                                      bool will_modify,
@@ -3634,11 +3691,12 @@ enum {
 #include "TargetPropertiesEnum.inc"
 };
 
-class TargetExperimentalOptionValueProperties : public OptionValueProperties {
+class TargetExperimentalOptionValueProperties
+    : public Cloneable<TargetExperimentalOptionValueProperties,
+                       OptionValueProperties> {
 public:
   TargetExperimentalOptionValueProperties()
-      : OptionValueProperties(
-            ConstString(Properties::GetExperimentalSettingsName())) {}
+      : Cloneable(ConstString(Properties::GetExperimentalSettingsName())) {}
 };
 
 TargetExperimentalProperties::TargetExperimentalProperties()
@@ -3651,8 +3709,8 @@ TargetExperimentalProperties::TargetExperimentalProperties()
 TargetProperties::TargetProperties(Target *target)
     : Properties(), m_launch_info(), m_target(target) {
   if (target) {
-    m_collection_sp = std::make_shared<TargetOptionValueProperties>(
-        Target::GetGlobalProperties());
+    m_collection_sp =
+        OptionValueProperties::CreateLocalCopy(*Target::GetGlobalProperties());
 
     // Set callbacks to update launch_info whenever "settins set" updated any
     // of these properties
@@ -3969,10 +4027,10 @@ bool TargetProperties::GetEnableAutoImportClangModules() const {
       nullptr, idx, g_target_properties[idx].default_uint_value != 0);
 }
 
-bool TargetProperties::GetEnableImportStdModule() const {
+ImportStdModule TargetProperties::GetImportStdModule() const {
   const uint32_t idx = ePropertyImportStdModule;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(
-      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+  return (ImportStdModule)m_collection_sp->GetPropertyAtIndexAsEnumeration(
+      nullptr, idx, g_target_properties[idx].default_uint_value);
 }
 
 bool TargetProperties::GetEnableAutoApplyFixIts() const {
@@ -4180,8 +4238,7 @@ void TargetProperties::SetNonStopModeEnabled(bool b) {
   m_collection_sp->SetPropertyAtIndexAsBoolean(nullptr, idx, b);
 }
 
-const ProcessLaunchInfo &TargetProperties::GetProcessLaunchInfo() {
-  m_launch_info.SetArg0(GetArg0()); // FIXME: Arg0 callback doesn't work
+const ProcessLaunchInfo &TargetProperties::GetProcessLaunchInfo() const {
   return m_launch_info;
 }
 
@@ -4285,6 +4342,17 @@ void TargetProperties::DisableSTDIOValueChangedCallback() {
     m_launch_info.GetFlags().Set(lldb::eLaunchFlagDisableSTDIO);
   else
     m_launch_info.GetFlags().Clear(lldb::eLaunchFlagDisableSTDIO);
+}
+
+bool TargetProperties::GetDebugUtilityExpression() const {
+  const uint32_t idx = ePropertyDebugUtilityExpression;
+  return m_collection_sp->GetPropertyAtIndexAsBoolean(
+      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+}
+
+void TargetProperties::SetDebugUtilityExpression(bool debug) {
+  const uint32_t idx = ePropertyDebugUtilityExpression;
+  m_collection_sp->SetPropertyAtIndexAsBoolean(nullptr, idx, debug);
 }
 
 // Target::TargetEventData

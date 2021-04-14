@@ -139,6 +139,7 @@ public:
   bool selectADDRzri(SDValue N, SDValue &Base, SDValue &Index, SDValue &Offset);
   bool selectADDRzii(SDValue N, SDValue &Base, SDValue &Index, SDValue &Offset);
   bool selectADDRri(SDValue N, SDValue &Base, SDValue &Offset);
+  bool selectADDRzi(SDValue N, SDValue &Base, SDValue &Offset);
 
   StringRef getPassName() const override {
     return "VE DAG->DAG Pattern Instruction Selection";
@@ -179,7 +180,7 @@ bool VEDAGToDAGISel::selectADDRrri(SDValue Addr, SDValue &Base, SDValue &Index,
     //    %dest, #FI, %reg, offset
     // In the eliminateFrameIndex, above MI is converted to the following.
     //    %dest, %fp, %reg, fi_offset + offset
-    if (dyn_cast<FrameIndexSDNode>(RHS))
+    if (isa<FrameIndexSDNode>(RHS))
       std::swap(LHS, RHS);
 
     if (matchADDRri(RHS, Index, Offset)) {
@@ -219,9 +220,8 @@ bool VEDAGToDAGISel::selectADDRzri(SDValue Addr, SDValue &Base, SDValue &Index,
 
 bool VEDAGToDAGISel::selectADDRzii(SDValue Addr, SDValue &Base, SDValue &Index,
                                    SDValue &Offset) {
-  if (dyn_cast<FrameIndexSDNode>(Addr)) {
+  if (isa<FrameIndexSDNode>(Addr))
     return false;
-  }
   if (Addr.getOpcode() == ISD::TargetExternalSymbol ||
       Addr.getOpcode() == ISD::TargetGlobalAddress ||
       Addr.getOpcode() == ISD::TargetGlobalTLSAddress)
@@ -249,8 +249,28 @@ bool VEDAGToDAGISel::selectADDRri(SDValue Addr, SDValue &Base,
   return true;
 }
 
+bool VEDAGToDAGISel::selectADDRzi(SDValue Addr, SDValue &Base,
+                                  SDValue &Offset) {
+  if (isa<FrameIndexSDNode>(Addr))
+    return false;
+  if (Addr.getOpcode() == ISD::TargetExternalSymbol ||
+      Addr.getOpcode() == ISD::TargetGlobalAddress ||
+      Addr.getOpcode() == ISD::TargetGlobalTLSAddress)
+    return false; // direct calls.
+
+  if (auto *CN = dyn_cast<ConstantSDNode>(Addr)) {
+    if (isInt<32>(CN->getSExtValue())) {
+      Base = CurDAG->getTargetConstant(0, SDLoc(Addr), MVT::i32);
+      Offset =
+          CurDAG->getTargetConstant(CN->getZExtValue(), SDLoc(Addr), MVT::i32);
+      return true;
+    }
+  }
+  return false;
+}
+
 bool VEDAGToDAGISel::matchADDRrr(SDValue Addr, SDValue &Base, SDValue &Index) {
-  if (dyn_cast<FrameIndexSDNode>(Addr))
+  if (isa<FrameIndexSDNode>(Addr))
     return false;
   if (Addr.getOpcode() == ISD::TargetExternalSymbol ||
       Addr.getOpcode() == ISD::TargetGlobalAddress ||

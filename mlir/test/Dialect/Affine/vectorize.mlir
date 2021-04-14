@@ -10,7 +10,7 @@ func @inner_loop_simple(%A: memref<2048x2048xf32>) {
   }
   return
 }
-// CHECK-NEXT: %[[VEC:.*]] = memref_shape_cast %arg0 : memref<2048x2048xf32> to memref<2048x256xvector<8xf32>>
+// CHECK-NEXT: %[[VEC:.*]] = memref_vector_cast %arg0 : memref<2048x2048xf32> to memref<2048x256xvector<8xf32>>
 // CHECK-NEXT: affine.for %arg1 = 0 to 1024 {
 // CHECK-NEXT:   affine.for %arg2 = 0 to 128 {
 // CHECK-NEXT:     %[[V:.*]] = affine.load %[[VEC]][%arg1, %arg2] : memref<2048x256xvector<8xf32>>
@@ -23,8 +23,8 @@ func @inner_loop_simple(%A: memref<2048x2048xf32>) {
 func @matvec(%A: memref<2048x2048xf64>, %X: memref<2048xf64>,
     %Y: memref<2048xf64>) {
   %c0 = constant 0 : index
-  %M = dim %Y, %c0 : memref<2048xf64>
-  %K = dim %X, %c0 : memref<2048xf64>
+  %M = memref.dim %Y, %c0 : memref<2048xf64>
+  %K = memref.dim %X, %c0 : memref<2048xf64>
 
   affine.for %i = 0 to %M {
     affine.for %k = 0 to %K {
@@ -55,8 +55,8 @@ func @matmul_ijk(%A: memref<2048x2048xf64>, %B: memref<2048x2048xf64>, %C: memre
     }
   }
   return
-// CHECK:       %0 = memref_shape_cast %arg2 : memref<2048x2048xf64> to memref<2048x512xvector<4xf64>>
-// CHECK-NEXT:  %1 = memref_shape_cast %arg1 : memref<2048x2048xf64> to memref<2048x512xvector<4xf64>>
+// CHECK:       %0 = memref_vector_cast %arg2 : memref<2048x2048xf64> to memref<2048x512xvector<4xf64>>
+// CHECK-NEXT:  %1 = memref_vector_cast %arg1 : memref<2048x2048xf64> to memref<2048x512xvector<4xf64>>
 // CHECK-NEXT:  affine.for %arg3 = 0 to 2048 {
 // CHECK-NEXT:    affine.for %arg4 = 0 to 512 {
 // CHECK-NEXT:      affine.for %arg5 = 0 to 2048 {
@@ -75,7 +75,7 @@ func @matmul_ijk(%A: memref<2048x2048xf64>, %B: memref<2048x2048xf64>, %C: memre
 
 // CHECK-LABEL: func @dynamic_memref
 func @dynamic_memref(%A : memref<?xf32>) {
-  // CHECK: memref_shape_cast %arg0 : memref<?xf32> to memref<?xvector<8xf32>>
+  // CHECK: memref_vector_cast %arg0 : memref<?xf32> to memref<?xvector<8xf32>>
   affine.for %i = 0 to 16 {
     // CHECK: affine.load %{{.*}} : memref<?xvector<8xf32>>
     // CHECK: affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<?xvector<8xf32>>

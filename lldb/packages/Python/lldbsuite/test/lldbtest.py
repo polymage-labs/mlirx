@@ -384,7 +384,8 @@ class _LocalProcess(_BaseProcess):
             [executable] + args,
             stdout=open(
                 os.devnull) if not self._trace_on else None,
-            stdin=PIPE)
+            stdin=PIPE,
+            preexec_fn=lldbplatformutil.enable_attach)
 
     def terminate(self):
         if self._proc.poll() is None:
@@ -783,6 +784,9 @@ class Base(unittest2.TestCase):
 
             # Inherit the TCC permissions from the inferior's parent.
             "settings set target.inherit-tcc true",
+
+            # Kill rather than detach from the inferior if something goes wrong.
+            "settings set target.detach-on-error false",
 
             # Disable fix-its by default so that incorrect expressions in tests don't
             # pass just because Clang thinks it has a fix-it.
@@ -1265,7 +1269,7 @@ class Base(unittest2.TestCase):
             return True
         return False
 
-    def isAArch64SVE(self):
+    def getCPUInfo(self):
         triple = self.dbg.GetSelectedPlatform().GetTriple()
 
         # TODO other platforms, please implement this function
@@ -1286,7 +1290,16 @@ class Base(unittest2.TestCase):
         except:
             return False
 
-        return " sve " in cpuinfo
+        return cpuinfo
+
+    def isAArch64SVE(self):
+        return "sve" in self.getCPUInfo()
+
+    def isAArch64MTE(self):
+        return "mte" in self.getCPUInfo()
+
+    def isAArch64PAuth(self):
+        return "paca" in self.getCPUInfo()
 
     def hasLinuxVmFlags(self):
         """ Check that the target machine has "VmFlags" lines in
@@ -1762,6 +1775,19 @@ class Base(unittest2.TestCase):
                 "Don't know how to do cleanup with dictionary: " +
                 dictionary)
 
+    def invoke(self, obj, name, trace=False):
+        """Use reflection to call a method dynamically with no argument."""
+        trace = (True if traceAlways else trace)
+
+        method = getattr(obj, name)
+        import inspect
+        self.assertTrue(inspect.ismethod(method),
+                        name + "is a method name of object: " + str(obj))
+        result = method()
+        with recording(self, trace) as sbuf:
+            print(str(method) + ":", result, file=sbuf)
+        return result
+
     def getLLDBLibraryEnvVal(self):
         """ Returns the path that the OS-specific library search environment variable
             (self.dylibPath) should be set to in order for a program to find the LLDB
@@ -1781,6 +1807,12 @@ class Base(unittest2.TestCase):
             return ['libc++.so.1']
         else:
             return ['libc++.1.dylib', 'libc++abi.']
+
+    def run_platform_command(self, cmd):
+        platform = self.dbg.GetSelectedPlatform()
+        shell_command = lldb.SBPlatformShellCommand(cmd)
+        err = platform.Run(shell_command)
+        return (err, shell_command.GetStatus(), shell_command.GetOutput())
 
 # Metaclass for TestBase to change the list of test metods when a new TestCase is loaded.
 # We change the test methods to create a new test method for each test for each debug info we are
@@ -2615,19 +2647,6 @@ FileCheck output:
         value_check.check_value(self, eval_result, str(eval_result))
         return eval_result
 
-    def invoke(self, obj, name, trace=False):
-        """Use reflection to call a method dynamically with no argument."""
-        trace = (True if traceAlways else trace)
-
-        method = getattr(obj, name)
-        import inspect
-        self.assertTrue(inspect.ismethod(method),
-                        name + "is a method name of object: " + str(obj))
-        result = method()
-        with recording(self, trace) as sbuf:
-            print(str(method) + ":", result, file=sbuf)
-        return result
-
     def build(
             self,
             architecture=None,
@@ -2652,12 +2671,6 @@ FileCheck output:
             return self.buildGModules(architecture, compiler, dictionary)
         else:
             self.fail("Can't build for debug info: %s" % self.getDebugInfo())
-
-    def run_platform_command(self, cmd):
-        platform = self.dbg.GetSelectedPlatform()
-        shell_command = lldb.SBPlatformShellCommand(cmd)
-        err = platform.Run(shell_command)
-        return (err, shell_command.GetStatus(), shell_command.GetOutput())
 
     """Assert that an lldb.SBError is in the "success" state."""
     def assertSuccess(self, obj, msg=None):

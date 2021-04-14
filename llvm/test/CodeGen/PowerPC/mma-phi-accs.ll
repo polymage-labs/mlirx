@@ -6,7 +6,7 @@
 ; RUN:   -mcpu=pwr10 -ppc-asm-full-reg-names \
 ; RUN:   -ppc-vsr-nums-as-vr < %s | FileCheck %s --check-prefix=CHECK-BE
 
-declare <256 x i1> @llvm.ppc.mma.assemble.pair(<16 x i8>, <16 x i8>)
+declare <256 x i1> @llvm.ppc.vsx.assemble.pair(<16 x i8>, <16 x i8>)
 declare <512 x i1> @llvm.ppc.mma.xxsetaccz()
 declare <512 x i1> @llvm.ppc.mma.xvf64gerpp(<512 x i1>, <256 x i1>, <16 x i8>)
 declare { <16 x i8>, <16 x i8>, <16 x i8>, <16 x i8> } @llvm.ppc.mma.disassemble.acc(<512 x i1>)
@@ -17,17 +17,17 @@ define void @testPHI1(<16 x i8>* %Dst, <16 x i8>* %Src, i32 signext %Len) {
 ; CHECK-NEXT:    xxsetaccz acc0
 ; CHECK-NEXT:    blt cr0, .LBB0_3
 ; CHECK-NEXT:  # %bb.1: # %for.body.preheader
-; CHECK-NEXT:    clrldi r6, r5, 32
-; CHECK-NEXT:    addi r5, r4, 32
-; CHECK-NEXT:    addi r6, r6, -2
+; CHECK-NEXT:    clrldi r5, r5, 32
 ; CHECK-NEXT:    lxv vs4, 0(r4)
 ; CHECK-NEXT:    lxv vs5, 16(r4)
-; CHECK-NEXT:    mtctr r6
+; CHECK-NEXT:    addi r4, r4, 32
+; CHECK-NEXT:    addi r5, r5, -2
+; CHECK-NEXT:    mtctr r5
 ; CHECK-NEXT:    .p2align 4
 ; CHECK-NEXT:  .LBB0_2: # %for.body
 ; CHECK-NEXT:    #
-; CHECK-NEXT:    lxv vs6, 0(r5)
-; CHECK-NEXT:    addi r5, r5, 16
+; CHECK-NEXT:    lxv vs6, 0(r4)
+; CHECK-NEXT:    addi r4, r4, 16
 ; CHECK-NEXT:    xvf64gerpp acc0, vsp4, vs6
 ; CHECK-NEXT:    bdnz .LBB0_2
 ; CHECK-NEXT:  .LBB0_3: # %for.cond.cleanup
@@ -44,17 +44,17 @@ define void @testPHI1(<16 x i8>* %Dst, <16 x i8>* %Src, i32 signext %Len) {
 ; CHECK-BE-NEXT:    xxsetaccz acc0
 ; CHECK-BE-NEXT:    blt cr0, .LBB0_3
 ; CHECK-BE-NEXT:  # %bb.1: # %for.body.preheader
-; CHECK-BE-NEXT:    clrldi r6, r5, 32
-; CHECK-BE-NEXT:    addi r5, r4, 32
-; CHECK-BE-NEXT:    addi r6, r6, -2
+; CHECK-BE-NEXT:    clrldi r5, r5, 32
 ; CHECK-BE-NEXT:    lxv vs4, 0(r4)
 ; CHECK-BE-NEXT:    lxv vs5, 16(r4)
-; CHECK-BE-NEXT:    mtctr r6
+; CHECK-BE-NEXT:    addi r4, r4, 32
+; CHECK-BE-NEXT:    addi r5, r5, -2
+; CHECK-BE-NEXT:    mtctr r5
 ; CHECK-BE-NEXT:    .p2align 4
 ; CHECK-BE-NEXT:  .LBB0_2: # %for.body
 ; CHECK-BE-NEXT:    #
-; CHECK-BE-NEXT:    lxv vs6, 0(r5)
-; CHECK-BE-NEXT:    addi r5, r5, 16
+; CHECK-BE-NEXT:    lxv vs6, 0(r4)
+; CHECK-BE-NEXT:    addi r4, r4, 16
 ; CHECK-BE-NEXT:    xvf64gerpp acc0, vsp4, vs6
 ; CHECK-BE-NEXT:    bdnz .LBB0_2
 ; CHECK-BE-NEXT:  .LBB0_3: # %for.cond.cleanup
@@ -68,7 +68,7 @@ entry:
   %0 = load <16 x i8>, <16 x i8>* %Src, align 16
   %arrayidx1 = getelementptr inbounds <16 x i8>, <16 x i8>* %Src, i64 1
   %1 = load <16 x i8>, <16 x i8>* %arrayidx1, align 16
-  %2 = tail call <256 x i1> @llvm.ppc.mma.assemble.pair(<16 x i8> %0, <16 x i8> %1)
+  %2 = tail call <256 x i1> @llvm.ppc.vsx.assemble.pair(<16 x i8> %0, <16 x i8> %1)
   %3 = tail call <512 x i1> @llvm.ppc.mma.xxsetaccz()
   %cmp11 = icmp sgt i32 %Len, 2
   br i1 %cmp11, label %for.body.preheader, label %for.cond.cleanup
@@ -115,8 +115,8 @@ define dso_local void @testPHI2(<16 x i8>* %Dst, <16 x i8>* %Src, i32 signext %L
 ; CHECK-NEXT:    xvf64ger acc0, vsp4, vs6
 ; CHECK-NEXT:    blt cr0, .LBB1_3
 ; CHECK-NEXT:  # %bb.1: # %for.body.preheader
-; CHECK-NEXT:    addi r4, r4, 48
 ; CHECK-NEXT:    clrldi r5, r5, 32
+; CHECK-NEXT:    addi r4, r4, 48
 ; CHECK-NEXT:    addi r5, r5, -3
 ; CHECK-NEXT:    mtctr r5
 ; CHECK-NEXT:    .p2align 4
@@ -143,8 +143,8 @@ define dso_local void @testPHI2(<16 x i8>* %Dst, <16 x i8>* %Src, i32 signext %L
 ; CHECK-BE-NEXT:    xvf64ger acc0, vsp4, vs6
 ; CHECK-BE-NEXT:    blt cr0, .LBB1_3
 ; CHECK-BE-NEXT:  # %bb.1: # %for.body.preheader
-; CHECK-BE-NEXT:    addi r4, r4, 48
 ; CHECK-BE-NEXT:    clrldi r5, r5, 32
+; CHECK-BE-NEXT:    addi r4, r4, 48
 ; CHECK-BE-NEXT:    addi r5, r5, -3
 ; CHECK-BE-NEXT:    mtctr r5
 ; CHECK-BE-NEXT:    .p2align 4
@@ -165,7 +165,7 @@ entry:
   %0 = load <16 x i8>, <16 x i8>* %Src, align 16
   %arrayidx1 = getelementptr inbounds <16 x i8>, <16 x i8>* %Src, i64 1
   %1 = load <16 x i8>, <16 x i8>* %arrayidx1, align 16
-  %2 = tail call <256 x i1> @llvm.ppc.mma.assemble.pair(<16 x i8> %0, <16 x i8> %1)
+  %2 = tail call <256 x i1> @llvm.ppc.vsx.assemble.pair(<16 x i8> %0, <16 x i8> %1)
   %arrayidx2 = getelementptr inbounds <16 x i8>, <16 x i8>* %Src, i64 2
   %3 = load <16 x i8>, <16 x i8>* %arrayidx2, align 16
   %4 = tail call <512 x i1> @llvm.ppc.mma.xvf64ger(<256 x i1> %2, <16 x i8> %3)

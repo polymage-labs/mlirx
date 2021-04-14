@@ -41,7 +41,7 @@ Error TPCDynamicLibrarySearchGenerator::tryToGenerate(
 
   SymbolMap NewSymbols;
 
-  tpctypes::LookupRequest Request(H, LookupSymbols);
+  TargetProcessControl::LookupRequest Request(H, LookupSymbols);
   auto Result = TPC.lookupSymbols(Request);
   if (!Result)
     return Result.takeError();
@@ -55,7 +55,7 @@ Error TPCDynamicLibrarySearchGenerator::tryToGenerate(
     if (*ResultI)
       NewSymbols[KV.first] =
           JITEvaluatedSymbol(*ResultI, JITSymbolFlags::Exported);
-    ResultI++;
+    ++ResultI;
   }
 
   // If there were no resolved symbols bail out.

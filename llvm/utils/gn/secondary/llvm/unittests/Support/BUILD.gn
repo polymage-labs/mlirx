@@ -7,6 +7,7 @@ unittest("SupportTests") {
   ]
   sources = [
     "ARMAttributeParser.cpp",
+    "AlignOfTest.cpp",
     "AlignmentTest.cpp",
     "AllocatorTest.cpp",
     "AnnotationsTest.cpp",
@@ -43,6 +44,7 @@ unittest("SupportTests") {
     "GlobPatternTest.cpp",
     "Host.cpp",
     "IndexedAccessorTest.cpp",
+    "InstructionCostTest.cpp",
     "ItaniumManglingCanonicalizerTest.cpp",
     "JSONTest.cpp",
     "KnownBitsTest.cpp",
@@ -67,6 +69,7 @@ unittest("SupportTests") {
     "RegexTest.cpp",
     "ReplaceFileTest.cpp",
     "ReverseIterationTest.cpp",
+    "SHA256.cpp",
     "ScaledNumberTest.cpp",
     "SourceMgrTest.cpp",
     "SpecialCaseListTest.cpp",

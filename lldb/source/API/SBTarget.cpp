@@ -32,7 +32,6 @@
 #include "lldb/Breakpoint/BreakpointLocation.h"
 #include "lldb/Core/Address.h"
 #include "lldb/Core/AddressResolver.h"
-#include "lldb/Core/AddressResolverName.h"
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/Disassembler.h"
 #include "lldb/Core/Module.h"
@@ -782,6 +781,38 @@ SBBreakpoint SBTarget::BreakpointCreateByLocation(
     sb_bp = target_sp->CreateBreakpoint(
         module_list, *sb_file_spec, line, column, offset, check_inlines,
         skip_prologue, internal, hardware, move_to_nearest_code);
+  }
+
+  return LLDB_RECORD_RESULT(sb_bp);
+}
+
+SBBreakpoint SBTarget::BreakpointCreateByLocation(
+    const SBFileSpec &sb_file_spec, uint32_t line, uint32_t column,
+    lldb::addr_t offset, SBFileSpecList &sb_module_list,
+    bool move_to_nearest_code) {
+  LLDB_RECORD_METHOD(lldb::SBBreakpoint, SBTarget, BreakpointCreateByLocation,
+                     (const lldb::SBFileSpec &, uint32_t, uint32_t,
+                      lldb::addr_t, lldb::SBFileSpecList &, bool),
+                     sb_file_spec, line, column, offset, sb_module_list,
+                     move_to_nearest_code);
+
+  SBBreakpoint sb_bp;
+  TargetSP target_sp(GetSP());
+  if (target_sp && line != 0) {
+    std::lock_guard<std::recursive_mutex> guard(target_sp->GetAPIMutex());
+
+    const LazyBool check_inlines = eLazyBoolCalculate;
+    const LazyBool skip_prologue = eLazyBoolCalculate;
+    const bool internal = false;
+    const bool hardware = false;
+    const FileSpecList *module_list = nullptr;
+    if (sb_module_list.GetSize() > 0) {
+      module_list = sb_module_list.get();
+    }
+    sb_bp = target_sp->CreateBreakpoint(
+        module_list, *sb_file_spec, line, column, offset, check_inlines,
+        skip_prologue, internal, hardware,
+        move_to_nearest_code ? eLazyBoolYes : eLazyBoolNo);
   }
 
   return LLDB_RECORD_RESULT(sb_bp);
@@ -2378,6 +2409,21 @@ lldb::addr_t SBTarget::GetStackRedZoneSize() {
   return 0;
 }
 
+bool SBTarget::IsLoaded(const SBModule &module) const {
+  LLDB_RECORD_METHOD_CONST(bool, SBTarget, IsLoaded, (const lldb::SBModule &),
+                           module);
+
+  TargetSP target_sp(GetSP());
+  if (!target_sp)
+    return false;
+
+  ModuleSP module_sp(module.GetSP());
+  if (!module_sp)
+    return false;
+
+  return module_sp->IsLoadedInTarget(target_sp.get());
+}
+
 lldb::SBLaunchInfo SBTarget::GetLaunchInfo() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(lldb::SBLaunchInfo, SBTarget, GetLaunchInfo);
 
@@ -2489,6 +2535,9 @@ void RegisterMethods<SBTarget>(Registry &R) {
                        BreakpointCreateByLocation,
                        (const lldb::SBFileSpec &, uint32_t, uint32_t,
                         lldb::addr_t, lldb::SBFileSpecList &));
+  LLDB_REGISTER_METHOD(lldb::SBBreakpoint, SBTarget, BreakpointCreateByLocation,
+                       (const lldb::SBFileSpec &, uint32_t, uint32_t,
+                        lldb::addr_t, lldb::SBFileSpecList &, bool));
   LLDB_REGISTER_METHOD(lldb::SBBreakpoint, SBTarget, BreakpointCreateByName,
                        (const char *, const char *));
   LLDB_REGISTER_METHOD(lldb::SBBreakpoint, SBTarget, BreakpointCreateByName,
@@ -2647,6 +2696,8 @@ void RegisterMethods<SBTarget>(Registry &R) {
   LLDB_REGISTER_METHOD(lldb::SBValue, SBTarget, EvaluateExpression,
                        (const char *, const lldb::SBExpressionOptions &));
   LLDB_REGISTER_METHOD(lldb::addr_t, SBTarget, GetStackRedZoneSize, ());
+  LLDB_REGISTER_METHOD_CONST(bool, SBTarget, IsLoaded,
+                             (const lldb::SBModule &));
   LLDB_REGISTER_METHOD_CONST(lldb::SBLaunchInfo, SBTarget, GetLaunchInfo, ());
   LLDB_REGISTER_METHOD(void, SBTarget, SetLaunchInfo,
                        (const lldb::SBLaunchInfo &));

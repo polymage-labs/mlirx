@@ -12,9 +12,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "TestTypes.h"
+#include "TestDialect.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/Types.h"
 #include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -109,12 +112,150 @@ static llvm::hash_code mlir::test::hash_value(const FieldInfo &fi) { // NOLINT
 }
 
 // Example type validity checker.
-LogicalResult TestIntegerType::verifyConstructionInvariants(
-    Location loc, TestIntegerType::SignednessSemantics ss, unsigned int width) {
+LogicalResult
+TestIntegerType::verify(function_ref<InFlightDiagnostic()> emitError,
+                        unsigned width,
+                        TestIntegerType::SignednessSemantics ss) {
   if (width > 8)
     return failure();
   return success();
 }
 
+//===----------------------------------------------------------------------===//
+// Tablegen Generated Definitions
+//===----------------------------------------------------------------------===//
+
 #define GET_TYPEDEF_CLASSES
 #include "TestTypeDefs.cpp.inc"
+
+LogicalResult TestTypeWithLayout::verifyEntries(DataLayoutEntryListRef params,
+                                                Location loc) const {
+  for (DataLayoutEntryInterface entry : params) {
+    // This is for testing purposes only, so assert well-formedness.
+    assert(entry.isTypeEntry() && "unexpected identifier entry");
+    assert(entry.getKey().get<Type>().isa<TestTypeWithLayout>() &&
+           "wrong type passed in");
+    auto array = entry.getValue().dyn_cast<ArrayAttr>();
+    assert(array && array.getValue().size() == 2 &&
+           "expected array of two elements");
+    auto kind = array.getValue().front().dyn_cast<StringAttr>();
+    (void)kind;
+    assert(kind &&
+           (kind.getValue() == "size" || kind.getValue() == "alignment" ||
+            kind.getValue() == "preferred") &&
+           "unexpected kind");
+    assert(array.getValue().back().isa<IntegerAttr>());
+  }
+  return success();
+}
+
+unsigned TestTypeWithLayout::extractKind(DataLayoutEntryListRef params,
+                                         StringRef expectedKind) const {
+  for (DataLayoutEntryInterface entry : params) {
+    ArrayRef<Attribute> pair = entry.getValue().cast<ArrayAttr>().getValue();
+    StringRef kind = pair.front().cast<StringAttr>().getValue();
+    if (kind == expectedKind)
+      return pair.back().cast<IntegerAttr>().getValue().getZExtValue();
+  }
+  return 1;
+}
+
+//===----------------------------------------------------------------------===//
+// TestDialect
+//===----------------------------------------------------------------------===//
+
+void TestDialect::registerTypes() {
+  addTypes<TestType, TestTypeWithLayout, TestRecursiveType,
+#define GET_TYPEDEF_LIST
+#include "TestTypeDefs.cpp.inc"
+           >();
+}
+
+static Type parseTestType(MLIRContext *ctxt, DialectAsmParser &parser,
+                          llvm::SetVector<Type> &stack) {
+  StringRef typeTag;
+  if (failed(parser.parseKeyword(&typeTag)))
+    return Type();
+
+  {
+    Type genType;
+    auto parseResult = generatedTypeParser(ctxt, parser, typeTag, genType);
+    if (parseResult.hasValue())
+      return genType;
+  }
+  if (typeTag == "test_type")
+    return TestType::get(parser.getBuilder().getContext());
+
+  if (typeTag == "test_type_with_layout") {
+    unsigned val;
+    if (parser.parseLess() || parser.parseInteger(val) ||
+        parser.parseGreater()) {
+      return Type();
+    }
+    return TestTypeWithLayout::get(parser.getBuilder().getContext(), val);
+  }
+
+  if (typeTag != "test_rec") {
+    parser.emitError(parser.getNameLoc()) << "unknown type!";
+    return Type();
+  }
+
+  StringRef name;
+  if (parser.parseLess() || parser.parseKeyword(&name))
+    return Type();
+  auto rec = TestRecursiveType::get(parser.getBuilder().getContext(), name);
+
+  // If this type already has been parsed above in the stack, expect just the
+  // name.
+  if (stack.contains(rec)) {
+    if (failed(parser.parseGreater()))
+      return Type();
+    return rec;
+  }
+
+  // Otherwise, parse the body and update the type.
+  if (failed(parser.parseComma()))
+    return Type();
+  stack.insert(rec);
+  Type subtype = parseTestType(ctxt, parser, stack);
+  stack.pop_back();
+  if (!subtype || failed(parser.parseGreater()) || failed(rec.setBody(subtype)))
+    return Type();
+
+  return rec;
+}
+
+Type TestDialect::parseType(DialectAsmParser &parser) const {
+  llvm::SetVector<Type> stack;
+  return parseTestType(getContext(), parser, stack);
+}
+
+static void printTestType(Type type, DialectAsmPrinter &printer,
+                          llvm::SetVector<Type> &stack) {
+  if (succeeded(generatedTypePrinter(type, printer)))
+    return;
+  if (type.isa<TestType>()) {
+    printer << "test_type";
+    return;
+  }
+
+  if (auto t = type.dyn_cast<TestTypeWithLayout>()) {
+    printer << "test_type_with_layout<" << t.getKey() << ">";
+    return;
+  }
+
+  auto rec = type.cast<TestRecursiveType>();
+  printer << "test_rec<" << rec.getName();
+  if (!stack.contains(rec)) {
+    printer << ", ";
+    stack.insert(rec);
+    printTestType(rec.getBody(), printer, stack);
+    stack.pop_back();
+  }
+  printer << ">";
+}
+
+void TestDialect::printType(Type type, DialectAsmPrinter &printer) const {
+  llvm::SetVector<Type> stack;
+  printTestType(type, printer, stack);
+}

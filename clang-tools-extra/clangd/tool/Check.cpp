@@ -26,6 +26,7 @@
 
 #include "ClangdLSPServer.h"
 #include "CodeComplete.h"
+#include "Config.h"
 #include "GlobalCompilationDatabase.h"
 #include "Hover.h"
 #include "ParsedAST.h"
@@ -90,11 +91,13 @@ public:
       : File(File), Opts(Opts) {}
 
   // Read compilation database and choose a compile command for the file.
-  bool buildCommand() {
+  bool buildCommand(const ThreadsafeFS &TFS) {
     log("Loading compilation database...");
+    DirectoryBasedGlobalCompilationDatabase::Options CDBOpts(TFS);
+    CDBOpts.CompileCommandsDir =
+        Config::current().CompileFlags.CDBSearch.FixedCDBPath;
     std::unique_ptr<GlobalCompilationDatabase> BaseCDB =
-        std::make_unique<DirectoryBasedGlobalCompilationDatabase>(
-            Opts.CompileCommandsDir);
+        std::make_unique<DirectoryBasedGlobalCompilationDatabase>(CDBOpts);
     BaseCDB = getQueryDriverDatabase(llvm::makeArrayRef(Opts.QueryDriverGlobs),
                                      std::move(BaseCDB));
     auto Mangler = CommandMangler::detect();
@@ -106,10 +109,10 @@ public:
 
     if (auto TrueCmd = CDB->getCompileCommand(File)) {
       Cmd = std::move(*TrueCmd);
-      log("Compile command from CDB is: {0}", llvm::join(Cmd.CommandLine, " "));
+      log("Compile command from CDB is: {0}", printArgv(Cmd.CommandLine));
     } else {
       Cmd = CDB->getFallbackCommand(File);
-      log("Generic fallback command is: {0}", llvm::join(Cmd.CommandLine, " "));
+      log("Generic fallback command is: {0}", printArgv(Cmd.CommandLine));
     }
 
     return true;
@@ -122,6 +125,7 @@ public:
     std::vector<std::string> CC1Args;
     Inputs.CompileCommand = Cmd;
     Inputs.TFS = &TFS;
+    Inputs.ClangTidyProvider = Opts.ClangTidyProvider;
     if (Contents.hasValue()) {
       Inputs.Contents = *Contents;
       log("Imaginary source file contents:\n{0}", Inputs.Contents);
@@ -138,7 +142,7 @@ public:
         buildCompilerInvocation(Inputs, CaptureInvocationDiags, &CC1Args);
     auto InvocationDiags = CaptureInvocationDiags.take();
     ErrCount += showErrors(InvocationDiags);
-    log("internal (cc1) args are: {0}", llvm::join(CC1Args, " "));
+    log("internal (cc1) args are: {0}", printArgv(CC1Args));
     if (!Invocation) {
       elog("Failed to parse command line");
       return false;
@@ -177,7 +181,7 @@ public:
       elog("Failed to build AST");
       return false;
     }
-    ErrCount += showErrors(llvm::makeArrayRef(AST->getDiagnostics())
+    ErrCount += showErrors(llvm::makeArrayRef(*AST->getDiagnostics())
                                .drop_front(Preamble->Diags.size()));
 
     if (Opts.BuildDynamicSymbolIndex) {
@@ -243,8 +247,12 @@ bool check(llvm::StringRef File, const ThreadsafeFS &TFS,
   }
   log("Testing on source file {0}", File);
 
+  auto ContextProvider = ClangdServer::createConfiguredContextProvider(
+      Opts.ConfigProvider, nullptr);
+  WithContext Ctx(ContextProvider(""));
   Checker C(File, Opts);
-  if (!C.buildCommand() || !C.buildInvocation(TFS, Contents) || !C.buildAST())
+  if (!C.buildCommand(TFS) || !C.buildInvocation(TFS, Contents) ||
+      !C.buildAST())
     return false;
   C.testLocationFeatures();
 

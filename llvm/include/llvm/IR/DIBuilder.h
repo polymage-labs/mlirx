@@ -538,6 +538,18 @@ namespace llvm {
         uint64_t SizeInBits, uint32_t AlignInBits, DINodeArray Elements,
         DIType *UnderlyingType, StringRef UniqueIdentifier = "", bool IsScoped = false);
 
+    /// Create debugging information entry for a set.
+    /// \param Scope          Scope in which this set is defined.
+    /// \param Name           Set name.
+    /// \param File           File where this set is defined.
+    /// \param LineNumber     Line number.
+    /// \param SizeInBits     Set size.
+    /// \param AlignInBits    Set alignment.
+    /// \param Ty             Base type of the set.
+    DIDerivedType *createSetType(DIScope *Scope, StringRef Name, DIFile *File,
+                                 unsigned LineNo, uint64_t SizeInBits,
+                                 uint32_t AlignInBits, DIType *Ty);
+
     /// Create subroutine type.
     /// \param ParameterTypes  An array of subroutine parameter types. This
     ///                        includes return type at 0th index.
@@ -772,14 +784,18 @@ namespace llvm {
     ///                    definitions as they would appear on a command line.
     /// \param IncludePath The path to the module map file.
     /// \param APINotesFile The path to an API notes file for this module.
-    /// \param File        Source file of the module declaration. Used for
-    ///                    Fortran modules.
-    /// \param LineNo      Source line number of the  module declaration.
+    /// \param File        Source file of the module.
     ///                    Used for Fortran modules.
+    /// \param LineNo      Source line number of the module.
+    ///                    Used for Fortran modules.
+    /// \param IsDecl      This is a module declaration; default to false;
+    ///                    when set to true, only Scope and Name are required
+    ///                    as this entry is just a hint for the debugger to find
+    ///                    the corresponding definition in the global scope.
     DIModule *createModule(DIScope *Scope, StringRef Name,
                            StringRef ConfigurationMacros, StringRef IncludePath,
                            StringRef APINotesFile = {}, DIFile *File = nullptr,
-                           unsigned LineNo = 0);
+                           unsigned LineNo = 0, bool IsDecl = false);
 
     /// This creates a descriptor for a lexical block with a new file
     /// attached. This merely extends the existing

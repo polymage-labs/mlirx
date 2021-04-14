@@ -16,6 +16,7 @@
 
 #include "Opts.inc"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Config/config.h"
 #include "llvm/DebugInfo/Symbolize/DIPrinter.h"
 #include "llvm/DebugInfo/Symbolize/Symbolize.h"
 #include "llvm/Option/Arg.h"
@@ -180,7 +181,12 @@ static void symbolizeInput(const opt::InputArgList &Args, uint64_t AdjustVMA,
     // the topmost function, which suits our needs better.
     auto ResOrErr = Symbolizer.symbolizeInlinedCode(
         ModuleName, {Offset, object::SectionedAddress::UndefSection});
-    Printer << (error(ResOrErr) ? DILineInfo() : ResOrErr.get().getFrame(0));
+    if (!ResOrErr || ResOrErr->getNumberOfFrames() == 0) {
+      error(ResOrErr);
+      Printer << DILineInfo();
+    } else {
+      Printer << ResOrErr->getFrame(0);
+    }
   } else {
     auto ResOrErr = Symbolizer.symbolizeCode(
         ModuleName, {Offset, object::SectionedAddress::UndefSection});
@@ -328,10 +334,8 @@ int main(int argc, char **argv) {
     while (fgets(InputString, sizeof(InputString), stdin)) {
       // Strip newline characters.
       std::string StrippedInputString(InputString);
-      StrippedInputString.erase(
-          std::remove_if(StrippedInputString.begin(), StrippedInputString.end(),
-                         [](char c) { return c == '\r' || c == '\n'; }),
-          StrippedInputString.end());
+      llvm::erase_if(StrippedInputString,
+                     [](char c) { return c == '\r' || c == '\n'; });
       symbolizeInput(Args, AdjustVMA, IsAddr2Line, OutputStyle,
                      StrippedInputString, Symbolizer, Printer);
       outs().flush();

@@ -715,7 +715,7 @@ std::string yaml::escape(StringRef Input, bool EscapePrintable) {
         // Found invalid char.
         SmallString<4> Val;
         encodeUTF8(0xFFFD, Val);
-        EscapedInput.insert(EscapedInput.end(), Val.begin(), Val.end());
+        llvm::append_range(EscapedInput, Val);
         // FIXME: Error reporting.
         return EscapedInput;
       }
@@ -744,6 +744,92 @@ std::string yaml::escape(StringRef Input, bool EscapePrintable) {
       EscapedInput.push_back(*i);
   }
   return EscapedInput;
+}
+
+llvm::Optional<bool> yaml::parseBool(StringRef S) {
+  switch (S.size()) {
+  case 1:
+    switch (S.front()) {
+    case 'y':
+    case 'Y':
+      return true;
+    case 'n':
+    case 'N':
+      return false;
+    default:
+      return None;
+    }
+  case 2:
+    switch (S.front()) {
+    case 'O':
+      if (S[1] == 'N') // ON
+        return true;
+      LLVM_FALLTHROUGH;
+    case 'o':
+      if (S[1] == 'n') //[Oo]n
+        return true;
+      return None;
+    case 'N':
+      if (S[1] == 'O') // NO
+        return false;
+      LLVM_FALLTHROUGH;
+    case 'n':
+      if (S[1] == 'o') //[Nn]o
+        return false;
+      return None;
+    default:
+      return None;
+    }
+  case 3:
+    switch (S.front()) {
+    case 'O':
+      if (S.drop_front() == "FF") // OFF
+        return false;
+      LLVM_FALLTHROUGH;
+    case 'o':
+      if (S.drop_front() == "ff") //[Oo]ff
+        return false;
+      return None;
+    case 'Y':
+      if (S.drop_front() == "ES") // YES
+        return true;
+      LLVM_FALLTHROUGH;
+    case 'y':
+      if (S.drop_front() == "es") //[Yy]es
+        return true;
+      return None;
+    default:
+      return None;
+    }
+  case 4:
+    switch (S.front()) {
+    case 'T':
+      if (S.drop_front() == "RUE") // TRUE
+        return true;
+      LLVM_FALLTHROUGH;
+    case 't':
+      if (S.drop_front() == "rue") //[Tt]rue
+        return true;
+      return None;
+    default:
+      return None;
+    }
+  case 5:
+    switch (S.front()) {
+    case 'F':
+      if (S.drop_front() == "ALSE") // FALSE
+        return false;
+      LLVM_FALLTHROUGH;
+    case 'f':
+      if (S.drop_front() == "alse") //[Ff]alse
+        return false;
+      return None;
+    default:
+      return None;
+    }
+  default:
+    return None;
+  }
 }
 
 Scanner::Scanner(StringRef Input, SourceMgr &sm, bool ShowColors,
@@ -895,17 +981,9 @@ void Scanner::advanceWhile(SkipWhileFunc Func) {
   Current = Final;
 }
 
-static bool is_ns_hex_digit(const char C) {
-  return    (C >= '0' && C <= '9')
-         || (C >= 'a' && C <= 'z')
-         || (C >= 'A' && C <= 'Z');
-}
+static bool is_ns_hex_digit(const char C) { return isAlnum(C); }
 
-static bool is_ns_word_char(const char C) {
-  return    C == '-'
-         || (C >= 'a' && C <= 'z')
-         || (C >= 'A' && C <= 'Z');
-}
+static bool is_ns_word_char(const char C) { return C == '-' || isAlpha(C); }
 
 void Scanner::scan_ns_uri_char() {
   while (true) {
@@ -1774,7 +1852,11 @@ Stream::~Stream() = default;
 bool Stream::failed() { return scanner->failed(); }
 
 void Stream::printError(Node *N, const Twine &Msg, SourceMgr::DiagKind Kind) {
-  SMRange Range = N ? N->getSourceRange() : SMRange();
+  printError(N ? N->getSourceRange() : SMRange(), Msg, Kind);
+}
+
+void Stream::printError(const SMRange &Range, const Twine &Msg,
+                        SourceMgr::DiagKind Kind) {
   scanner->printError(Range.Start, Kind, Msg, Range);
 }
 
@@ -1894,11 +1976,11 @@ StringRef ScalarNode::getValue(SmallVectorImpl<char> &Storage) const {
       Storage.reserve(UnquotedValue.size());
       for (; i != StringRef::npos; i = UnquotedValue.find('\'')) {
         StringRef Valid(UnquotedValue.begin(), i);
-        Storage.insert(Storage.end(), Valid.begin(), Valid.end());
+        llvm::append_range(Storage, Valid);
         Storage.push_back('\'');
         UnquotedValue = UnquotedValue.substr(i + 2);
       }
-      Storage.insert(Storage.end(), UnquotedValue.begin(), UnquotedValue.end());
+      llvm::append_range(Storage, UnquotedValue);
       return StringRef(Storage.begin(), Storage.size());
     }
     return UnquotedValue;
@@ -1917,7 +1999,7 @@ StringRef ScalarNode::unescapeDoubleQuoted( StringRef UnquotedValue
   for (; i != StringRef::npos; i = UnquotedValue.find_first_of("\\\r\n")) {
     // Insert all previous chars into Storage.
     StringRef Valid(UnquotedValue.begin(), i);
-    Storage.insert(Storage.end(), Valid.begin(), Valid.end());
+    llvm::append_range(Storage, Valid);
     // Chop off inserted chars.
     UnquotedValue = UnquotedValue.substr(i);
 
@@ -2049,7 +2131,7 @@ StringRef ScalarNode::unescapeDoubleQuoted( StringRef UnquotedValue
       UnquotedValue = UnquotedValue.substr(1);
     }
   }
-  Storage.insert(Storage.end(), UnquotedValue.begin(), UnquotedValue.end());
+  llvm::append_range(Storage, UnquotedValue);
   return StringRef(Storage.begin(), Storage.size());
 }
 

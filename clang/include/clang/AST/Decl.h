@@ -579,6 +579,16 @@ public:
     AnonOrFirstNamespaceAndInline.setInt(Inline);
   }
 
+  /// Returns true if the inline qualifier for \c Name is redundant.
+  bool isRedundantInlineQualifierFor(DeclarationName Name) const {
+    if (!isInline())
+      return false;
+    auto X = lookup(Name);
+    auto Y = getParent()->lookup(Name);
+    return std::distance(X.begin(), X.end()) ==
+      std::distance(Y.begin(), Y.end());
+  }
+
   /// Get the original (first) namespace declaration.
   NamespaceDecl *getOriginalNamespace();
 
@@ -1262,6 +1272,9 @@ public:
   /// constant expression, according to the relevant language standard.
   /// This only checks properties of the declaration, and does not check
   /// whether the initializer is in fact a constant expression.
+  ///
+  /// This corresponds to C++20 [expr.const]p3's notion of a
+  /// "potentially-constant" variable.
   bool mightBeUsableInConstantExpressions(const ASTContext &C) const;
 
   /// Determine whether this variable's value can be used in a
@@ -1660,6 +1673,9 @@ public:
   bool isObjCMethodParameter() const {
     return ParmVarDeclBits.IsObjCMethodParam;
   }
+
+  /// Determines whether this parameter is destroyed in the callee function.
+  bool isDestroyedInCallee() const;
 
   unsigned getFunctionScopeDepth() const {
     if (ParmVarDeclBits.IsObjCMethodParam) return 0;

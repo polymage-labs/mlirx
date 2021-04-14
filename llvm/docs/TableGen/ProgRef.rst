@@ -194,11 +194,11 @@ numeric literal rather than an identifier.
 TableGen has the following reserved keywords, which cannot be used as
 identifiers::
 
-   bit        bits          class         code          dag
-   def        else          false         foreach       defm
-   defset     defvar        field         if            in
-   include    int           let           list          multiclass
-   string     then          true
+   assert     bit           bits          class         code
+   dag        def           else          false         foreach
+   defm       defset        defvar        field         if
+   in         include       int           let           list
+   multiclass string        then          true
 
 .. warning::
   The ``field`` reserved word is deprecated.
@@ -216,7 +216,8 @@ TableGen provides "bang operators" that have a wide variety of uses:
                : !interleave !isa         !le          !listconcat  !listsplat
                : !lt         !mul         !ne          !not         !or
                : !setdagop   !shl         !size        !sra         !srl
-               : !strconcat  !sub         !subst       !tail        !xor
+               : !strconcat  !sub         !subst       !substr      !tail
+               : !xor
 
 The ``!cond`` operator has a slightly different
 syntax compared to other bang operators, so it is defined separately:
@@ -298,7 +299,7 @@ wide range of records conveniently and compactly.
 :token:`ClassID`
     Specifying a class name in a type context indicates
     that the type of the defined value must
-    be a subclass of the specified class.  This is useful in conjunction with
+    be a subclass of the specified class. This is useful in conjunction with
     the ``list`` type; for example, to constrain the elements of the list to a
     common base class (e.g., a ``list<Register>`` can only contain definitions
     derived from the ``Register`` class).
@@ -508,7 +509,7 @@ primary value. Here are the possible suffixes for some primary *value*.
 The paste operator
 ------------------
 
-The paste operator (``#``) is the only infix operator availabe in TableGen
+The paste operator (``#``) is the only infix operator available in TableGen
 expressions. It allows you to concatenate strings or lists, but has a few
 unusual features.
 
@@ -535,8 +536,8 @@ files.
 
 .. productionlist::
    TableGenFile: `Statement`*
-   Statement: `Class` | `Def` | `Defm` | `Defset` | `Defvar` | `Foreach`
-            :| `If` | `Let` | `MultiClass`
+   Statement: `Assert` | `Class` | `Def` | `Defm` | `Defset` | `Defvar`
+            :| `Foreach` | `If` | `Let` | `MultiClass`
 
 The following sections describe each of these top-level statements. 
 
@@ -553,19 +554,22 @@ classes and records can inherit.
    TemplateArgDecl: `Type` `TokIdentifier` ["=" `Value`]
 
 A class can be parameterized by a list of "template arguments," whose values
-can be used in the class's record body.  These template arguments are
+can be used in the class's record body. These template arguments are
 specified each time the class is inherited by another class or record.
 
 If a template argument is not assigned a default value with ``=``, it is
 uninitialized (has the "value" ``?``) and must be specified in the template
-argument list when the class is inherited. If an argument is assigned a
-default value, then it need not be specified in the argument list. The
-template argument default values are evaluated from left to right.
+argument list when the class is inherited (required argument). If an
+argument is assigned a default value, then it need not be specified in the
+argument list (optional argument). In the declaration, all required template
+arguments must precede any optional arguments. The template argument default
+values are evaluated from left to right.
 
 The :token:`RecordBody` is defined below. It can include a list of
-superclasses from which the current class inherits, along with field definitions
-and other statements. When a class ``C`` inherits from another class ``D``,
-the fields of ``D`` are effectively merged into the fields of ``C``.
+superclasses from which the current class inherits, along with field
+definitions and other statements. When a class ``C`` inherits from another
+class ``D``, the fields of ``D`` are effectively merged into the fields of
+``C``.
 
 A given class can only be defined once. A ``class`` statement is
 considered to define the class if *any* of the following are true (the
@@ -604,7 +608,7 @@ of the fields of the class or record.
    RecordBody: `ParentClassList` `Body`
    ParentClassList: [":" `ParentClassListNE`]
    ParentClassListNE: `ClassRef` ("," `ClassRef`)*
-   ClassRef: (`ClassID` | `MultiClassID`) ["<" `ValueList` ">"]
+   ClassRef: (`ClassID` | `MultiClassID`) ["<" [`ValueList`] ">"]
 
 A :token:`ParentClassList` containing a :token:`MultiClassID` is valid only
 in the class list of a ``defm`` statement. In that case, the ID must be the
@@ -615,6 +619,7 @@ name of a multiclass.
    BodyItem: (`Type` | "code") `TokIdentifier` ["=" `Value`] ";"
            :| "let" `TokIdentifier` ["{" `RangeList` "}"] "=" `Value` ";"
            :| "defvar" `TokIdentifier` "=" `Value` ";"
+           :| `Assert`
 
 A field definition in the body specifies a field to be included in the class
 or record. If no initial value is specified, then the field's value is
@@ -1246,6 +1251,52 @@ when the bodies are finished (see `Defvar in a Record Body`_ for more details).
 The ``if`` statement can also be used in a record :token:`Body`.
 
 
+``assert`` --- check that a condition is true
+---------------------------------------------
+
+The ``assert`` statement checks a boolean condition to be sure that it is true
+and prints an error message if it is not.
+
+.. productionlist::
+   Assert: "assert" `condition` "," `message` ";"
+
+If the boolean condition is true, the statement does nothing. If the
+condition is false, it prints a nonfatal error message. The **message**, which
+can be an arbitrary string expression, is included in the error message as a
+note. The exact behavior of the ``assert`` statement depends on its
+placement.
+
+* At top level, the assertion is checked immediately.
+
+* In a record definition, the statement is saved and all assertions are
+  checked after the record is completely built.
+
+* In a class definition, the assertions are saved and inherited by all
+  the subclasses and records that inherit from the class. The assertions are
+  then checked when the records are completely built.
+
+* In a multiclass definition, ... [this placement is not yet available]
+
+Using assertions in TableGen files can simplify record checking in TableGen
+backends. Here is an example of an ``assert`` in two class definitions.
+
+.. code-block:: text
+
+  class PersonName<string name> {
+    assert !le(!size(name), 32), "person name is too long: " # name;
+    string Name = name;
+  }
+
+  class Person<string name, int age> : PersonName<name> {
+    assert !and(!ge(age, 1), !le(age, 120)), "person age is invalid: " # age;
+    int Age = age;
+  }
+
+  def Rec20 : Person<"Donald Knuth", 60> {
+    ...
+  }
+
+
 Additional Details
 ==================
 
@@ -1722,6 +1773,13 @@ and non-0 as true.
     The *value* can be a record name, in which case the operator produces the *repl*
     record if the *target* record name equals the *value* record name; otherwise it
     produces the *value*.
+
+``!substr(``\ *string*\ ``,`` *start*\ [``,`` *length*]\ ``)``
+    This operator extracts a substring of the given *string*. The starting
+    position of the substring is specified by *start*, which can range
+    between 0 and the length of the string. The length of the substring
+    is specified by *length*; if not specified, the rest of the string is
+    extracted. The *start* and *length* arguments must be integers.
 
 ``!tail(``\ *a*\ ``)``
     This operator produces a new list with all the elements

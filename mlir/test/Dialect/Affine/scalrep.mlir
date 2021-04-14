@@ -3,7 +3,7 @@
 // Replacement within the innermost loop body.
 // CHECK-LABEL: func @load_replace
 func @load_replace() -> memref<100xf32> {
-  %A = alloc() : memref<100xf32>
+  %A = memref.alloc() : memref<100xf32>
   affine.for %i = 0 to 100 {
     %u = affine.load %A[%i] : memref<100xf32>
     %v = affine.load %A[%i] : memref<100xf32>
@@ -24,7 +24,7 @@ func @load_replace() -> memref<100xf32> {
 // Replacement + hoisting from the innermost loop.
 // CHECK-LABEL: func @load_hoist
 func @load_hoist() -> memref<100xf32> {
-  %A = alloc() : memref<100xf32>
+  %A = memref.alloc() : memref<100xf32>
   affine.for %i = 0 to 100 {
     affine.for %j = 0 to 100 {
       %u = affine.load %A[%i] : memref<100xf32>
@@ -50,11 +50,11 @@ func @load_hoist() -> memref<100xf32> {
 // single element memref to hold the scalar) - typical for reductions.
 // CHECK-LABEL: func @reduction
 func @reduction(%B : memref<100x101xf32>) -> memref<100xf32> {
-  %A = alloc() : memref<100xf32>
+  %A = memref.alloc() : memref<100xf32>
   %cf0 = constant 0.0 : f32
 
   affine.for %i = 0 to 100 {
-    store %cf0, %A[%i] : memref<100xf32>
+    memref.store %cf0, %A[%i] : memref<100xf32>
     affine.for %j = 0 to 100 {
       %a = affine.load %A[%i] : memref<100xf32>
       %b = affine.load %B[%i, %j] : memref<100x101xf32>
@@ -67,8 +67,8 @@ func @reduction(%B : memref<100x101xf32>) -> memref<100xf32> {
   return %A : memref<100xf32>
 }
 // CHECK:         affine.for %arg1 = 0 to 100 {
-// CHECK:           store %cst, %0[%arg1] : memref<100xf32>
-// CHECK-NEXT:      [[SCALBUF:%[0-9]+]] = alloca() : memref<1xf32>
+// CHECK:           memref.store %cst, %0[%arg1] : memref<100xf32>
+// CHECK-NEXT:      [[SCALBUF:%[0-9]+]] = memref.alloca() : memref<1xf32>
 // CHECK-NEXT:      %{{.*}} = affine.load %0[%arg1] : memref<100xf32>
 // CHECK-NEXT:      affine.store %{{.*}}, [[SCALBUF]][%c0{{.*}}] : memref<1xf32>
 // CHECK-NEXT:      affine.for %arg2 = 0 to 100 {
@@ -90,7 +90,7 @@ func @reduction(%B : memref<100x101xf32>) -> memref<100xf32> {
 // memref's which will subsequently be replaced by virtual registers).
 // CHECK-LABEL: func @abc
 func @abc(%B : memref<100x100xf32>) -> memref<100xf32> {
-  %A = alloc() : memref<100xf32>
+  %A = memref.alloc() : memref<100xf32>
   %cf0 = constant 0.0 : f32
 
   affine.for %i = 0 to 100 step 2 {
@@ -112,9 +112,9 @@ func @abc(%B : memref<100x100xf32>) -> memref<100xf32> {
 // CHECK:         affine.for %arg1 = 0 to 100 step 2 {
 // CHECK-NEXT:      affine.store %cst, %0[%arg1] : memref<100xf32>
 // CHECK-NEXT:      affine.store %cst, %0[%arg1 + 1] : memref<100xf32>
-// CHECK-NEXT:      [[SCALBUF1:%[0-9]+]] = alloca() : memref<1xf32>
+// CHECK-NEXT:      [[SCALBUF1:%[0-9]+]] = memref.alloca() : memref<1xf32>
 // CHECK-NEXT:      affine.store %cst, [[SCALBUF1]][%c0{{.*}}] : memref<1xf32>
-// CHECK-NEXT:      [[SCALBUF2:%[0-9]+]] = alloca() : memref<1xf32>
+// CHECK-NEXT:      [[SCALBUF2:%[0-9]+]] = memref.alloca() : memref<1xf32>
 // CHECK-NEXT:      affine.store %cst, [[SCALBUF2]][%c0{{.*}}] : memref<1xf32>
 // CHECK-NEXT:      affine.for %arg2 = 0 to 100 {
 // CHECK-NEXT:        affine.load [[SCALBUF1]][0] : memref<1xf32>
@@ -241,7 +241,7 @@ func @escaping_use(%A : memref<100 x f32>, %M : index, %N : index) {
 // The value loaded from %in can directly be stored to %out by eliminating
 // store and load from %tmp.
 func @vector_forwarding(%in : memref<512xf32>, %out : memref<512xf32>) {
-  %tmp = alloc() : memref<512xf32>
+  %tmp = memref.alloc() : memref<512xf32>
   affine.for %i = 0 to 16 {
     %ld0 = affine.vector_load %in[32*%i] : memref<512xf32>, vector<32xf32>
     affine.vector_store %ld0, %tmp[32*%i] : memref<512xf32>, vector<32xf32>

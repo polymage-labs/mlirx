@@ -27,6 +27,7 @@
 #include "llvm/Support/VersionTuple.h"
 #include "llvm/Target/TargetOptions.h"
 #include <cassert>
+#include <climits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -165,6 +166,10 @@ private:
     EffectiveTriple = std::move(ET);
   }
 
+  mutable llvm::Optional<CXXStdlibType> cxxStdlibType;
+  mutable llvm::Optional<RuntimeLibType> runtimeLibType;
+  mutable llvm::Optional<UnwindLibType> unwindLibType;
+
 protected:
   MultilibSet Multilibs;
   Multilib SelectedMultilib;
@@ -178,6 +183,11 @@ protected:
   virtual Tool *buildLinker() const;
   virtual Tool *buildStaticLibTool() const;
   virtual Tool *getTool(Action::ActionClass AC) const;
+
+  virtual std::string buildCompilerRTBasename(const llvm::opt::ArgList &Args,
+                                              StringRef Component,
+                                              FileType Type,
+                                              bool AddArch) const;
 
   /// \name Utilities for implementing subclasses.
   ///@{
@@ -427,10 +437,9 @@ public:
   getCompilerRTArgString(const llvm::opt::ArgList &Args, StringRef Component,
                          FileType Type = ToolChain::FT_Static) const;
 
-  virtual std::string
-  getCompilerRTBasename(const llvm::opt::ArgList &Args, StringRef Component,
-                        FileType Type = ToolChain::FT_Static,
-                        bool AddArch = true) const;
+  std::string getCompilerRTBasename(const llvm::opt::ArgList &Args,
+                                    StringRef Component,
+                                    FileType Type = ToolChain::FT_Static) const;
 
   // Returns target specific runtime path if it exists.
   virtual Optional<std::string> getRuntimePath() const;
@@ -454,6 +463,12 @@ public:
   /// IsUnwindTablesDefault - Does this tool chain use -funwind-tables
   /// by default.
   virtual bool IsUnwindTablesDefault(const llvm::opt::ArgList &Args) const;
+
+  /// Test whether this toolchain supports outline atomics by default.
+  virtual bool
+  IsAArch64OutlineAtomicsDefault(const llvm::opt::ArgList &Args) const {
+    return false;
+  }
 
   /// Test whether this toolchain defaults to PIC.
   virtual bool isPICDefault() const = 0;
@@ -488,6 +503,11 @@ public:
   // Return the DWARF version to emit, in the absence of arguments
   // to the contrary.
   virtual unsigned GetDefaultDwarfVersion() const { return 4; }
+
+  // Some toolchains may have different restrictions on the DWARF version and
+  // may need to adjust it. E.g. NVPTX may need to enforce DWARF2 even when host
+  // compilation uses DWARF5.
+  virtual unsigned getMaxDwarfVersion() const { return UINT_MAX; }
 
   // True if the driver should assume "-fstandalone-debug"
   // in the absence of an option specifying otherwise,
@@ -583,6 +603,9 @@ public:
   // given compilation arguments.
   virtual UnwindLibType GetUnwindLibType(const llvm::opt::ArgList &Args) const;
 
+  // Detect the highest available version of libc++ in include path.
+  virtual std::string detectLibcxxVersion(StringRef IncludePath) const;
+
   /// AddClangCXXStdlibIncludeArgs - Add the clang -cc1 level arguments to set
   /// the include paths to use for the given C++ standard library type.
   virtual void
@@ -646,6 +669,10 @@ public:
   /// On Windows, returns the MSVC compatibility version.
   virtual VersionTuple computeMSVCVersion(const Driver *D,
                                           const llvm::opt::ArgList &Args) const;
+
+  /// Get paths of HIP device libraries.
+  virtual llvm::SmallVector<std::string, 12>
+  getHIPDeviceLibs(const llvm::opt::ArgList &Args) const;
 
   /// Return sanitizers which are available in this toolchain.
   virtual SanitizerMask getSupportedSanitizers() const;

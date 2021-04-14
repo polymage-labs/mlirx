@@ -33,7 +33,7 @@ struct TestDecomposeCallGraphTypes
     TypeConverter typeConverter;
     ConversionTarget target(*context);
     ValueDecomposer decomposer;
-    OwningRewritePatternList patterns;
+    RewritePatternSet patterns(context);
 
     target.addLegalDialect<test::TestDialect>();
 
@@ -69,9 +69,7 @@ struct TestDecomposeCallGraphTypes
            Location loc) -> Optional<Value> {
           if (inputs.size() == 1)
             return llvm::None;
-          TypeRange TypeRange = inputs.getTypes();
-          SmallVector<Type, 2> types(TypeRange.begin(), TypeRange.end());
-          TupleType tuple = TupleType::get(types, builder.getContext());
+          TupleType tuple = builder.getTupleType(inputs.getTypes());
           Value value = builder.create<test::MakeTupleOp>(loc, tuple, inputs);
           return value;
         });

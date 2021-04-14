@@ -21,7 +21,6 @@
 #include "mlir/ExecutionEngine/OptUtils.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/MLIRContext.h"
-#include "mlir/InitAllDialects.h"
 #include "mlir/Parser.h"
 #include "mlir/Support/FileUtilities.h"
 
@@ -40,20 +39,13 @@
 #include <cstdint>
 #include <numeric>
 #include <sstream>
+
+#ifndef _WIN32
 #include <sys/time.h>
+#endif // _WIN32
 
 using namespace mlir;
 using llvm::Error;
-
-// Timer based on gettimeofday.
-// TODO: replace with an existing LLVM utility if appropriate.
-static double rtclock() {
-  struct timeval Tp;
-  int stat = gettimeofday(&Tp, NULL);
-  if (stat != 0)
-    printf("Error return from gettimeofday: %d", stat);
-  return (Tp.tv_sec + Tp.tv_usec * 1.0e-6);
-}
 
 namespace {
 /// This options struct prevents the need for global static initializers, and
@@ -169,6 +161,20 @@ static Optional<unsigned> getCommandLineOptLevel(Options &options) {
   return optLevel;
 }
 
+/// Returns the number of seconds since Epoch 1970-01-01 00:00:00 +0000 (UTC).
+static double rtclock() {
+#ifndef _WIN32
+  struct timeval tp;
+  int stat = gettimeofday(&tp, NULL);
+  if (stat != 0)
+    fprintf(stderr, "Error returning time from gettimeofday: %d\n", stat);
+  return (tp.tv_sec + tp.tv_usec * 1.0e-6);
+#else
+  fprintf(stderr, "Timing utility not implemented on Windows\n");
+  return 0.0;
+#endif // _WIN32
+}
+
 // JIT-compile the given module and run "entryPoint" with "args" as arguments.
 static Error compileAndExecute(Options &options, ModuleOp module,
                                StringRef entryPoint,
@@ -179,11 +185,65 @@ static Error compileAndExecute(Options &options, ModuleOp module,
   if (auto clOptLevel = getCommandLineOptLevel(options))
     jitCodeGenOptLevel =
         static_cast<llvm::CodeGenOpt::Level>(clOptLevel.getValue());
-  SmallVector<StringRef, 4> libs(options.clSharedLibs.begin(),
-                                 options.clSharedLibs.end());
+
+  // If shared library implements custom mlir-runner library init and destroy
+  // functions, we'll use them to register the library with the execution
+  // engine. Otherwise we'll pass library directly to the execution engine.
+  SmallVector<SmallString<256>, 4> libPaths;
+
+  // Use absolute library path so that gdb can find the symbol table.
+  transform(
+      options.clSharedLibs, std::back_inserter(libPaths),
+      [](std::string libPath) {
+        SmallString<256> absPath(libPath.begin(), libPath.end());
+        cantFail(llvm::errorCodeToError(llvm::sys::fs::make_absolute(absPath)));
+        return absPath;
+      });
+
+  // Libraries that we'll pass to the ExecutionEngine for loading.
+  SmallVector<StringRef, 4> executionEngineLibs;
+
+  using MlirRunnerInitFn = void (*)(llvm::StringMap<void *> &);
+  using MlirRunnerDestroyFn = void (*)();
+
+  llvm::StringMap<void *> exportSymbols;
+  SmallVector<MlirRunnerDestroyFn> destroyFns;
+
+  // Handle libraries that do support mlir-runner init/destroy callbacks.
+  for (auto &libPath : libPaths) {
+    auto lib = llvm::sys::DynamicLibrary::getPermanentLibrary(libPath.c_str());
+    void *initSym = lib.getAddressOfSymbol("__mlir_runner_init");
+    void *destroySim = lib.getAddressOfSymbol("__mlir_runner_destroy");
+
+    // Library does not support mlir runner, load it with ExecutionEngine.
+    if (!initSym || !destroySim) {
+      executionEngineLibs.push_back(libPath);
+      continue;
+    }
+
+    auto initFn = reinterpret_cast<MlirRunnerInitFn>(initSym);
+    initFn(exportSymbols);
+
+    auto destroyFn = reinterpret_cast<MlirRunnerDestroyFn>(destroySim);
+    destroyFns.push_back(destroyFn);
+  }
+
+  // Build a runtime symbol map from the config and exported symbols.
+  auto runtimeSymbolMap = [&](llvm::orc::MangleAndInterner interner) {
+    auto symbolMap = config.runtimeSymbolMap ? config.runtimeSymbolMap(interner)
+                                             : llvm::orc::SymbolMap();
+    for (auto &exportSymbol : exportSymbols)
+      symbolMap[interner(exportSymbol.getKey())] =
+          llvm::JITEvaluatedSymbol::fromPointer(exportSymbol.getValue());
+    return symbolMap;
+  };
+
   auto expectedEngine = mlir::ExecutionEngine::create(
       module, config.llvmModuleBuilder, config.transformer, jitCodeGenOptLevel,
-      libs);
+      executionEngineLibs);
+
+  if (!expectedEngine)
+    return expectedEngine.takeError();
 
   double tLapsed = rtclock() - tStart;
   if (options.time) {
@@ -191,12 +251,9 @@ static Error compileAndExecute(Options &options, ModuleOp module,
     msg << std::setprecision(6) << "Compilation time: " << tLapsed << "s\n";
     llvm::errs() << msg.str();
   }
-  if (!expectedEngine)
-    return expectedEngine.takeError();
 
   auto engine = std::move(*expectedEngine);
-  if (config.runtimeSymbolMap)
-    engine->registerSymbols(config.runtimeSymbolMap);
+  engine->registerSymbols(runtimeSymbolMap);
 
   auto expectedFPtr = engine->lookup(entryPoint);
   if (!expectedFPtr)
@@ -220,6 +277,9 @@ static Error compileAndExecute(Options &options, ModuleOp module,
     llvm::errs() << msg.str();
   }
 
+  // Run all dynamic library destroy callbacks to prepare for the shutdown.
+  llvm::for_each(destroyFns, [](MlirRunnerDestroyFn destroy) { destroy(); });
+
   return Error::success();
 }
 
@@ -237,20 +297,31 @@ template <typename Type>
 Error checkCompatibleReturnType(LLVM::LLVMFuncOp mainFunction);
 template <>
 Error checkCompatibleReturnType<int32_t>(LLVM::LLVMFuncOp mainFunction) {
-  if (!mainFunction.getType().getFunctionResultType().isIntegerTy(32))
-    return make_string_error("only single llvm.i32 function result supported");
+  auto resultType = mainFunction.getType()
+                        .cast<LLVM::LLVMFunctionType>()
+                        .getReturnType()
+                        .dyn_cast<IntegerType>();
+  if (!resultType || resultType.getWidth() != 32)
+    return make_string_error("only single i32 function result supported");
   return Error::success();
 }
 template <>
 Error checkCompatibleReturnType<int64_t>(LLVM::LLVMFuncOp mainFunction) {
-  if (!mainFunction.getType().getFunctionResultType().isIntegerTy(64))
-    return make_string_error("only single llvm.i64 function result supported");
+  auto resultType = mainFunction.getType()
+                        .cast<LLVM::LLVMFunctionType>()
+                        .getReturnType()
+                        .dyn_cast<IntegerType>();
+  if (!resultType || resultType.getWidth() != 64)
+    return make_string_error("only single i64 function result supported");
   return Error::success();
 }
 template <>
 Error checkCompatibleReturnType<float>(LLVM::LLVMFuncOp mainFunction) {
-  if (!mainFunction.getType().getFunctionResultType().isFloatTy())
-    return make_string_error("only single llvm.f32 function result supported");
+  if (!mainFunction.getType()
+           .cast<LLVM::LLVMFunctionType>()
+           .getReturnType()
+           .isa<Float32Type>())
+    return make_string_error("only single f32 function result supported");
   return Error::success();
 }
 template <typename Type>
@@ -261,7 +332,7 @@ Error compileAndExecuteSingleReturnFunction(Options &options, ModuleOp module,
   if (!mainFunction || mainFunction.isExternal())
     return make_string_error("entry point not found");
 
-  if (mainFunction.getType().getFunctionNumParams() != 0)
+  if (mainFunction.getType().cast<LLVM::LLVMFunctionType>().getNumParams() != 0)
     return make_string_error("function inputs not supported");
 
   if (Error error = checkCompatibleReturnType<Type>(mainFunction))
@@ -284,7 +355,8 @@ Error compileAndExecuteSingleReturnFunction(Options &options, ModuleOp module,
 
 /// Entry point for all CPU runners. Expects the common argc/argv arguments for
 /// standard C++ main functions.
-int mlir::JitRunnerMain(int argc, char **argv, JitRunnerConfig config) {
+int mlir::JitRunnerMain(int argc, char **argv, const DialectRegistry &registry,
+                        JitRunnerConfig config) {
   // Create the options struct containing the command line options for the
   // runner. This must come before the command line options are parsed.
   Options options;
@@ -315,8 +387,7 @@ int mlir::JitRunnerMain(int argc, char **argv, JitRunnerConfig config) {
     }
   }
 
-  MLIRContext context;
-  registerAllDialects(context.getDialectRegistry());
+  MLIRContext context(registry);
 
   auto m = parseMLIRInput(options.inputFilename, &context);
   if (!m) {

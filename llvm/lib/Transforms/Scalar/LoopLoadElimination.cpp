@@ -27,7 +27,6 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/GlobalsModRef.h"
@@ -632,6 +631,9 @@ eliminateLoadsAcrossLoops(Function &F, LoopInfo &LI, DominatorTree &DT,
 
   // Now walk the identified inner loops.
   for (Loop *L : Worklist) {
+    // Match historical behavior
+    if (!L->isRotatedForm() || !L->getExitingBlock())
+      continue;
     // The actual work is performed by LoadEliminationForLoop.
     LoadEliminationForLoop LEL(L, &LI, GetLAI(*L), &DT, BFI, PSI);
     Changed |= LEL.processLoop();
@@ -662,10 +664,11 @@ public:
     auto *BFI = (PSI && PSI->hasProfileSummary()) ?
                 &getAnalysis<LazyBlockFrequencyInfoPass>().getBFI() :
                 nullptr;
+    auto *SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
 
     // Process each loop nest in the function.
     return eliminateLoadsAcrossLoops(
-        F, LI, DT, BFI, PSI, /*SE*/ nullptr, /*AC*/ nullptr,
+        F, LI, DT, BFI, PSI, SE, /*AC*/ nullptr,
         [&LAA](Loop &L) -> const LoopAccessInfo & { return LAA.getInfo(&L); });
   }
 

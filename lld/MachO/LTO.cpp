@@ -8,27 +8,42 @@
 
 #include "LTO.h"
 #include "Config.h"
+#include "Driver.h"
 #include "InputFiles.h"
+#include "Symbols.h"
 
 #include "lld/Common/ErrorHandler.h"
 #include "lld/Common/Strings.h"
 #include "lld/Common/TargetOptionsCommandFlags.h"
 #include "llvm/LTO/LTO.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/ObjCARC.h"
 
 using namespace lld;
 using namespace lld::macho;
 using namespace llvm;
+using namespace llvm::sys;
 
 static lto::Config createConfig() {
   lto::Config c;
   c.Options = initTargetOptionsFromCodeGenFlags();
+  c.CodeModel = getCodeModelFromCMModel();
+  c.CPU = getCPUStr();
+  c.MAttrs = getMAttrs();
+  c.UseNewPM = config->ltoNewPassManager;
+  c.PreCodeGenPassesHook = [](legacy::PassManager &pm) {
+    pm.add(createObjCARCContractPass());
+  };
+  c.TimeTraceEnabled = config->timeTraceEnabled;
+  c.TimeTraceGranularity = config->timeTraceGranularity;
   return c;
 }
 
 BitcodeCompiler::BitcodeCompiler() {
-  auto backend =
-      lto::createInProcessThinBackend(llvm::heavyweight_hardware_concurrency());
+  lto::ThinBackend backend =
+      lto::createInProcessThinBackend(heavyweight_hardware_concurrency());
   ltoObj = std::make_unique<lto::LTO>(createConfig(), backend);
 }
 
@@ -38,16 +53,24 @@ void BitcodeCompiler::add(BitcodeFile &f) {
   resols.reserve(objSyms.size());
 
   // Provide a resolution to the LTO API for each symbol.
+  auto symIt = f.symbols.begin();
   for (const lto::InputFile::Symbol &objSym : objSyms) {
     resols.emplace_back();
     lto::SymbolResolution &r = resols.back();
+    Symbol *sym = *symIt++;
 
     // Ideally we shouldn't check for SF_Undefined but currently IRObjectFile
     // reports two symbols for module ASM defined. Without this check, lld
     // flags an undefined in IR with a definition in ASM as prevailing.
     // Once IRObjectFile is fixed to report only one symbol this hack can
     // be removed.
-    r.Prevailing = !objSym.isUndefined();
+    r.Prevailing = !objSym.isUndefined() && sym->getFile() == &f;
+
+    // Un-define the symbol so that we don't get duplicate symbol errors when we
+    // load the ObjFile emitted by LTO compilation.
+    if (r.Prevailing)
+      replaceSymbol<Undefined>(sym, sym->getName(), sym->getFile(),
+                               RefState::Strong);
 
     // TODO: set the other resolution configs properly
     r.VisibleToRegularObj = true;
@@ -73,12 +96,26 @@ std::vector<ObjFile *> BitcodeCompiler::compile() {
       saveBuffer(buf[i], config->outputFile + Twine(i) + ".lto.o");
   }
 
-  // TODO: set modTime properly
+  if (!config->ltoObjPath.empty())
+    fs::create_directories(config->ltoObjPath);
+
   std::vector<ObjFile *> ret;
-  for (unsigned i = 0; i != maxTasks; ++i)
-    if (!buf[i].empty())
-      ret.push_back(
-          make<ObjFile>(MemoryBufferRef(buf[i], "lto.tmp"), /*modTime=*/0, ""));
+  for (unsigned i = 0; i != maxTasks; ++i) {
+    if (buf[i].empty())
+      continue;
+    SmallString<261> filePath("/tmp/lto.tmp");
+    uint32_t modTime = 0;
+    if (!config->ltoObjPath.empty()) {
+      filePath = config->ltoObjPath;
+      path::append(filePath, Twine(i) + "." +
+                                 getArchitectureName(config->target.Arch) +
+                                 ".lto.o");
+      saveBuffer(buf[i], filePath);
+      modTime = getModTime(filePath);
+    }
+    ret.push_back(make<ObjFile>(
+        MemoryBufferRef(buf[i], saver.save(filePath.str())), modTime, ""));
+  }
 
   return ret;
 }

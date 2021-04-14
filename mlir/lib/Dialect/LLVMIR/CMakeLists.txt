@@ -1,6 +1,7 @@
 add_subdirectory(Transforms)
 
 add_mlir_dialect_library(MLIRLLVMIR
+  IR/FunctionCallUtils.cpp
   IR/LLVMDialect.cpp
   IR/LLVMTypes.cpp
   IR/LLVMTypeSyntax.cpp
@@ -10,7 +11,7 @@ add_mlir_dialect_library(MLIRLLVMIR
 
   DEPENDS
   MLIRLLVMOpsIncGen
-  MLIRLLVMConversionsIncGen
+  MLIRLLVMOpsInterfacesIncGen
   MLIROpenMPOpsIncGen
   intrinsics_gen
 
@@ -28,15 +29,15 @@ add_mlir_dialect_library(MLIRLLVMIR
   MLIRSupport
   )
 
-add_mlir_dialect_library(MLIRLLVMAVX512
-  IR/LLVMAVX512Dialect.cpp
+add_mlir_dialect_library(MLIRLLVMArmSVE
+  IR/LLVMArmSVEDialect.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/LLVMIR
 
   DEPENDS
-  MLIRLLVMAVX512IncGen
-  MLIRLLVMAVX512ConversionsIncGen
+  MLIRLLVMArmSVEIncGen
+  MLIRLLVMArmSVEConversionsIncGen
   intrinsics_gen
 
   LINK_COMPONENTS

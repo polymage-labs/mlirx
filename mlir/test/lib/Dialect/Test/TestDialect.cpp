@@ -7,7 +7,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "TestDialect.h"
+#include "TestAttributes.h"
 #include "TestTypes.h"
+#include "mlir/Dialect/DLTI/DLTI.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectImplementation.h"
@@ -15,7 +18,6 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Transforms/FoldUtils.h"
 #include "mlir/Transforms/InliningUtils.h"
-#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringSwitch.h"
 
 using namespace mlir;
@@ -30,6 +32,16 @@ void mlir::test::registerTestDialect(DialectRegistry &registry) {
 //===----------------------------------------------------------------------===//
 
 namespace {
+
+/// Testing the correctness of some traits.
+static_assert(
+    llvm::is_detected<OpTrait::has_implicit_terminator_t,
+                      SingleBlockImplicitTerminatorOp>::value,
+    "has_implicit_terminator_t does not match SingleBlockImplicitTerminatorOp");
+static_assert(OpTrait::hasSingleBlockImplicitTerminator<
+                  SingleBlockImplicitTerminatorOp>::value,
+              "hasSingleBlockImplicitTerminator does not match "
+              "SingleBlockImplicitTerminatorOp");
 
 // Test support for interacting with the AsmPrinter.
 struct TestOpAsmInterface : public OpAsmDialectInterface {
@@ -164,89 +176,60 @@ struct TestInlinerInterface : public DialectInlinerInterface {
 // TestDialect
 //===----------------------------------------------------------------------===//
 
+static void testSideEffectOpGetEffect(
+    Operation *op,
+    SmallVectorImpl<SideEffects::EffectInstance<TestEffects::Effect>> &effects);
+
+// This is the implementation of a dialect fallback for `TestEffectOpInterface`.
+struct TestOpEffectInterfaceFallback
+    : public TestEffectOpInterface::FallbackModel<
+          TestOpEffectInterfaceFallback> {
+  static bool classof(Operation *op) {
+    bool isSupportedOp =
+        op->getName().getStringRef() == "test.unregistered_side_effect_op";
+    assert(isSupportedOp && "Unexpected dispatch");
+    return isSupportedOp;
+  }
+
+  void
+  getEffects(Operation *op,
+             SmallVectorImpl<SideEffects::EffectInstance<TestEffects::Effect>>
+                 &effects) const {
+    testSideEffectOpGetEffect(op, effects);
+  }
+};
+
 void TestDialect::initialize() {
+  registerAttributes();
+  registerTypes();
   addOperations<
 #define GET_OP_LIST
 #include "TestOps.cpp.inc"
       >();
   addInterfaces<TestOpAsmInterface, TestDialectFoldInterface,
                 TestInlinerInterface>();
-  addTypes<TestType, TestRecursiveType,
-#define GET_TYPEDEF_LIST
-#include "TestTypeDefs.cpp.inc"
-           >();
   allowUnknownOperations();
+
+  // Instantiate our fallback op interface that we'll use on specific
+  // unregistered op.
+  fallbackEffectOpInterfaces = new TestOpEffectInterfaceFallback;
+}
+TestDialect::~TestDialect() {
+  delete static_cast<TestOpEffectInterfaceFallback *>(
+      fallbackEffectOpInterfaces);
 }
 
-static Type parseTestType(MLIRContext *ctxt, DialectAsmParser &parser,
-                          llvm::SetVector<Type> &stack) {
-  StringRef typeTag;
-  if (failed(parser.parseKeyword(&typeTag)))
-    return Type();
-
-  auto genType = generatedTypeParser(ctxt, parser, typeTag);
-  if (genType != Type())
-    return genType;
-
-  if (typeTag == "test_type")
-    return TestType::get(parser.getBuilder().getContext());
-
-  if (typeTag != "test_rec")
-    return Type();
-
-  StringRef name;
-  if (parser.parseLess() || parser.parseKeyword(&name))
-    return Type();
-  auto rec = TestRecursiveType::get(parser.getBuilder().getContext(), name);
-
-  // If this type already has been parsed above in the stack, expect just the
-  // name.
-  if (stack.contains(rec)) {
-    if (failed(parser.parseGreater()))
-      return Type();
-    return rec;
-  }
-
-  // Otherwise, parse the body and update the type.
-  if (failed(parser.parseComma()))
-    return Type();
-  stack.insert(rec);
-  Type subtype = parseTestType(ctxt, parser, stack);
-  stack.pop_back();
-  if (!subtype || failed(parser.parseGreater()) || failed(rec.setBody(subtype)))
-    return Type();
-
-  return rec;
+Operation *TestDialect::materializeConstant(OpBuilder &builder, Attribute value,
+                                            Type type, Location loc) {
+  return builder.create<TestOpConstant>(loc, type, value);
 }
 
-Type TestDialect::parseType(DialectAsmParser &parser) const {
-  llvm::SetVector<Type> stack;
-  return parseTestType(getContext(), parser, stack);
-}
-
-static void printTestType(Type type, DialectAsmPrinter &printer,
-                          llvm::SetVector<Type> &stack) {
-  if (succeeded(generatedTypePrinter(type, printer)))
-    return;
-  if (type.isa<TestType>()) {
-    printer << "test_type";
-    return;
-  }
-
-  auto rec = type.cast<TestRecursiveType>();
-  printer << "test_rec<" << rec.getName();
-  if (!stack.contains(rec)) {
-    printer << ", ";
-    stack.insert(rec);
-    printTestType(rec.getBody(), printer, stack);
-    stack.pop_back();
-  }
-  printer << ">";
-}
-
-void TestDialect::printType(Type type, DialectAsmPrinter &printer) const {
-  llvm::SetVector<Type> stack;
-  printTestType(type, printer, stack);
+void *TestDialect::getRegisteredInterfaceForOp(TypeID typeID,
+                                               OperationName opName) {
+  if (opName.getIdentifier() == "test.unregistered_side_effect_op" &&
+      typeID == TypeID::get<TestEffectOpInterface>())
+    return fallbackEffectOpInterfaces;
+  return nullptr;
 }
 
 LogicalResult TestDialect::verifyOperationAttribute(Operation *op,
@@ -272,6 +255,26 @@ TestDialect::verifyRegionResultAttribute(Operation *op, unsigned regionIndex,
   if (namedAttr.first == "test.invalid_attr")
     return op->emitError() << "invalid to use 'test.invalid_attr'";
   return success();
+}
+
+Optional<Dialect::ParseOpHook>
+TestDialect::getParseOperationHook(StringRef opName) const {
+  if (opName == "test.dialect_custom_printer") {
+    return ParseOpHook{[](OpAsmParser &parser, OperationState &state) {
+      return parser.parseKeyword("custom_format");
+    }};
+  }
+  return None;
+}
+
+LogicalResult TestDialect::printOperation(Operation *op,
+                                          OpAsmPrinter &printer) const {
+  StringRef opName = op->getName().getStringRef();
+  if (opName == "test.dialect_custom_printer") {
+    printer.getStream() << opName << " custom_format";
+    return success();
+  }
+  return failure();
 }
 
 //===----------------------------------------------------------------------===//
@@ -301,9 +304,9 @@ struct FoldToCallOpPattern : public OpRewritePattern<FoldToCallOp> {
 };
 } // end anonymous namespace
 
-void FoldToCallOp::getCanonicalizationPatterns(
-    OwningRewritePatternList &results, MLIRContext *context) {
-  results.insert<FoldToCallOpPattern>(context);
+void FoldToCallOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                               MLIRContext *context) {
+  results.add<FoldToCallOpPattern>(context);
 }
 
 //===----------------------------------------------------------------------===//
@@ -419,6 +422,14 @@ static ParseResult parseCustomDirectiveAttrDict(OpAsmParser &parser,
                                                 NamedAttrList &attrs) {
   return parser.parseOptionalAttrDict(attrs);
 }
+static ParseResult parseCustomDirectiveOptionalOperandRef(
+    OpAsmParser &parser, Optional<OpAsmParser::OperandType> &optOperand) {
+  int64_t operandCount = 0;
+  if (parser.parseInteger(operandCount))
+    return failure();
+  bool expectedOptionalOperand = operandCount == 0;
+  return success(expectedOptionalOperand != optOperand.hasValue());
+}
 
 //===----------------------------------------------------------------------===//
 // Printing
@@ -481,9 +492,16 @@ static void printCustomDirectiveAttributes(OpAsmPrinter &printer, Operation *,
 }
 
 static void printCustomDirectiveAttrDict(OpAsmPrinter &printer, Operation *op,
-                                         MutableDictionaryAttr attrs) {
-  printer.printOptionalAttrDict(attrs.getAttrs());
+                                         DictionaryAttr attrs) {
+  printer.printOptionalAttrDict(attrs.getValue());
 }
+
+static void printCustomDirectiveOptionalOperandRef(OpAsmPrinter &printer,
+                                                   Operation *op,
+                                                   Value optOperand) {
+  printer << (optOperand ? "1" : "0");
+}
+
 //===----------------------------------------------------------------------===//
 // Test IsolatedRegionOp - parse passthrough region arguments.
 //===----------------------------------------------------------------------===//
@@ -559,8 +577,28 @@ static void print(OpAsmPrinter &p, AffineScopeOp op) {
 // Test parser.
 //===----------------------------------------------------------------------===//
 
-static ParseResult parseWrappedKeywordOp(OpAsmParser &parser,
-                                         OperationState &result) {
+static ParseResult parseParseIntegerLiteralOp(OpAsmParser &parser,
+                                              OperationState &result) {
+  if (parser.parseOptionalColon())
+    return success();
+  uint64_t numResults;
+  if (parser.parseInteger(numResults))
+    return failure();
+
+  IndexType type = parser.getBuilder().getIndexType();
+  for (unsigned i = 0; i < numResults; ++i)
+    result.addTypes(type);
+  return success();
+}
+
+static void print(OpAsmPrinter &p, ParseIntegerLiteralOp op) {
+  p << ParseIntegerLiteralOp::getOperationName();
+  if (unsigned numResults = op->getNumResults())
+    p << " : " << numResults;
+}
+
+static ParseResult parseParseWrappedKeywordOp(OpAsmParser &parser,
+                                              OperationState &result) {
   StringRef keyword;
   if (parser.parseKeyword(&keyword))
     return failure();
@@ -568,8 +606,8 @@ static ParseResult parseWrappedKeywordOp(OpAsmParser &parser,
   return success();
 }
 
-static void print(OpAsmPrinter &p, WrappedKeywordOp op) {
-  p << WrappedKeywordOp::getOperationName() << " " << op.keyword();
+static void print(OpAsmPrinter &p, ParseWrappedKeywordOp op) {
+  p << ParseWrappedKeywordOp::getOperationName() << " " << op.keyword();
 }
 
 //===----------------------------------------------------------------------===//
@@ -646,8 +684,8 @@ struct TestRemoveOpWithInnerOps
 } // end anonymous namespace
 
 void TestOpWithRegionPattern::getCanonicalizationPatterns(
-    OwningRewritePatternList &results, MLIRContext *context) {
-  results.insert<TestRemoveOpWithInnerOps>(context);
+    RewritePatternSet &results, MLIRContext *context) {
+  results.add<TestRemoveOpWithInnerOps>(context);
 }
 
 OpFoldResult TestOpWithRegionFold::fold(ArrayRef<Attribute> operands) {
@@ -669,10 +707,14 @@ LogicalResult TestOpWithVariadicResultsAndFolder::fold(
 OpFoldResult TestOpInPlaceFold::fold(ArrayRef<Attribute> operands) {
   assert(operands.size() == 1);
   if (operands.front()) {
-    setAttr("attr", operands.front());
+    (*this)->setAttr("attr", operands.front());
     return getResult();
   }
   return {};
+}
+
+OpFoldResult TestPassthroughFold::fold(ArrayRef<Attribute> operands) {
+  return getOperand();
 }
 
 LogicalResult OpWithInferTypeInterfaceOp::inferReturnTypes(
@@ -700,7 +742,7 @@ LogicalResult OpWithShapedTypeInferTypeInterfaceOp::inferReturnTypeComponents(
   }
   int64_t dim =
       sval.hasRank() ? sval.getShape().front() : ShapedType::kDynamicSize;
-  auto type = IntegerType::get(17, context);
+  auto type = IntegerType::get(context, 17);
   inferredReturnShapes.push_back(ShapedTypeComponents({dim}, type));
   return success();
 }
@@ -708,7 +750,26 @@ LogicalResult OpWithShapedTypeInferTypeInterfaceOp::inferReturnTypeComponents(
 LogicalResult OpWithShapedTypeInferTypeInterfaceOp::reifyReturnTypeShapes(
     OpBuilder &builder, llvm::SmallVectorImpl<Value> &shapes) {
   shapes = SmallVector<Value, 1>{
-      builder.createOrFold<DimOp>(getLoc(), getOperand(0), 0)};
+      builder.createOrFold<memref::DimOp>(getLoc(), getOperand(0), 0)};
+  return success();
+}
+
+LogicalResult
+OpWithResultShapePerDimInterfaceOp ::reifyReturnTypeShapesPerResultDim(
+    OpBuilder &builder,
+    llvm::SmallVectorImpl<llvm::SmallVector<Value>> &shapes) {
+  SmallVector<Value> operand1Shape, operand2Shape;
+  Location loc = getLoc();
+  for (auto i :
+       llvm::seq<int>(0, operand1().getType().cast<ShapedType>().getRank())) {
+    operand1Shape.push_back(builder.create<memref::DimOp>(loc, operand1(), i));
+  }
+  for (auto i :
+       llvm::seq<int>(0, operand2().getType().cast<ShapedType>().getRank())) {
+    operand2Shape.push_back(builder.create<memref::DimOp>(loc, operand2(), i));
+  }
+  shapes.emplace_back(std::move(operand2Shape));
+  shapes.emplace_back(std::move(operand1Shape));
   return success();
 }
 
@@ -723,10 +784,21 @@ struct TestResource : public SideEffects::Resource::Base<TestResource> {
 };
 } // end anonymous namespace
 
+static void testSideEffectOpGetEffect(
+    Operation *op,
+    SmallVectorImpl<SideEffects::EffectInstance<TestEffects::Effect>>
+        &effects) {
+  auto effectsAttr = op->getAttrOfType<AffineMapAttr>("effect_parameter");
+  if (!effectsAttr)
+    return;
+
+  effects.emplace_back(TestEffects::Concrete::get(), effectsAttr);
+}
+
 void SideEffectOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
   // Check for an effects attribute on the op instance.
-  ArrayAttr effectsAttr = getAttrOfType<ArrayAttr>("effects");
+  ArrayAttr effectsAttr = (*this)->getAttrOfType<ArrayAttr>("effects");
   if (!effectsAttr)
     return;
 
@@ -761,11 +833,7 @@ void SideEffectOp::getEffects(
 
 void SideEffectOp::getEffects(
     SmallVectorImpl<TestEffects::EffectInstance> &effects) {
-  auto effectsAttr = getAttrOfType<AffineMapAttr>("effect_parameter");
-  if (!effectsAttr)
-    return;
-
-  effects.emplace_back(TestEffects::Concrete::get(), effectsAttr);
+  testSideEffectOpGetEffect(getOperation(), effects);
 }
 
 //===----------------------------------------------------------------------===//
@@ -832,9 +900,9 @@ static void print(OpAsmPrinter &p, StringAttrPrettyNameOp op) {
   }
 
   if (namesDisagree)
-    p.printOptionalAttrDictWithKeyword(op.getAttrs());
+    p.printOptionalAttrDictWithKeyword(op->getAttrs());
   else
-    p.printOptionalAttrDictWithKeyword(op.getAttrs(), {"names"});
+    p.printOptionalAttrDictWithKeyword(op->getAttrs(), {"names"});
 }
 
 // We set the SSA name in the asm syntax to the contents of the name

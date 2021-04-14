@@ -127,6 +127,15 @@ public:
   /// output a diagnostic and return failure.
   ParseResult parseToken(Token::Kind expectedToken, const Twine &message);
 
+  /// Parse an optional integer value from the stream.
+  OptionalParseResult parseOptionalInteger(uint64_t &result);
+
+  /// Parse a floating point value from an integer literal token.
+  ParseResult parseFloatFromIntegerLiteral(Optional<APFloat> &result,
+                                           const Token &tok, bool isNegative,
+                                           const llvm::fltSemantics &semantics,
+                                           size_t typeSizeInBits);
+
   //===--------------------------------------------------------------------===//
   // Type Parsing
   //===--------------------------------------------------------------------===//

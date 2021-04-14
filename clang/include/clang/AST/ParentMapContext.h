@@ -64,9 +64,10 @@ public:
   Expr *traverseIgnored(Expr *E) const;
   DynTypedNode traverseIgnored(const DynTypedNode &N) const;
 
+  class ParentMap;
+
 private:
   ASTContext &ASTCtx;
-  class ParentMap;
   TraversalKind Traversal = TK_AsIs;
   std::unique_ptr<ParentMap> Parents;
 };
@@ -89,7 +90,7 @@ public:
 /// Container for either a single DynTypedNode or for an ArrayRef to
 /// DynTypedNode. For use with ParentMap.
 class DynTypedNodeList {
-  std::aligned_union_t<1, DynTypedNode, ArrayRef<DynTypedNode>> Storage;
+  llvm::AlignedCharArrayUnion<DynTypedNode, ArrayRef<DynTypedNode>> Storage;
   bool IsSingleNode;
 
 public:

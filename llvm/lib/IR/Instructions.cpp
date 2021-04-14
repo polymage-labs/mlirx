@@ -262,6 +262,19 @@ CallBase *CallBase::Create(CallBase *CB, ArrayRef<OperandBundleDef> Bundles,
   }
 }
 
+CallBase *CallBase::Create(CallBase *CI, OperandBundleDef OpB,
+                           Instruction *InsertPt) {
+  SmallVector<OperandBundleDef, 2> OpDefs;
+  for (unsigned i = 0, e = CI->getNumOperandBundles(); i < e; ++i) {
+    auto ChildOB = CI->getOperandBundleAt(i);
+    if (ChildOB.getTagName() != OpB.getTag())
+      OpDefs.emplace_back(ChildOB);
+  }
+  OpDefs.emplace_back(OpB);
+  return CallBase::Create(CI, OpDefs, InsertPt);
+}
+
+
 Function *CallBase::getCaller() { return getParent()->getParent(); }
 
 unsigned CallBase::getNumSubclassExtraOperandsDynamic() const {
@@ -320,16 +333,6 @@ Value *CallBase::getReturnedArgOperand() const {
       return getArgOperand(Index - AttributeList::FirstArgIndex);
 
   return nullptr;
-}
-
-bool CallBase::hasRetAttr(Attribute::AttrKind Kind) const {
-  if (Attrs.hasAttribute(AttributeList::ReturnIndex, Kind))
-    return true;
-
-  // Look at the callee, if available.
-  if (const Function *F = getCalledFunction())
-    return F->getAttributes().hasAttribute(AttributeList::ReturnIndex, Kind);
-  return false;
 }
 
 /// Determine whether the argument or parameter has the given attribute.
@@ -410,7 +413,7 @@ CallBase::BundleOpInfo &CallBase::getBundleOpInfoForOperand(unsigned OpIdx) {
 
   bundle_op_iterator Begin = bundle_op_info_begin();
   bundle_op_iterator End = bundle_op_info_end();
-  bundle_op_iterator Current;
+  bundle_op_iterator Current = Begin;
 
   while (Begin != End) {
     unsigned ScaledOperandPerBundle =
@@ -432,6 +435,42 @@ CallBase::BundleOpInfo &CallBase::getBundleOpInfoForOperand(unsigned OpIdx) {
   assert(OpIdx >= Current->Begin && OpIdx < Current->End &&
          "the operand bundle doesn't cover every value in the range");
   return *Current;
+}
+
+CallBase *CallBase::addOperandBundle(CallBase *CB, uint32_t ID,
+                                     OperandBundleDef OB,
+                                     Instruction *InsertPt) {
+  if (CB->getOperandBundle(ID))
+    return CB;
+
+  SmallVector<OperandBundleDef, 1> Bundles;
+  CB->getOperandBundlesAsDefs(Bundles);
+  Bundles.push_back(OB);
+  return Create(CB, Bundles, InsertPt);
+}
+
+CallBase *CallBase::removeOperandBundle(CallBase *CB, uint32_t ID,
+                                        Instruction *InsertPt) {
+  SmallVector<OperandBundleDef, 1> Bundles;
+  bool CreateNew = false;
+
+  for (unsigned I = 0, E = CB->getNumOperandBundles(); I != E; ++I) {
+    auto Bundle = CB->getOperandBundleAt(I);
+    if (Bundle.getTagID() == ID) {
+      CreateNew = true;
+      continue;
+    }
+    Bundles.emplace_back(Bundle);
+  }
+
+  return CreateNew ? Create(CB, Bundles, InsertPt) : CB;
+}
+
+bool CallBase::hasReadingOperandBundles() const {
+  // Implementation note: this is a conservative implementation of operand
+  // bundle semantics, where *any* non-assume operand bundle forces a callsite
+  // to be at least readonly.
+  return hasOperandBundles() && getIntrinsicID() != Intrinsic::assume;
 }
 
 //===----------------------------------------------------------------------===//
@@ -516,18 +555,6 @@ CallInst *CallInst::Create(CallInst *CI, ArrayRef<OperandBundleDef> OpB,
   return NewCI;
 }
 
-CallInst *CallInst::CreateWithReplacedBundle(CallInst *CI, OperandBundleDef OpB,
-                                             Instruction *InsertPt) {
-  SmallVector<OperandBundleDef, 2> OpDefs;
-  for (unsigned i = 0, e = CI->getNumOperandBundles(); i < e; ++i) {
-    auto ChildOB = CI->getOperandBundleAt(i);
-    if (ChildOB.getTagName() != OpB.getTag())
-      OpDefs.emplace_back(ChildOB);
-  }
-  OpDefs.emplace_back(OpB);
-  return CallInst::Create(CI, OpDefs, InsertPt);
-}
-
 // Update profile weight for call instruction by scaling it using the ratio
 // of S/T. The meaning of "branch_weights" meta data for call instruction is
 // transfered to represent call count.
@@ -568,11 +595,17 @@ void CallInst::updateProfWeight(uint64_t S, uint64_t T) {
     for (unsigned i = 1; i < ProfileData->getNumOperands(); i += 2) {
       // The first value is the key of the value profile, which will not change.
       Vals.push_back(ProfileData->getOperand(i));
+      uint64_t Count =
+          mdconst::dyn_extract<ConstantInt>(ProfileData->getOperand(i + 1))
+              ->getValue()
+              .getZExtValue();
+      // Don't scale the magic number.
+      if (Count == NOMORE_ICP_MAGICNUM) {
+        Vals.push_back(ProfileData->getOperand(i + 1));
+        continue;
+      }
       // Using APInt::div may be expensive, but most cases should fit 64 bits.
-      APInt Val(128,
-                mdconst::dyn_extract<ConstantInt>(ProfileData->getOperand(i + 1))
-                    ->getValue()
-                    .getZExtValue());
+      APInt Val(128, Count);
       Val *= APS;
       Vals.push_back(MDB.createConstant(
           ConstantInt::get(Type::getInt64Ty(getContext()),
@@ -838,19 +871,6 @@ InvokeInst *InvokeInst::Create(InvokeInst *II, ArrayRef<OperandBundleDef> OpB,
   NewII->setAttributes(II->getAttributes());
   NewII->setDebugLoc(II->getDebugLoc());
   return NewII;
-}
-
-InvokeInst *InvokeInst::CreateWithReplacedBundle(InvokeInst *II,
-                                                 OperandBundleDef OpB,
-                                                 Instruction *InsertPt) {
-  SmallVector<OperandBundleDef, 2> OpDefs;
-  for (unsigned i = 0, e = II->getNumOperandBundles(); i < e; ++i) {
-    auto ChildOB = II->getOperandBundleAt(i);
-    if (ChildOB.getTagName() != OpB.getTag())
-      OpDefs.emplace_back(ChildOB);
-  }
-  OpDefs.emplace_back(OpB);
-  return InvokeInst::Create(II, OpDefs, InsertPt);
 }
 
 LandingPadInst *InvokeInst::getLandingPadInst() const {
@@ -2086,13 +2106,13 @@ static bool isSingleSourceMaskImpl(ArrayRef<int> Mask, int NumOpElts) {
   assert(!Mask.empty() && "Shuffle mask must contain elements");
   bool UsesLHS = false;
   bool UsesRHS = false;
-  for (int i = 0, NumMaskElts = Mask.size(); i < NumMaskElts; ++i) {
-    if (Mask[i] == -1)
+  for (int I : Mask) {
+    if (I == -1)
       continue;
-    assert(Mask[i] >= 0 && Mask[i] < (NumOpElts * 2) &&
+    assert(I >= 0 && I < (NumOpElts * 2) &&
            "Out-of-bounds shuffle mask element");
-    UsesLHS |= (Mask[i] < NumOpElts);
-    UsesRHS |= (Mask[i] >= NumOpElts);
+    UsesLHS |= (I < NumOpElts);
+    UsesRHS |= (I >= NumOpElts);
     if (UsesLHS && UsesRHS)
       return false;
   }
@@ -3022,8 +3042,8 @@ CastInst *CastInst::CreatePointerCast(Value *S, Type *Ty,
          "Invalid cast");
   assert(Ty->isVectorTy() == S->getType()->isVectorTy() && "Invalid cast");
   assert((!Ty->isVectorTy() ||
-          cast<FixedVectorType>(Ty)->getNumElements() ==
-              cast<FixedVectorType>(S->getType())->getNumElements()) &&
+          cast<VectorType>(Ty)->getElementCount() ==
+              cast<VectorType>(S->getType())->getElementCount()) &&
          "Invalid cast");
 
   if (Ty->isIntOrIntVectorTy())
@@ -3041,8 +3061,8 @@ CastInst *CastInst::CreatePointerCast(Value *S, Type *Ty,
          "Invalid cast");
   assert(Ty->isVectorTy() == S->getType()->isVectorTy() && "Invalid cast");
   assert((!Ty->isVectorTy() ||
-          cast<FixedVectorType>(Ty)->getNumElements() ==
-              cast<FixedVectorType>(S->getType())->getNumElements()) &&
+          cast<VectorType>(Ty)->getElementCount() ==
+              cast<VectorType>(S->getType())->getElementCount()) &&
          "Invalid cast");
 
   if (Ty->isIntOrIntVectorTy())
@@ -3735,29 +3755,6 @@ ICmpInst::Predicate ICmpInst::getUnsignedPredicate(Predicate pred) {
   }
 }
 
-CmpInst::Predicate CmpInst::getFlippedStrictnessPredicate(Predicate pred) {
-  switch (pred) {
-    default: llvm_unreachable("Unknown or unsupported cmp predicate!");
-    case ICMP_SGT: return ICMP_SGE;
-    case ICMP_SLT: return ICMP_SLE;
-    case ICMP_SGE: return ICMP_SGT;
-    case ICMP_SLE: return ICMP_SLT;
-    case ICMP_UGT: return ICMP_UGE;
-    case ICMP_ULT: return ICMP_ULE;
-    case ICMP_UGE: return ICMP_UGT;
-    case ICMP_ULE: return ICMP_ULT;
-
-    case FCMP_OGT: return FCMP_OGE;
-    case FCMP_OLT: return FCMP_OLE;
-    case FCMP_OGE: return FCMP_OGT;
-    case FCMP_OLE: return FCMP_OLT;
-    case FCMP_UGT: return FCMP_UGE;
-    case FCMP_ULT: return FCMP_ULE;
-    case FCMP_UGE: return FCMP_UGT;
-    case FCMP_ULE: return FCMP_ULT;
-  }
-}
-
 CmpInst::Predicate CmpInst::getSwappedPredicate(Predicate pred) {
   switch (pred) {
     default: llvm_unreachable("Unknown cmp predicate!");
@@ -3788,18 +3785,93 @@ CmpInst::Predicate CmpInst::getSwappedPredicate(Predicate pred) {
   }
 }
 
+bool CmpInst::isNonStrictPredicate(Predicate pred) {
+  switch (pred) {
+  case ICMP_SGE:
+  case ICMP_SLE:
+  case ICMP_UGE:
+  case ICMP_ULE:
+  case FCMP_OGE:
+  case FCMP_OLE:
+  case FCMP_UGE:
+  case FCMP_ULE:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool CmpInst::isStrictPredicate(Predicate pred) {
+  switch (pred) {
+  case ICMP_SGT:
+  case ICMP_SLT:
+  case ICMP_UGT:
+  case ICMP_ULT:
+  case FCMP_OGT:
+  case FCMP_OLT:
+  case FCMP_UGT:
+  case FCMP_ULT:
+    return true;
+  default:
+    return false;
+  }
+}
+
+CmpInst::Predicate CmpInst::getStrictPredicate(Predicate pred) {
+  switch (pred) {
+  case ICMP_SGE:
+    return ICMP_SGT;
+  case ICMP_SLE:
+    return ICMP_SLT;
+  case ICMP_UGE:
+    return ICMP_UGT;
+  case ICMP_ULE:
+    return ICMP_ULT;
+  case FCMP_OGE:
+    return FCMP_OGT;
+  case FCMP_OLE:
+    return FCMP_OLT;
+  case FCMP_UGE:
+    return FCMP_UGT;
+  case FCMP_ULE:
+    return FCMP_ULT;
+  default:
+    return pred;
+  }
+}
+
 CmpInst::Predicate CmpInst::getNonStrictPredicate(Predicate pred) {
   switch (pred) {
-  case ICMP_SGT: return ICMP_SGE;
-  case ICMP_SLT: return ICMP_SLE;
-  case ICMP_UGT: return ICMP_UGE;
-  case ICMP_ULT: return ICMP_ULE;
-  case FCMP_OGT: return FCMP_OGE;
-  case FCMP_OLT: return FCMP_OLE;
-  case FCMP_UGT: return FCMP_UGE;
-  case FCMP_ULT: return FCMP_ULE;
-  default: return pred;
+  case ICMP_SGT:
+    return ICMP_SGE;
+  case ICMP_SLT:
+    return ICMP_SLE;
+  case ICMP_UGT:
+    return ICMP_UGE;
+  case ICMP_ULT:
+    return ICMP_ULE;
+  case FCMP_OGT:
+    return FCMP_OGE;
+  case FCMP_OLT:
+    return FCMP_OLE;
+  case FCMP_UGT:
+    return FCMP_UGE;
+  case FCMP_ULT:
+    return FCMP_ULE;
+  default:
+    return pred;
   }
+}
+
+CmpInst::Predicate CmpInst::getFlippedStrictnessPredicate(Predicate pred) {
+  assert(CmpInst::isRelational(pred) && "Call only with relational predicate!");
+
+  if (isStrictPredicate(pred))
+    return getNonStrictPredicate(pred);
+  if (isNonStrictPredicate(pred))
+    return getStrictPredicate(pred);
+
+  llvm_unreachable("Unknown predicate!");
 }
 
 CmpInst::Predicate CmpInst::getSignedPredicate(Predicate pred) {

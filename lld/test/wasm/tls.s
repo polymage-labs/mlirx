@@ -73,8 +73,8 @@ tls3:
 # RUN: wasm-ld -no-gc-sections --shared-memory --max-memory=131072 --no-entry -o %t.wasm %t.o
 # RUN: obj2yaml %t.wasm | FileCheck %s
 
-# RUN: wasm-ld -no-gc-sections --shared-memory --max-memory=131072 --no-merge-data-segments --no-entry -o %t.wasm %t.o
-# RUN: obj2yaml %t.wasm | FileCheck %s
+# RUN: wasm-ld -no-gc-sections --shared-memory --max-memory=131072 --no-merge-data-segments --no-entry -o %t2.wasm %t.o
+# RUN: obj2yaml %t2.wasm | FileCheck %s
 
 # CHECK:      - Type:            GLOBAL
 # CHECK-NEXT:   Globals:
@@ -83,7 +83,7 @@ tls3:
 # CHECK-NEXT:       Mutable:         true
 # CHECK-NEXT:       InitExpr:
 # CHECK-NEXT:         Opcode:          I32_CONST
-# CHECK-NEXT:         Value:           66592
+# CHECK-NEXT:         Value:           66576
 
 # __tls_base
 # CHECK-NEXT:     - Index:           1
@@ -112,8 +112,8 @@ tls3:
 
 # CHECK:      - Type:            CODE
 # CHECK-NEXT:   Functions:
-# Skip __wasm_call_ctors and __wasm_init_memory
-# CHECK:          - Index:           2
+# Skip __wasm_call_ctors
+# CHECK:          - Index:           1
 # CHECK-NEXT:       Locals:          []
 # CHECK-NEXT:       Body:            2000240120004100410CFC0800000B
 
@@ -126,7 +126,7 @@ tls3:
 #   memory.init 1, 0
 #   end
 
-# CHECK-NEXT:     - Index:           3
+# CHECK-NEXT:     - Index:           2
 # CHECK-NEXT:       Locals:          []
 # CHECK-NEXT:       Body:            2381808080004180808080006A0B
 
@@ -136,7 +136,7 @@ tls3:
 #   i32.add
 #   end
 
-# CHECK-NEXT:     - Index:           4
+# CHECK-NEXT:     - Index:           3
 # CHECK-NEXT:       Locals:          []
 # CHECK-NEXT:       Body:            2381808080004184808080006A0B
 
@@ -146,7 +146,7 @@ tls3:
 #   i32.add
 #   end
 
-# CHECK-NEXT:     - Index:           5
+# CHECK-NEXT:     - Index:           4
 # CHECK-NEXT:       Locals:          []
 # CHECK-NEXT:       Body:            2381808080004188808080006A0B
 
@@ -156,10 +156,39 @@ tls3:
 #   i32.add
 #   end
 
-# CHECK-NEXT:     - Index:           6
+# CHECK-NEXT:     - Index:           5
 # CHECK-NEXT:       Locals:          []
 # CHECK-NEXT:       Body:            2383808080000B
 
 # Expected body of tls_align:
 #   global.get 3
 #   end
+
+
+# Also verify TLS usage with --relocatable
+# RUN: wasm-ld --relocatable -o %t3.wasm %t.o
+# RUN: obj2yaml %t3.wasm | FileCheck %s --check-prefix=RELOC
+
+# RELOC:       - Type:            IMPORT
+# RELOC-NEXT:    Imports:
+# RELOC-NEXT:      - Module:          env
+# RELOC-NEXT:        Field:           __tls_base
+# RELOC-NEXT:        Kind:            GLOBAL
+# RELOC-NEXT:        GlobalType:      I32
+# RELOC-NEXT:        GlobalMutable:   true
+# RELOC-NEXT:      - Module:          env
+# RELOC-NEXT:        Field:           __tls_align
+# RELOC-NEXT:        Kind:            GLOBAL
+# RELOC-NEXT:        GlobalType:      I32
+# RELOC-NEXT:        GlobalMutable:   false
+
+# RELOC:         GlobalNames:
+# RELOC-NEXT:      - Index:           0
+# RELOC-NEXT:        Name:            __tls_base
+# RELOC-NEXT:      - Index:           1
+# RELOC-NEXT:        Name:            __tls_align
+# RELOC-NEXT:    DataSegmentNames:
+# RELOC-NEXT:      - Index:           0
+# RELOC-NEXT:        Name:            .tdata
+# RELOC-NEXT:      - Index:           1
+# RELOC-NEXT:        Name:            .bss.no_tls

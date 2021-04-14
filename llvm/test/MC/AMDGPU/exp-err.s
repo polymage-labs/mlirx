@@ -5,6 +5,9 @@ exp mrt8 v3, v2, v1, v0
 // GCN: :5: error: invalid exp target
 
 exp pos4 v3, v2, v1, v0
+// GCN: :5: error: exp target is not supported on this GPU
+
+exp pos5 v3, v2, v1, v0
 // GCN: :5: error: invalid exp target
 
 exp param32 v3, v2, v1, v0
@@ -53,7 +56,7 @@ exp , v3, v2, v1, v0
 // GCN: :5: error: unknown token in expression
 
 exp
-// GCN: :4: error: too few operands for instruction
+// GCN: :1: error: too few operands for instruction
 
 exp mrt0 s0, v0, v0, v0
 // GCN: 10: error: invalid operand for instruction

@@ -39,23 +39,18 @@ namespace scudo {
 // Memory used by this allocator is never unmapped but can be partially
 // reclaimed if the platform allows for it.
 
-template <class SizeClassMapT, uptr RegionSizeLog,
-          s32 MinReleaseToOsIntervalMs = INT32_MIN,
-          s32 MaxReleaseToOsIntervalMs = INT32_MAX>
-class SizeClassAllocator32 {
+template <typename Config> class SizeClassAllocator32 {
 public:
-  typedef SizeClassMapT SizeClassMap;
+  typedef typename Config::PrimaryCompactPtrT CompactPtrT;
+  typedef typename Config::SizeClassMap SizeClassMap;
   // The bytemap can only track UINT8_MAX - 1 classes.
   static_assert(SizeClassMap::LargestClassId <= (UINT8_MAX - 1), "");
   // Regions should be large enough to hold the largest Block.
-  static_assert((1UL << RegionSizeLog) >= SizeClassMap::MaxSize, "");
-  typedef SizeClassAllocator32<SizeClassMapT, RegionSizeLog,
-                               MinReleaseToOsIntervalMs,
-                               MaxReleaseToOsIntervalMs>
-      ThisT;
+  static_assert((1UL << Config::PrimaryRegionSizeLog) >= SizeClassMap::MaxSize,
+                "");
+  typedef SizeClassAllocator32<Config> ThisT;
   typedef SizeClassAllocatorLocalCache<ThisT> CacheT;
   typedef typename CacheT::TransferBatch TransferBatch;
-  static const bool SupportsMemoryTagging = false;
 
   static uptr getSizeByClassId(uptr ClassId) {
     return (ClassId == SizeClassMap::BatchClassId)
@@ -73,20 +68,15 @@ public:
 
     u32 Seed;
     const u64 Time = getMonotonicTime();
-    if (UNLIKELY(!getRandom(reinterpret_cast<void *>(&Seed), sizeof(Seed))))
+    if (!getRandom(reinterpret_cast<void *>(&Seed), sizeof(Seed)))
       Seed = static_cast<u32>(
           Time ^ (reinterpret_cast<uptr>(SizeClassInfoArray) >> 6));
-    const uptr PageSize = getPageSizeCached();
     for (uptr I = 0; I < NumClasses; I++) {
       SizeClassInfo *Sci = getSizeClassInfo(I);
       Sci->RandState = getRandomU32(&Seed);
       // Sci->MaxRegionIndex is already initialized to 0.
       Sci->MinRegionIndex = NumRegions;
-      // See comment in the 64-bit primary about releasing smaller size classes.
-      Sci->CanRelease = (I != SizeClassMap::BatchClassId) &&
-                        (getSizeByClassId(I) >= (PageSize / 32));
-      if (Sci->CanRelease)
-        Sci->ReleaseInfo.LastReleaseAtNs = Time;
+      Sci->ReleaseInfo.LastReleaseAtNs = Time;
     }
     setOption(Option::ReleaseInterval, static_cast<sptr>(ReleaseToOsInterval));
   }
@@ -113,6 +103,14 @@ public:
     PossibleRegions.unmapTestOnly();
   }
 
+  CompactPtrT compactPtr(UNUSED uptr ClassId, uptr Ptr) const {
+    return static_cast<CompactPtrT>(Ptr);
+  }
+
+  void *decompactPtr(UNUSED uptr ClassId, CompactPtrT CompactPtr) const {
+    return reinterpret_cast<void *>(static_cast<uptr>(CompactPtr));
+  }
+
   TransferBatch *popBatch(CacheT *C, uptr ClassId) {
     DCHECK_LT(ClassId, NumClasses);
     SizeClassInfo *Sci = getSizeClassInfo(ClassId);
@@ -137,7 +135,7 @@ public:
     ScopedLock L(Sci->Mutex);
     Sci->FreeList.push_front(B);
     Sci->Stats.PushedBlocks += B->getCount();
-    if (Sci->CanRelease)
+    if (ClassId != SizeClassMap::BatchClassId)
       releaseToOSMaybe(Sci, ClassId);
   }
 
@@ -204,9 +202,9 @@ public:
 
   bool setOption(Option O, sptr Value) {
     if (O == Option::ReleaseInterval) {
-      const s32 Interval =
-          Max(Min(static_cast<s32>(Value), MaxReleaseToOsIntervalMs),
-              MinReleaseToOsIntervalMs);
+      const s32 Interval = Max(
+          Min(static_cast<s32>(Value), Config::PrimaryMaxReleaseToOsIntervalMs),
+          Config::PrimaryMinReleaseToOsIntervalMs);
       atomic_store_relaxed(&ReleaseToOsIntervalMs, Interval);
       return true;
     }
@@ -217,15 +215,14 @@ public:
   uptr releaseToOS() {
     uptr TotalReleasedBytes = 0;
     for (uptr I = 0; I < NumClasses; I++) {
+      if (I == SizeClassMap::BatchClassId)
+        continue;
       SizeClassInfo *Sci = getSizeClassInfo(I);
       ScopedLock L(Sci->Mutex);
       TotalReleasedBytes += releaseToOSMaybe(Sci, I, /*Force=*/true);
     }
     return TotalReleasedBytes;
   }
-
-  static bool useMemoryTagging(UNUSED Options Options) { return false; }
-  void disableMemoryTagging() {}
 
   const char *getRegionInfoArrayAddress() const { return nullptr; }
   static uptr getRegionInfoArraySize() { return 0; }
@@ -239,8 +236,9 @@ public:
 
 private:
   static const uptr NumClasses = SizeClassMap::NumClasses;
-  static const uptr RegionSize = 1UL << RegionSizeLog;
-  static const uptr NumRegions = SCUDO_MMAP_RANGE_SIZE >> RegionSizeLog;
+  static const uptr RegionSize = 1UL << Config::PrimaryRegionSizeLog;
+  static const uptr NumRegions =
+      SCUDO_MMAP_RANGE_SIZE >> Config::PrimaryRegionSizeLog;
   static const u32 MaxNumBatches = SCUDO_ANDROID ? 4U : 8U;
   typedef FlatByteMap<NumRegions> ByteMap;
 
@@ -262,7 +260,6 @@ private:
     uptr CurrentRegion;
     uptr CurrentRegionAllocated;
     SizeClassStats Stats;
-    bool CanRelease;
     u32 RandState;
     uptr AllocatedUser;
     // Lowest & highest region index allocated for this size class, to avoid
@@ -274,7 +271,7 @@ private:
   static_assert(sizeof(SizeClassInfo) % SCUDO_CACHE_LINE_SIZE == 0, "");
 
   uptr computeRegionId(uptr Mem) {
-    const uptr Id = Mem >> RegionSizeLog;
+    const uptr Id = Mem >> Config::PrimaryRegionSizeLog;
     CHECK_LT(Id, NumRegions);
     return Id;
   }
@@ -371,17 +368,18 @@ private:
     // Fill the transfer batches and put them in the size-class freelist. We
     // need to randomize the blocks for security purposes, so we first fill a
     // local array that we then shuffle before populating the batches.
-    void *ShuffleArray[ShuffleArraySize];
+    CompactPtrT ShuffleArray[ShuffleArraySize];
     DCHECK_LE(NumberOfBlocks, ShuffleArraySize);
 
     uptr P = Region + Offset;
     for (u32 I = 0; I < NumberOfBlocks; I++, P += Size)
-      ShuffleArray[I] = reinterpret_cast<void *>(P);
+      ShuffleArray[I] = reinterpret_cast<CompactPtrT>(P);
     // No need to shuffle the batches size class.
     if (ClassId != SizeClassMap::BatchClassId)
       shuffle(ShuffleArray, NumberOfBlocks, &Sci->RandState);
     for (u32 I = 0; I < NumberOfBlocks;) {
-      TransferBatch *B = C->createBatch(ClassId, ShuffleArray[I]);
+      TransferBatch *B =
+          C->createBatch(ClassId, reinterpret_cast<void *>(ShuffleArray[I]));
       if (UNLIKELY(!B))
         return nullptr;
       const u32 N = Min(MaxCount, NumberOfBlocks - I);
@@ -447,7 +445,7 @@ private:
     if (BlockSize < PageSize / 16U) {
       if (!Force && BytesPushed < Sci->AllocatedUser / 16U)
         return 0;
-      // We want 8x% to 9x% free bytes (the larger the bock, the lower the %).
+      // We want 8x% to 9x% free bytes (the larger the block, the lower the %).
       if ((BytesInFreeList * 100U) / Sci->AllocatedUser <
           (100U - 1U - BlockSize / 16U))
         return 0;
@@ -475,8 +473,11 @@ private:
     auto SkipRegion = [this, First, ClassId](uptr RegionIndex) {
       return (PossibleRegions[First + RegionIndex] - 1U) != ClassId;
     };
-    releaseFreeMemoryToOS(Sci->FreeList, Base, RegionSize, NumberOfRegions,
-                          BlockSize, &Recorder, SkipRegion);
+    auto DecompactPtr = [](CompactPtrT CompactPtr) {
+      return reinterpret_cast<uptr>(CompactPtr);
+    };
+    releaseFreeMemoryToOS(Sci->FreeList, RegionSize, NumberOfRegions, BlockSize,
+                          &Recorder, DecompactPtr, SkipRegion);
     if (Recorder.getReleasedRangesCount() > 0) {
       Sci->ReleaseInfo.PushedBlocksAtLastRelease = Sci->Stats.PushedBlocks;
       Sci->ReleaseInfo.RangesReleased += Recorder.getReleasedRangesCount();

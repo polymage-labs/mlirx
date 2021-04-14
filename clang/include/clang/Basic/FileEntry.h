@@ -25,6 +25,9 @@
 #include "llvm/Support/FileSystem/UniqueID.h"
 
 namespace llvm {
+
+class MemoryBuffer;
+
 namespace vfs {
 
 class File;
@@ -67,6 +70,7 @@ public:
   inline unsigned getUID() const;
   inline const llvm::sys::fs::UniqueID &getUniqueID() const;
   inline time_t getModificationTime() const;
+  inline bool isNamedPipe() const;
   inline void closeFile() const;
 
   /// Check if the underlying FileEntry is the same, intentially ignoring
@@ -328,16 +332,19 @@ class FileEntry {
   friend class FileManager;
 
   std::string RealPathName;   // Real path to the file; could be empty.
-  off_t Size;                 // File size in bytes.
-  time_t ModTime;             // Modification time of file.
-  const DirectoryEntry *Dir;  // Directory file lives in.
+  off_t Size = 0;             // File size in bytes.
+  time_t ModTime = 0;         // Modification time of file.
+  const DirectoryEntry *Dir = nullptr; // Directory file lives in.
   llvm::sys::fs::UniqueID UniqueID;
-  unsigned UID;               // A unique (small) ID for the file.
-  bool IsNamedPipe;
-  bool IsValid;               // Is this \c FileEntry initialized and valid?
+  unsigned UID = 0; // A unique (small) ID for the file.
+  bool IsNamedPipe = false;
+  bool IsValid = false; // Is this \c FileEntry initialized and valid?
 
   /// The open file, if it is owned by the \p FileEntry.
   mutable std::unique_ptr<llvm::vfs::File> File;
+
+  /// The file content, if it is owned by the \p FileEntry.
+  std::unique_ptr<llvm::MemoryBuffer> Content;
 
   // First access name for this FileEntry.
   //
@@ -389,6 +396,8 @@ const llvm::sys::fs::UniqueID &FileEntryRef::getUniqueID() const {
 time_t FileEntryRef::getModificationTime() const {
   return getFileEntry().getModificationTime();
 }
+
+bool FileEntryRef::isNamedPipe() const { return getFileEntry().isNamedPipe(); }
 
 void FileEntryRef::closeFile() const { getFileEntry().closeFile(); }
 

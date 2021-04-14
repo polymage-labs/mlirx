@@ -24,6 +24,7 @@
 #include "mlir/Analysis/AffineAnalysis.h"
 #include "mlir/Analysis/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
@@ -48,9 +49,6 @@ struct HigherOrderPolyhedralOpt
     : public HigherOrderPolyhedralOptBase<HigherOrderPolyhedralOpt> {
   void runOnFunction() override;
   void runOnBlock(Block *block);
-
-  void lowerPolyForOps(Block *block, Block::iterator begin, Block::iterator end,
-                       OpBuilder &builder);
 
   void optimizeMatmul(AffineForOp rootMatmulNest, unsigned M_C, unsigned N_C,
                       unsigned K_C, unsigned M_R, unsigned N_R, unsigned K_U,
@@ -89,7 +87,7 @@ static AffineForOp getByPolyName(AffineForOp root, StringRef polyName) {
   const char *kPolyCodeGenAttrName = "poly_codegen_name";
   AffineForOp res;
   root.walk([&](AffineForOp forOp) {
-    auto stringAttr = forOp.getAttrOfType<StringAttr>(kPolyCodeGenAttrName);
+    auto stringAttr = forOp->getAttrOfType<StringAttr>(kPolyCodeGenAttrName);
     if (!stringAttr)
       return WalkResult::advance();
     auto forOpCodegenName = stringAttr.getValue();
@@ -211,15 +209,15 @@ void HigherOrderPolyhedralOpt::optimizeMatmul(AffineForOp rootMatmulNest,
     // Set alignment to 256-bit boundaries for LHS and RHS buffers.
     // FIXME: you don't need to set alignment if these are already vector
     // memrefs.
-    cast<AllocOp>(lhsBuf.getDefiningOp())
-        .setAttr(AllocOp::getAlignmentAttrName(),
+    cast<memref::AllocOp>(lhsBuf.getDefiningOp())
+        ->setAttr(memref::AllocOp::getAlignmentAttrName(),
                  builder.getI64IntegerAttr(32));
     // The rhsL3buf could sometimes just be the original memref / func arg.
-    if (auto rhsAllocOp = rhsL3Buf.getDefiningOp())
-      rhsAllocOp->setAttr(AllocOp::getAlignmentAttrName(),
+    if (auto *rhsAllocOp = rhsL3Buf.getDefiningOp())
+      rhsAllocOp->setAttr(memref::AllocOp::getAlignmentAttrName(),
                           builder.getI64IntegerAttr(32));
-    cast<AllocOp>(rhsL1Buf.getDefiningOp())
-        .setAttr(AllocOp::getAlignmentAttrName(),
+    cast<memref::AllocOp>(rhsL1Buf.getDefiningOp())
+        ->setAttr(memref::AllocOp::getAlignmentAttrName(),
                  builder.getI64IntegerAttr(32));
   }
 
@@ -230,11 +228,11 @@ void HigherOrderPolyhedralOpt::optimizeMatmul(AffineForOp rootMatmulNest,
     // subject to disappearing depending on the tile sizes and constant
     // problem sizes.
     if (iiR)
-      loopUnrollJamUpToFactor(iiR, M_R);
+      (void)loopUnrollJamUpToFactor(iiR, M_R);
     if (jjR)
-      loopUnrollJamUpToFactor(jjR, N_R);
+      (void)loopUnrollJamUpToFactor(jjR, N_R);
     if (k)
-      loopUnrollJamByFactor(k, K_U);
+      (void)loopUnrollJamByFactor(k, K_U);
   }
 }
 
@@ -272,16 +270,16 @@ void HigherOrderPolyhedralOpt::runOnFunction() {
     runOnBlock(&block);
 
   // Normalize non-identity layouts used.
-  func.walk([](AllocOp allocOp) { normalizeMemRef(allocOp); });
+  func.walk([](memref::AllocOp allocOp) { (void)normalizeMemRef(&allocOp); });
 
   // Canonicalize.
   {
-    OwningRewritePatternList patterns;
     auto *context = &getContext();
+    RewritePatternSet patterns(context);
     AffineLoadOp::getCanonicalizationPatterns(patterns, context);
     AffineStoreOp::getCanonicalizationPatterns(patterns, context);
     AffineApplyOp::getCanonicalizationPatterns(patterns, context);
-    applyPatternsAndFoldGreedily(func, std::move(patterns));
+    (void)applyPatternsAndFoldGreedily(func, std::move(patterns));
   }
 
   // Replace accesses to invariant load/store's and multiple redundant loads

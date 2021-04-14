@@ -20,9 +20,9 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/BasicAliasAnalysis.h"
+#include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/CGSCCPassManager.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/CallGraphSCCPass.h"
@@ -78,6 +78,8 @@ STATISTIC(NumNonNullReturn, "Number of function returns marked nonnull");
 STATISTIC(NumNoRecurse, "Number of functions marked as norecurse");
 STATISTIC(NumNoUnwind, "Number of functions marked as nounwind");
 STATISTIC(NumNoFree, "Number of functions marked as nofree");
+STATISTIC(NumWillReturn, "Number of functions marked as willreturn");
+STATISTIC(NumNoSync, "Number of functions marked as nosync");
 
 static cl::opt<bool> EnableNonnullArgPropagation(
     "enable-nonnull-arg-prop", cl::init(true), cl::Hidden,
@@ -146,6 +148,13 @@ static MemoryAccessKind checkFunctionMemoryAccess(Function &F, bool ThisBody,
 
       // If the call doesn't access memory, we're done.
       if (isNoModRef(MRI))
+        continue;
+
+      // A pseudo probe call shouldn't change any function attribute since it
+      // doesn't translate to a real instruction. It comes with a memory access
+      // tag to prevent itself being removed by optimizations and not block
+      // other instructions being optimized.
+      if (isa<PseudoProbeInst>(I))
         continue;
 
       if (!AliasAnalysis::onlyAccessesArgPointees(MRB)) {
@@ -642,7 +651,7 @@ static bool addArgumentAttrsFromCallsites(Function &F) {
     if (auto *CB = dyn_cast<CallBase>(&I)) {
       if (auto *CalledFunc = CB->getCalledFunction()) {
         for (auto &CSArg : CalledFunc->args()) {
-          if (!CSArg.hasNonNullAttr())
+          if (!CSArg.hasNonNullAttr(/* AllowUndefOrPoison */ false))
             continue;
 
           // If the non-null callsite argument operand is an argument to 'F'
@@ -1245,7 +1254,7 @@ static bool InstrBreaksNonThrowing(Instruction &I, const SCCNodeSet &SCCNodes) {
       // I is a may-throw call to a function inside our SCC. This doesn't
       // invalidate our current working assumption that the SCC is no-throw; we
       // just have to scan that other function.
-      if (SCCNodes.count(Callee) > 0)
+      if (SCCNodes.contains(Callee))
         return false;
     }
   }
@@ -1265,7 +1274,7 @@ static bool InstrBreaksNoFree(Instruction &I, const SCCNodeSet &SCCNodes) {
   if (Callee->doesNotFreeMemory())
     return false;
 
-  if (SCCNodes.count(Callee) > 0)
+  if (SCCNodes.contains(Callee))
     return false;
 
   return true;
@@ -1389,6 +1398,103 @@ static bool addNoRecurseAttrs(const SCCNodeSet &SCCNodes) {
   return true;
 }
 
+static bool instructionDoesNotReturn(Instruction &I) {
+  if (auto *CB = dyn_cast<CallBase>(&I)) {
+    Function *Callee = CB->getCalledFunction();
+    return Callee && Callee->doesNotReturn();
+  }
+  return false;
+}
+
+// A basic block can only return if it terminates with a ReturnInst and does not
+// contain calls to noreturn functions.
+static bool basicBlockCanReturn(BasicBlock &BB) {
+  if (!isa<ReturnInst>(BB.getTerminator()))
+    return false;
+  return none_of(BB, instructionDoesNotReturn);
+}
+
+// Set the noreturn function attribute if possible.
+static bool addNoReturnAttrs(const SCCNodeSet &SCCNodes) {
+  bool Changed = false;
+
+  for (Function *F : SCCNodes) {
+    if (!F || !F->hasExactDefinition() || F->hasFnAttribute(Attribute::Naked) ||
+        F->doesNotReturn())
+      continue;
+
+    // The function can return if any basic blocks can return.
+    // FIXME: this doesn't handle recursion or unreachable blocks.
+    if (none_of(*F, basicBlockCanReturn)) {
+      F->setDoesNotReturn();
+      Changed = true;
+    }
+  }
+
+  return Changed;
+}
+
+static bool functionWillReturn(const Function &F) {
+  // Must-progress function without side-effects must return.
+  if (F.mustProgress() && F.onlyReadsMemory())
+    return true;
+
+  // Can only analyze functions with a definition.
+  if (F.isDeclaration())
+    return false;
+
+  // Functions with loops require more sophisticated analysis, as the loop
+  // may be infinite. For now, don't try to handle them.
+  SmallVector<std::pair<const BasicBlock *, const BasicBlock *>> Backedges;
+  FindFunctionBackedges(F, Backedges);
+  if (!Backedges.empty())
+    return false;
+
+  // If there are no loops, then the function is willreturn if all calls in
+  // it are willreturn.
+  return all_of(instructions(F), [](const Instruction &I) {
+    return I.willReturn();
+  });
+}
+
+// Set the willreturn function attribute if possible.
+static bool addWillReturn(const SCCNodeSet &SCCNodes) {
+  bool Changed = false;
+
+  for (Function *F : SCCNodes) {
+    if (!F || F->willReturn() || !functionWillReturn(*F))
+      continue;
+
+    F->setWillReturn();
+    NumWillReturn++;
+    Changed = true;
+  }
+
+  return Changed;
+}
+
+// Infer the nosync attribute.  For the moment, the inference is trivial
+// and relies on the readnone attribute already being infered.  This will
+// be replaced with a more robust implementation in the near future.
+static bool addNoSyncAttr(const SCCNodeSet &SCCNodes) {
+  bool Changed = false;
+
+  for (Function *F : SCCNodes) {
+    if (!F || F->hasNoSync())
+      continue;
+
+    // readnone + not convergent implies nosync
+    if (!F->doesNotAccessMemory() || F->isConvergent())
+      continue;
+
+    F->setNoSync();
+    NumNoSync++;
+    Changed = true;
+  }
+
+  return Changed;
+}
+
 static SCCNodesResult createSCCNodeSet(ArrayRef<Function *> Functions) {
   SCCNodesResult Res;
   Res.HasUnknownCall = false;
@@ -1432,6 +1538,8 @@ static bool deriveAttrsInPostOrder(ArrayRef<Function *> Functions,
   Changed |= addReadAttrs(Nodes.SCCNodes, AARGetter);
   Changed |= addArgumentAttrs(Nodes.SCCNodes);
   Changed |= inferConvergent(Nodes.SCCNodes);
+  Changed |= addNoReturnAttrs(Nodes.SCCNodes);
+  Changed |= addWillReturn(Nodes.SCCNodes);
 
   // If we have no external nodes participating in the SCC, we can deduce some
   // more precise attributes as well.
@@ -1441,6 +1549,8 @@ static bool deriveAttrsInPostOrder(ArrayRef<Function *> Functions,
     Changed |= inferAttrsFromFunctionBodies(Nodes.SCCNodes);
     Changed |= addNoRecurseAttrs(Nodes.SCCNodes);
   }
+
+  Changed |= addNoSyncAttr(Nodes.SCCNodes);
 
   return Changed;
 }

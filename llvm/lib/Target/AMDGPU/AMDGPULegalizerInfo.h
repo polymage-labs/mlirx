@@ -23,7 +23,11 @@ namespace llvm {
 class GCNTargetMachine;
 class LLVMContext;
 class GCNSubtarget;
+class MachineIRBuilder;
 
+namespace AMDGPU {
+struct ImageDimIntrinsicInfo;
+}
 /// This class provides the information for the target register banks.
 class AMDGPULegalizerInfo final : public LegalizerInfo {
   const GCNSubtarget &ST;
@@ -125,6 +129,8 @@ public:
                       MachineIRBuilder &B) const;
   bool legalizeFastUnsafeFDIV(MachineInstr &MI, MachineRegisterInfo &MRI,
                               MachineIRBuilder &B) const;
+  bool legalizeFastUnsafeFDIV64(MachineInstr &MI, MachineRegisterInfo &MRI,
+                                MachineIRBuilder &B) const;
   bool legalizeFDIVFastIntrin(MachineInstr &MI, MachineRegisterInfo &MRI,
                               MachineIRBuilder &B) const;
 
@@ -177,6 +183,12 @@ public:
 
   bool legalizeTrapIntrinsic(MachineInstr &MI, MachineRegisterInfo &MRI,
                              MachineIRBuilder &B) const;
+  bool legalizeTrapEndpgm(MachineInstr &MI, MachineRegisterInfo &MRI,
+                          MachineIRBuilder &B) const;
+  bool legalizeTrapHsaQueuePtr(MachineInstr &MI, MachineRegisterInfo &MRI,
+                               MachineIRBuilder &B) const;
+  bool legalizeTrapHsa(MachineInstr &MI, MachineRegisterInfo &MRI,
+                       MachineIRBuilder &B) const;
   bool legalizeDebugTrapIntrinsic(MachineInstr &MI, MachineRegisterInfo &MRI,
                                   MachineIRBuilder &B) const;
 

@@ -12,6 +12,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#ifndef LLVM_CODEGEN_COMMANDFLAGS_H
+#define LLVM_CODEGEN_COMMANDFLAGS_H
+
 #include "llvm/ADT/FloatingPointMode.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Triple.h"
@@ -99,6 +102,8 @@ Optional<bool> getExplicitFunctionSections();
 
 bool getIgnoreXCOFFVisibility();
 
+bool getXCOFFTracebackTable();
+
 std::string getBBSections();
 
 std::string getStackProtectorGuard();
@@ -171,3 +176,5 @@ void setFunctionAttributes(StringRef CPU, StringRef Features, Function &F);
 void setFunctionAttributes(StringRef CPU, StringRef Features, Module &M);
 } // namespace codegen
 } // namespace llvm
+
+#endif // LLVM_CODEGEN_COMMANDFLAGS_H

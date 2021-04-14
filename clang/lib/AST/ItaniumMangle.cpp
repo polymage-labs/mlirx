@@ -125,6 +125,9 @@ class ItaniumMangleContextImpl : public ItaniumMangleContext {
   llvm::DenseMap<DiscriminatorKeyTy, unsigned> Discriminator;
   llvm::DenseMap<const NamedDecl*, unsigned> Uniquifier;
 
+  bool IsDevCtx = false;
+  bool NeedsUniqueInternalLinkageNames = false;
+
 public:
   explicit ItaniumMangleContextImpl(ASTContext &Context,
                                     DiagnosticsEngine &Diags)
@@ -137,6 +140,15 @@ public:
   bool shouldMangleStringLiteral(const StringLiteral *) override {
     return false;
   }
+
+  bool isUniqueInternalLinkageDecl(const NamedDecl *ND) override;
+  void needsUniqueInternalLinkageNames() override {
+    NeedsUniqueInternalLinkageNames = true;
+  }
+
+  bool isDeviceMangleContext() const override { return IsDevCtx; }
+  void setDeviceMangleContext(bool IsDev) override { IsDevCtx = IsDev; }
+
   void mangleCXXName(GlobalDecl GD, raw_ostream &) override;
   void mangleThunk(const CXXMethodDecl *MD, const ThunkInfo &Thunk,
                    raw_ostream &) override;
@@ -203,6 +215,36 @@ public:
     disc = discriminator-2;
     return true;
   }
+
+  std::string getLambdaString(const CXXRecordDecl *Lambda) override {
+    // This function matches the one in MicrosoftMangle, which returns
+    // the string that is used in lambda mangled names.
+    assert(Lambda->isLambda() && "RD must be a lambda!");
+    std::string Name("<lambda");
+    Decl *LambdaContextDecl = Lambda->getLambdaContextDecl();
+    unsigned LambdaManglingNumber = Lambda->getLambdaManglingNumber();
+    unsigned LambdaId;
+    const ParmVarDecl *Parm = dyn_cast_or_null<ParmVarDecl>(LambdaContextDecl);
+    const FunctionDecl *Func =
+        Parm ? dyn_cast<FunctionDecl>(Parm->getDeclContext()) : nullptr;
+
+    if (Func) {
+      unsigned DefaultArgNo =
+          Func->getNumParams() - Parm->getFunctionScopeIndex();
+      Name += llvm::utostr(DefaultArgNo);
+      Name += "_";
+    }
+
+    if (LambdaManglingNumber)
+      LambdaId = LambdaManglingNumber;
+    else
+      LambdaId = getAnonymousStructIdForDebugInfo(Lambda);
+
+    Name += llvm::utostr(LambdaId);
+    Name += '>';
+    return Name;
+  }
+
   /// @}
 };
 
@@ -546,18 +588,21 @@ private:
                         unsigned knownArity);
   void mangleCastExpression(const Expr *E, StringRef CastEncoding);
   void mangleInitListElements(const InitListExpr *InitList);
-  void mangleDeclRefExpr(const NamedDecl *D);
-  void mangleExpression(const Expr *E, unsigned Arity = UnknownArity);
+  void mangleExpression(const Expr *E, unsigned Arity = UnknownArity,
+                        bool AsTemplateArg = false);
   void mangleCXXCtorType(CXXCtorType T, const CXXRecordDecl *InheritedFrom);
   void mangleCXXDtorType(CXXDtorType T);
 
-  void mangleTemplateArgs(const TemplateArgumentLoc *TemplateArgs,
+  void mangleTemplateArgs(TemplateName TN,
+                          const TemplateArgumentLoc *TemplateArgs,
                           unsigned NumTemplateArgs);
-  void mangleTemplateArgs(const TemplateArgument *TemplateArgs,
+  void mangleTemplateArgs(TemplateName TN, const TemplateArgument *TemplateArgs,
                           unsigned NumTemplateArgs);
-  void mangleTemplateArgs(const TemplateArgumentList &AL);
-  void mangleTemplateArg(TemplateArgument A);
-  void mangleValueInTemplateArg(QualType T, const APValue &V);
+  void mangleTemplateArgs(TemplateName TN, const TemplateArgumentList &AL);
+  void mangleTemplateArg(TemplateArgument A, bool NeedExactType);
+  void mangleTemplateArgExpr(const Expr *E);
+  void mangleValueInTemplateArg(QualType T, const APValue &V, bool TopLevel,
+                                bool NeedExactType = false);
 
   void mangleTemplateParameter(unsigned Depth, unsigned Index);
 
@@ -572,6 +617,36 @@ private:
   AbiTagList makeVariableTypeTags(const VarDecl *VD);
 };
 
+}
+
+static bool isInternalLinkageDecl(const NamedDecl *ND) {
+  if (ND && ND->getFormalLinkage() == InternalLinkage &&
+      !ND->isExternallyVisible() &&
+      getEffectiveDeclContext(ND)->isFileContext() &&
+      !ND->isInAnonymousNamespace())
+    return true;
+  return false;
+}
+
+// Check if this Function Decl needs a unique internal linkage name.
+bool ItaniumMangleContextImpl::isUniqueInternalLinkageDecl(
+    const NamedDecl *ND) {
+  if (!NeedsUniqueInternalLinkageNames || !ND)
+    return false;
+
+  const auto *FD = dyn_cast<FunctionDecl>(ND);
+  if (!FD)
+    return false;
+
+  // For C functions without prototypes, return false as their
+  // names should not be mangled.
+  if (!FD->hasPrototype())
+    return false;
+
+  if (isInternalLinkageDecl(ND))
+    return true;
+
+  return false;
 }
 
 bool ItaniumMangleContextImpl::shouldMangleCXXName(const NamedDecl *D) {
@@ -724,9 +799,17 @@ void CXXNameMangler::mangleFunctionEncodingBareType(const FunctionDecl *FD) {
       EnableIfAttr *EIA = dyn_cast<EnableIfAttr>(*I);
       if (!EIA)
         continue;
-      Out << 'X';
-      mangleExpression(EIA->getCond());
-      Out << 'E';
+      if (Context.getASTContext().getLangOpts().getClangABICompat() >
+          LangOptions::ClangABI::Ver11) {
+        mangleTemplateArgExpr(EIA->getCond());
+      } else {
+        // Prior to Clang 12, we hardcoded the X/E around enable-if's argument,
+        // even though <template-arg> should not include an X/E around
+        // <expr-primary>.
+        Out << 'X';
+        mangleExpression(EIA->getCond());
+        Out << 'E';
+      }
     }
     Out << 'E';
     FunctionTypeDepth.pop(Saved);
@@ -823,6 +906,11 @@ isTemplate(GlobalDecl GD, const TemplateArgumentList *&TemplateArgs) {
   return GlobalDecl();
 }
 
+static TemplateName asTemplateName(GlobalDecl GD) {
+  const TemplateDecl *TD = dyn_cast_or_null<TemplateDecl>(GD.getDecl());
+  return TemplateName(const_cast<TemplateDecl*>(TD));
+}
+
 void CXXNameMangler::mangleName(GlobalDecl GD) {
   const NamedDecl *ND = cast<NamedDecl>(GD.getDecl());
   if (const VarDecl *VD = dyn_cast<VarDecl>(ND)) {
@@ -899,7 +987,7 @@ void CXXNameMangler::mangleNameWithAbiTags(GlobalDecl GD,
     const TemplateArgumentList *TemplateArgs = nullptr;
     if (GlobalDecl TD = isTemplate(GD, TemplateArgs)) {
       mangleUnscopedTemplateName(TD, AdditionalAbiTags);
-      mangleTemplateArgs(*TemplateArgs);
+      mangleTemplateArgs(asTemplateName(TD), *TemplateArgs);
       return;
     }
 
@@ -952,7 +1040,7 @@ void CXXNameMangler::mangleTemplateName(const TemplateDecl *TD,
 
   if (DC->isTranslationUnit() || isStdNamespace(DC)) {
     mangleUnscopedTemplateName(TD, nullptr);
-    mangleTemplateArgs(TemplateArgs, NumTemplateArgs);
+    mangleTemplateArgs(asTemplateName(TD), TemplateArgs, NumTemplateArgs);
   } else {
     mangleNestedName(TD, TemplateArgs, NumTemplateArgs);
   }
@@ -1102,7 +1190,8 @@ void CXXNameMangler::manglePrefix(QualType type) {
       // FIXME: GCC does not appear to mangle the template arguments when
       // the template in question is a dependent template name. Should we
       // emulate that badness?
-      mangleTemplateArgs(TST->getArgs(), TST->getNumArgs());
+      mangleTemplateArgs(TST->getTemplateName(), TST->getArgs(),
+                         TST->getNumArgs());
       addSubstitution(QualType(TST, 0));
     }
   } else if (const auto *DTST =
@@ -1115,7 +1204,7 @@ void CXXNameMangler::manglePrefix(QualType type) {
       // FIXME: GCC does not appear to mangle the template arguments when
       // the template in question is a dependent template name. Should we
       // emulate that badness?
-      mangleTemplateArgs(DTST->getArgs(), DTST->getNumArgs());
+      mangleTemplateArgs(Template, DTST->getArgs(), DTST->getNumArgs());
       addSubstitution(QualType(DTST, 0));
     }
   } else {
@@ -1258,7 +1347,7 @@ void CXXNameMangler::mangleUnresolvedName(
   // The <simple-id> and on <operator-name> productions end in an optional
   // <template-args>.
   if (TemplateArgs)
-    mangleTemplateArgs(TemplateArgs, NumTemplateArgs);
+    mangleTemplateArgs(TemplateName(), TemplateArgs, NumTemplateArgs);
 }
 
 void CXXNameMangler::mangleUnqualifiedName(GlobalDecl GD,
@@ -1303,10 +1392,9 @@ void CXXNameMangler::mangleUnqualifiedName(GlobalDecl GD,
 
     if (auto *TPO = dyn_cast<TemplateParamObjectDecl>(ND)) {
       // Proposed in https://github.com/itanium-cxx-abi/cxx-abi/issues/63.
-      Out << "TAX";
+      Out << "TA";
       mangleValueInTemplateArg(TPO->getType().getUnqualifiedType(),
-                               TPO->getValue());
-      Out << "E";
+                               TPO->getValue(), /*TopLevel=*/true);
       break;
     }
 
@@ -1324,10 +1412,7 @@ void CXXNameMangler::mangleUnqualifiedName(GlobalDecl GD,
       // 12_GLOBAL__N_1 mangling is quite sufficient there, and this better
       // matches GCC anyway, because GCC does not treat anonymous namespaces as
       // implying internal linkage.
-      if (ND && ND->getFormalLinkage() == InternalLinkage &&
-          !ND->isExternallyVisible() &&
-          getEffectiveDeclContext(ND)->isFileContext() &&
-          !ND->isInAnonymousNamespace())
+      if (isInternalLinkageDecl(ND))
         Out << 'L';
 
       auto *FD = dyn_cast<FunctionDecl>(ND);
@@ -1458,10 +1543,13 @@ void CXXNameMangler::mangleUnqualifiedName(GlobalDecl GD,
 
   case DeclarationName::CXXConstructorName: {
     const CXXRecordDecl *InheritedFrom = nullptr;
+    TemplateName InheritedTemplateName;
     const TemplateArgumentList *InheritedTemplateArgs = nullptr;
     if (auto Inherited =
             cast<CXXConstructorDecl>(ND)->getInheritedConstructor()) {
       InheritedFrom = Inherited.getConstructor()->getParent();
+      InheritedTemplateName =
+          TemplateName(Inherited.getConstructor()->getPrimaryTemplate());
       InheritedTemplateArgs =
           Inherited.getConstructor()->getTemplateSpecializationArgs();
     }
@@ -1478,7 +1566,7 @@ void CXXNameMangler::mangleUnqualifiedName(GlobalDecl GD,
     // FIXME: The template arguments are part of the enclosing prefix or
     // nested-name, but it's more convenient to mangle them here.
     if (InheritedTemplateArgs)
-      mangleTemplateArgs(*InheritedTemplateArgs);
+      mangleTemplateArgs(InheritedTemplateName, *InheritedTemplateArgs);
 
     writeAbiTags(ND, AdditionalAbiTags);
     break;
@@ -1567,7 +1655,7 @@ void CXXNameMangler::mangleNestedName(GlobalDecl GD,
   const TemplateArgumentList *TemplateArgs = nullptr;
   if (GlobalDecl TD = isTemplate(GD, TemplateArgs)) {
     mangleTemplatePrefix(TD, NoFunction);
-    mangleTemplateArgs(*TemplateArgs);
+    mangleTemplateArgs(asTemplateName(TD), *TemplateArgs);
   }
   else {
     manglePrefix(DC, NoFunction);
@@ -1584,7 +1672,7 @@ void CXXNameMangler::mangleNestedName(const TemplateDecl *TD,
   Out << 'N';
 
   mangleTemplatePrefix(TD);
-  mangleTemplateArgs(TemplateArgs, NumTemplateArgs);
+  mangleTemplateArgs(asTemplateName(TD), TemplateArgs, NumTemplateArgs);
 
   Out << 'E';
 }
@@ -1811,8 +1899,8 @@ void CXXNameMangler::mangleLambda(const CXXRecordDecl *Lambda) {
             = cast<NamedDecl>(Context)->getIdentifier()) {
         mangleSourceName(Name);
         const TemplateArgumentList *TemplateArgs = nullptr;
-        if (isTemplate(cast<NamedDecl>(Context), TemplateArgs))
-          mangleTemplateArgs(*TemplateArgs);
+        if (GlobalDecl TD = isTemplate(cast<NamedDecl>(Context), TemplateArgs))
+          mangleTemplateArgs(asTemplateName(TD), *TemplateArgs);
         Out << 'M';
       }
     }
@@ -1827,7 +1915,15 @@ void CXXNameMangler::mangleLambda(const CXXRecordDecl *Lambda) {
   // (in lexical order) with that same <lambda-sig> and context.
   //
   // The AST keeps track of the number for us.
-  unsigned Number = Lambda->getLambdaManglingNumber();
+  //
+  // In CUDA/HIP, to ensure the consistent lamba numbering between the device-
+  // and host-side compilations, an extra device mangle context may be created
+  // if the host-side CXX ABI has different numbering for lambda. In such case,
+  // if the mangle context is that device-side one, use the device-side lambda
+  // mangling number for this lambda.
+  unsigned Number = Context.isDeviceMangleContext()
+                        ? Lambda->getDeviceLambdaManglingNumber()
+                        : Lambda->getLambdaManglingNumber();
   assert(Number > 0 && "Lambda should be mangled as an unnamed class");
   if (Number > 1)
     mangleNumber(Number - 2);
@@ -1903,7 +1999,7 @@ void CXXNameMangler::manglePrefix(const DeclContext *DC, bool NoFunction) {
   const TemplateArgumentList *TemplateArgs = nullptr;
   if (GlobalDecl TD = isTemplate(ND, TemplateArgs)) {
     mangleTemplatePrefix(TD);
-    mangleTemplateArgs(*TemplateArgs);
+    mangleTemplateArgs(asTemplateName(TD), *TemplateArgs);
   } else {
     manglePrefix(getEffectiveDeclContext(ND), NoFunction);
     mangleUnqualifiedName(ND, nullptr);
@@ -2162,7 +2258,12 @@ bool CXXNameMangler::mangleUnresolvedTypeOrSimpleId(QualType Ty,
     }
     }
 
-    mangleTemplateArgs(TST->getArgs(), TST->getNumArgs());
+    // Note: we don't pass in the template name here. We are mangling the
+    // original source-level template arguments, so we shouldn't consider
+    // conversions to the corresponding template parameter.
+    // FIXME: Other compilers mangle partially-resolved template arguments in
+    // unresolved-qualifier-levels.
+    mangleTemplateArgs(TemplateName(), TST->getArgs(), TST->getNumArgs());
     break;
   }
 
@@ -2178,8 +2279,10 @@ bool CXXNameMangler::mangleUnresolvedTypeOrSimpleId(QualType Ty,
   case Type::DependentTemplateSpecialization: {
     const DependentTemplateSpecializationType *DTST =
         cast<DependentTemplateSpecializationType>(Ty);
+    TemplateName Template = getASTContext().getDependentTemplateName(
+        DTST->getQualifier(), DTST->getIdentifier());
     mangleSourceName(DTST->getIdentifier());
-    mangleTemplateArgs(DTST->getArgs(), DTST->getNumArgs());
+    mangleTemplateArgs(Template, DTST->getArgs(), DTST->getNumArgs());
     break;
   }
 
@@ -2561,6 +2664,10 @@ void CXXNameMangler::mangleType(QualType T) {
         if (!TST->isTypeAlias())
           break;
 
+      // FIXME: We presumably shouldn't strip off ElaboratedTypes with
+      // instantation-dependent qualifiers. See
+      // https://github.com/itanium-cxx-abi/cxx-abi/issues/114.
+
       QualType Desugared
         = T.getSingleStepDesugaredType(Context.getASTContext());
       if (Desugared == T)
@@ -2841,12 +2948,19 @@ void CXXNameMangler::mangleType(const BuiltinType *T) {
         << type_name;                                                          \
     break;
 #include "clang/Basic/AArch64SVEACLETypes.def"
-#define PPC_MMA_VECTOR_TYPE(Name, Id, Size) \
+#define PPC_VECTOR_TYPE(Name, Id, Size) \
   case BuiltinType::Id: \
     type_name = #Name; \
     Out << 'u' << type_name.size() << type_name; \
     break;
 #include "clang/Basic/PPCTypes.def"
+    // TODO: Check the mangling scheme for RISC-V V.
+#define RVV_TYPE(Name, Id, SingletonId)                                        \
+  case BuiltinType::Id:                                                        \
+    type_name = Name;                                                          \
+    Out << 'u' << type_name.size() << type_name;                               \
+    break;
+#include "clang/Basic/RISCVVTypes.def"
   }
 }
 
@@ -3507,8 +3621,8 @@ void CXXNameMangler::mangleType(const DependentSizedMatrixType *T) {
   Out << "u" << VendorQualifier.size() << VendorQualifier;
 
   Out << "I";
-  mangleTemplateArg(T->getRowExpr());
-  mangleTemplateArg(T->getColumnExpr());
+  mangleTemplateArgExpr(T->getRowExpr());
+  mangleTemplateArgExpr(T->getColumnExpr());
   mangleType(T->getElementType());
   Out << "E";
 }
@@ -3581,7 +3695,7 @@ void CXXNameMangler::mangleType(const TemplateSpecializationType *T) {
     // FIXME: GCC does not appear to mangle the template arguments when
     // the template in question is a dependent template name. Should we
     // emulate that badness?
-    mangleTemplateArgs(T->getArgs(), T->getNumArgs());
+    mangleTemplateArgs(T->getTemplateName(), T->getArgs(), T->getNumArgs());
     addSubstitution(QualType(T, 0));
   }
 }
@@ -3633,7 +3747,7 @@ void CXXNameMangler::mangleType(const DependentTemplateSpecializationType *T) {
   // FIXME: GCC does not appear to mangle the template arguments when
   // the template in question is a dependent template name. Should we
   // emulate that badness?
-  mangleTemplateArgs(T->getArgs(), T->getNumArgs());
+  mangleTemplateArgs(Prefix, T->getArgs(), T->getNumArgs());
   Out << 'E';
 }
 
@@ -3733,7 +3847,7 @@ void CXXNameMangler::mangleType(const ExtIntType *T) {
   llvm::APSInt BW(32, true);
   BW = T->getNumBits();
   TemplateArgument TA(Context.getASTContext(), BW, getASTContext().IntTy);
-  mangleTemplateArgs(&TA, 1);
+  mangleTemplateArgs(TemplateName(), &TA, 1);
   if (T->isUnsigned())
     Out << "j";
   else
@@ -3743,7 +3857,7 @@ void CXXNameMangler::mangleType(const ExtIntType *T) {
 void CXXNameMangler::mangleType(const DependentExtIntType *T) {
   Out << "U7_ExtInt";
   TemplateArgument TA(T->getNumBitsExpr());
-  mangleTemplateArgs(&TA, 1);
+  mangleTemplateArgs(TemplateName(), &TA, 1);
   if (T->isUnsigned())
     Out << "j";
   else
@@ -3850,33 +3964,8 @@ void CXXNameMangler::mangleInitListElements(const InitListExpr *InitList) {
     mangleExpression(InitList->getInit(i));
 }
 
-void CXXNameMangler::mangleDeclRefExpr(const NamedDecl *D) {
-  switch (D->getKind()) {
-  default:
-    //  <expr-primary> ::= L <mangled-name> E # external name
-    Out << 'L';
-    mangle(D);
-    Out << 'E';
-    break;
-
-  case Decl::ParmVar:
-    mangleFunctionParam(cast<ParmVarDecl>(D));
-    break;
-
-  case Decl::EnumConstant: {
-    const EnumConstantDecl *ED = cast<EnumConstantDecl>(D);
-    mangleIntegerLiteral(ED->getType(), ED->getInitVal());
-    break;
-  }
-
-  case Decl::NonTypeTemplateParm:
-    const NonTypeTemplateParmDecl *PD = cast<NonTypeTemplateParmDecl>(D);
-    mangleTemplateParameter(PD->getDepth(), PD->getIndex());
-    break;
-  }
-}
-
-void CXXNameMangler::mangleExpression(const Expr *E, unsigned Arity) {
+void CXXNameMangler::mangleExpression(const Expr *E, unsigned Arity,
+                                      bool AsTemplateArg) {
   // <expression> ::= <unary operator-name> <expression>
   //              ::= <binary operator-name> <expression> <expression>
   //              ::= <trinary operator-name> <expression> <expression> <expression>
@@ -3890,18 +3979,64 @@ void CXXNameMangler::mangleExpression(const Expr *E, unsigned Arity) {
   //              ::= at <type>                      # alignof (a type)
   //              ::= <template-param>
   //              ::= <function-param>
+  //              ::= fpT                            # 'this' expression (part of <function-param>)
   //              ::= sr <type> <unqualified-name>                   # dependent name
   //              ::= sr <type> <unqualified-name> <template-args>   # dependent template-id
   //              ::= ds <expression> <expression>                   # expr.*expr
   //              ::= sZ <template-param>                            # size of a parameter pack
   //              ::= sZ <function-param>    # size of a function parameter pack
+  //              ::= u <source-name> <template-arg>* E # vendor extended expression
   //              ::= <expr-primary>
   // <expr-primary> ::= L <type> <value number> E    # integer literal
-  //                ::= L <type <value float> E      # floating literal
+  //                ::= L <type> <value float> E     # floating literal
+  //                ::= L <type> <string type> E     # string literal
+  //                ::= L <nullptr type> E           # nullptr literal "LDnE"
+  //                ::= L <pointer type> 0 E         # null pointer template argument
+  //                ::= L <type> <real-part float> _ <imag-part float> E    # complex floating point literal (C99); not used by clang
   //                ::= L <mangled-name> E           # external name
-  //                ::= fpT                          # 'this' expression
   QualType ImplicitlyConvertedToType;
 
+  // A top-level expression that's not <expr-primary> needs to be wrapped in
+  // X...E in a template arg.
+  bool IsPrimaryExpr = true;
+  auto NotPrimaryExpr = [&] {
+    if (AsTemplateArg && IsPrimaryExpr)
+      Out << 'X';
+    IsPrimaryExpr = false;
+  };
+
+  auto MangleDeclRefExpr = [&](const NamedDecl *D) {
+    switch (D->getKind()) {
+    default:
+      //  <expr-primary> ::= L <mangled-name> E # external name
+      Out << 'L';
+      mangle(D);
+      Out << 'E';
+      break;
+
+    case Decl::ParmVar:
+      NotPrimaryExpr();
+      mangleFunctionParam(cast<ParmVarDecl>(D));
+      break;
+
+    case Decl::EnumConstant: {
+      // <expr-primary>
+      const EnumConstantDecl *ED = cast<EnumConstantDecl>(D);
+      mangleIntegerLiteral(ED->getType(), ED->getInitVal());
+      break;
+    }
+
+    case Decl::NonTypeTemplateParm:
+      NotPrimaryExpr();
+      const NonTypeTemplateParmDecl *PD = cast<NonTypeTemplateParmDecl>(D);
+      mangleTemplateParameter(PD->getDepth(), PD->getIndex());
+      break;
+    }
+  };
+
+  // 'goto recurse' is used when handling a simple "unwrapping" node which
+  // produces no output, where ImplicitlyConvertedToType and AsTemplateArg need
+  // to be preserved.
 recurse:
   switch (E->getStmtClass()) {
   case Expr::NoStmtClass:
@@ -3973,6 +4108,7 @@ recurse:
   case Expr::SourceLocExprClass:
   case Expr::BuiltinBitCastExprClass:
   {
+    NotPrimaryExpr();
     if (!NullOut) {
       // As bad as this diagnostic is, it's better than crashing.
       DiagnosticsEngine &Diags = Context.getDiags();
@@ -3980,33 +4116,48 @@ recurse:
                                        "cannot yet mangle expression type %0");
       Diags.Report(E->getExprLoc(), DiagID)
         << E->getStmtClassName() << E->getSourceRange();
+      return;
     }
     break;
   }
 
   case Expr::CXXUuidofExprClass: {
+    NotPrimaryExpr();
     const CXXUuidofExpr *UE = cast<CXXUuidofExpr>(E);
-    if (UE->isTypeOperand()) {
-      QualType UuidT = UE->getTypeOperand(Context.getASTContext());
-      Out << "u8__uuidoft";
-      mangleType(UuidT);
+    // As of clang 12, uuidof uses the vendor extended expression
+    // mangling. Previously, it used a special-cased nonstandard extension.
+    if (Context.getASTContext().getLangOpts().getClangABICompat() >
+        LangOptions::ClangABI::Ver11) {
+      Out << "u8__uuidof";
+      if (UE->isTypeOperand())
+        mangleType(UE->getTypeOperand(Context.getASTContext()));
+      else
+        mangleTemplateArgExpr(UE->getExprOperand());
+      Out << 'E';
     } else {
-      Expr *UuidExp = UE->getExprOperand();
-      Out << "u8__uuidofz";
-      mangleExpression(UuidExp, Arity);
+      if (UE->isTypeOperand()) {
+        QualType UuidT = UE->getTypeOperand(Context.getASTContext());
+        Out << "u8__uuidoft";
+        mangleType(UuidT);
+      } else {
+        Expr *UuidExp = UE->getExprOperand();
+        Out << "u8__uuidofz";
+        mangleExpression(UuidExp);
+      }
     }
     break;
   }
 
   // Even gcc-4.5 doesn't mangle this.
   case Expr::BinaryConditionalOperatorClass: {
+    NotPrimaryExpr();
     DiagnosticsEngine &Diags = Context.getDiags();
     unsigned DiagID =
       Diags.getCustomDiagID(DiagnosticsEngine::Error,
                 "?: operator with omitted middle operand cannot be mangled");
     Diags.Report(E->getExprLoc(), DiagID)
       << E->getStmtClassName() << E->getSourceRange();
-    break;
+    return;
   }
 
   // These are used for internal purposes and cannot be meaningfully mangled.
@@ -4014,6 +4165,7 @@ recurse:
     llvm_unreachable("cannot mangle opaque value; mangling wrong thing?");
 
   case Expr::InitListExprClass: {
+    NotPrimaryExpr();
     Out << "il";
     mangleInitListElements(cast<InitListExpr>(E));
     Out << "E";
@@ -4021,6 +4173,7 @@ recurse:
   }
 
   case Expr::DesignatedInitExprClass: {
+    NotPrimaryExpr();
     auto *DIE = cast<DesignatedInitExpr>(E);
     for (const auto &Designator : DIE->designators()) {
       if (Designator.isFieldDesignator()) {
@@ -4042,27 +4195,27 @@ recurse:
   }
 
   case Expr::CXXDefaultArgExprClass:
-    mangleExpression(cast<CXXDefaultArgExpr>(E)->getExpr(), Arity);
-    break;
+    E = cast<CXXDefaultArgExpr>(E)->getExpr();
+    goto recurse;
 
   case Expr::CXXDefaultInitExprClass:
-    mangleExpression(cast<CXXDefaultInitExpr>(E)->getExpr(), Arity);
-    break;
+    E = cast<CXXDefaultInitExpr>(E)->getExpr();
+    goto recurse;
 
   case Expr::CXXStdInitializerListExprClass:
-    mangleExpression(cast<CXXStdInitializerListExpr>(E)->getSubExpr(), Arity);
-    break;
+    E = cast<CXXStdInitializerListExpr>(E)->getSubExpr();
+    goto recurse;
 
   case Expr::SubstNonTypeTemplateParmExprClass:
-    mangleExpression(cast<SubstNonTypeTemplateParmExpr>(E)->getReplacement(),
-                     Arity);
-    break;
+    E = cast<SubstNonTypeTemplateParmExpr>(E)->getReplacement();
+    goto recurse;
 
   case Expr::UserDefinedLiteralClass:
     // We follow g++'s approach of mangling a UDL as a call to the literal
     // operator.
   case Expr::CXXMemberCallExprClass: // fallthrough
   case Expr::CallExprClass: {
+    NotPrimaryExpr();
     const CallExpr *CE = cast<CallExpr>(E);
 
     // <expression> ::= cp <simple-id> <expression>* E
@@ -4093,6 +4246,7 @@ recurse:
   }
 
   case Expr::CXXNewExprClass: {
+    NotPrimaryExpr();
     const CXXNewExpr *New = cast<CXXNewExpr>(E);
     if (New->isGlobalNew()) Out << "gs";
     Out << (New->isArray() ? "na" : "nw");
@@ -4128,6 +4282,7 @@ recurse:
   }
 
   case Expr::CXXPseudoDestructorExprClass: {
+    NotPrimaryExpr();
     const auto *PDE = cast<CXXPseudoDestructorExpr>(E);
     if (const Expr *Base = PDE->getBase())
       mangleMemberExprBase(Base, PDE->isArrow());
@@ -4154,6 +4309,7 @@ recurse:
   }
 
   case Expr::MemberExprClass: {
+    NotPrimaryExpr();
     const MemberExpr *ME = cast<MemberExpr>(E);
     mangleMemberExpr(ME->getBase(), ME->isArrow(),
                      ME->getQualifier(), nullptr,
@@ -4164,6 +4320,7 @@ recurse:
   }
 
   case Expr::UnresolvedMemberExprClass: {
+    NotPrimaryExpr();
     const UnresolvedMemberExpr *ME = cast<UnresolvedMemberExpr>(E);
     mangleMemberExpr(ME->isImplicitAccess() ? nullptr : ME->getBase(),
                      ME->isArrow(), ME->getQualifier(), nullptr,
@@ -4174,6 +4331,7 @@ recurse:
   }
 
   case Expr::CXXDependentScopeMemberExprClass: {
+    NotPrimaryExpr();
     const CXXDependentScopeMemberExpr *ME
       = cast<CXXDependentScopeMemberExpr>(E);
     mangleMemberExpr(ME->isImplicitAccess() ? nullptr : ME->getBase(),
@@ -4186,6 +4344,7 @@ recurse:
   }
 
   case Expr::UnresolvedLookupExprClass: {
+    NotPrimaryExpr();
     const UnresolvedLookupExpr *ULE = cast<UnresolvedLookupExpr>(E);
     mangleUnresolvedName(ULE->getQualifier(), ULE->getName(),
                          ULE->getTemplateArgs(), ULE->getNumTemplateArgs(),
@@ -4194,6 +4353,7 @@ recurse:
   }
 
   case Expr::CXXUnresolvedConstructExprClass: {
+    NotPrimaryExpr();
     const CXXUnresolvedConstructExpr *CE = cast<CXXUnresolvedConstructExpr>(E);
     unsigned N = CE->getNumArgs();
 
@@ -4204,7 +4364,7 @@ recurse:
       mangleType(CE->getType());
       mangleInitListElements(IL);
       Out << "E";
-      return;
+      break;
     }
 
     Out << "cv";
@@ -4216,14 +4376,17 @@ recurse:
   }
 
   case Expr::CXXConstructExprClass: {
+    // An implicit cast is silent, thus may contain <expr-primary>.
     const auto *CE = cast<CXXConstructExpr>(E);
     if (!CE->isListInitialization() || CE->isStdInitListInitialization()) {
       assert(
           CE->getNumArgs() >= 1 &&
           (CE->getNumArgs() == 1 || isa<CXXDefaultArgExpr>(CE->getArg(1))) &&
           "implicit CXXConstructExpr must have one argument");
-      return mangleExpression(cast<CXXConstructExpr>(E)->getArg(0));
+      E = cast<CXXConstructExpr>(E)->getArg(0);
+      goto recurse;
     }
+    NotPrimaryExpr();
     Out << "il";
     for (auto *E : CE->arguments())
       mangleExpression(E);
@@ -4232,6 +4395,7 @@ recurse:
   }
 
   case Expr::CXXTemporaryObjectExprClass: {
+    NotPrimaryExpr();
     const auto *CE = cast<CXXTemporaryObjectExpr>(E);
     unsigned N = CE->getNumArgs();
     bool List = CE->isListInitialization();
@@ -4261,17 +4425,20 @@ recurse:
   }
 
   case Expr::CXXScalarValueInitExprClass:
+    NotPrimaryExpr();
     Out << "cv";
     mangleType(E->getType());
     Out << "_E";
     break;
 
   case Expr::CXXNoexceptExprClass:
+    NotPrimaryExpr();
     Out << "nx";
     mangleExpression(cast<CXXNoexceptExpr>(E)->getOperand());
     break;
 
   case Expr::UnaryExprOrTypeTraitExprClass: {
+    // Non-instantiation-dependent traits are an <expr-primary> integer literal.
     const UnaryExprOrTypeTraitExpr *SAE = cast<UnaryExprOrTypeTraitExpr>(E);
 
     if (!SAE->isInstantiationDependent()) {
@@ -4291,13 +4458,41 @@ recurse:
       break;
     }
 
+    NotPrimaryExpr(); // But otherwise, they are not.
+
+    auto MangleAlignofSizeofArg = [&] {
+      if (SAE->isArgumentType()) {
+        Out << 't';
+        mangleType(SAE->getArgumentType());
+      } else {
+        Out << 'z';
+        mangleExpression(SAE->getArgumentExpr());
+      }
+    };
+
     switch(SAE->getKind()) {
     case UETT_SizeOf:
       Out << 's';
+      MangleAlignofSizeofArg();
       break;
     case UETT_PreferredAlignOf:
+      // As of clang 12, we mangle __alignof__ differently than alignof. (They
+      // have acted differently since Clang 8, but were previously mangled the
+      // same.)
+      if (Context.getASTContext().getLangOpts().getClangABICompat() >
+          LangOptions::ClangABI::Ver11) {
+        Out << "u11__alignof__";
+        if (SAE->isArgumentType())
+          mangleType(SAE->getArgumentType());
+        else
+          mangleTemplateArgExpr(SAE->getArgumentExpr());
+        Out << 'E';
+        break;
+      }
+      LLVM_FALLTHROUGH;
     case UETT_AlignOf:
       Out << 'a';
+      MangleAlignofSizeofArg();
       break;
     case UETT_VecStep: {
       DiagnosticsEngine &Diags = Context.getDiags();
@@ -4315,17 +4510,11 @@ recurse:
       return;
     }
     }
-    if (SAE->isArgumentType()) {
-      Out << 't';
-      mangleType(SAE->getArgumentType());
-    } else {
-      Out << 'z';
-      mangleExpression(SAE->getArgumentExpr());
-    }
     break;
   }
 
   case Expr::CXXThrowExprClass: {
+    NotPrimaryExpr();
     const CXXThrowExpr *TE = cast<CXXThrowExpr>(E);
     //  <expression> ::= tw <expression>  # throw expression
     //               ::= tr               # rethrow
@@ -4339,6 +4528,7 @@ recurse:
   }
 
   case Expr::CXXTypeidExprClass: {
+    NotPrimaryExpr();
     const CXXTypeidExpr *TIE = cast<CXXTypeidExpr>(E);
     //  <expression> ::= ti <type>        # typeid (type)
     //               ::= te <expression>  # typeid (expression)
@@ -4353,6 +4543,7 @@ recurse:
   }
 
   case Expr::CXXDeleteExprClass: {
+    NotPrimaryExpr();
     const CXXDeleteExpr *DE = cast<CXXDeleteExpr>(E);
     //  <expression> ::= [gs] dl <expression>  # [::] delete expr
     //               ::= [gs] da <expression>  # [::] delete [] expr
@@ -4363,6 +4554,7 @@ recurse:
   }
 
   case Expr::UnaryOperatorClass: {
+    NotPrimaryExpr();
     const UnaryOperator *UO = cast<UnaryOperator>(E);
     mangleOperatorName(UnaryOperator::getOverloadedOperator(UO->getOpcode()),
                        /*Arity=*/1);
@@ -4371,6 +4563,7 @@ recurse:
   }
 
   case Expr::ArraySubscriptExprClass: {
+    NotPrimaryExpr();
     const ArraySubscriptExpr *AE = cast<ArraySubscriptExpr>(E);
 
     // Array subscript is treated as a syntactically weird form of
@@ -4382,6 +4575,7 @@ recurse:
   }
 
   case Expr::MatrixSubscriptExprClass: {
+    NotPrimaryExpr();
     const MatrixSubscriptExpr *ME = cast<MatrixSubscriptExpr>(E);
     Out << "ixix";
     mangleExpression(ME->getBase());
@@ -4392,6 +4586,7 @@ recurse:
 
   case Expr::CompoundAssignOperatorClass: // fallthrough
   case Expr::BinaryOperatorClass: {
+    NotPrimaryExpr();
     const BinaryOperator *BO = cast<BinaryOperator>(E);
     if (BO->getOpcode() == BO_PtrMemD)
       Out << "ds";
@@ -4404,6 +4599,7 @@ recurse:
   }
 
   case Expr::CXXRewrittenBinaryOperatorClass: {
+    NotPrimaryExpr();
     // The mangled form represents the original syntax.
     CXXRewrittenBinaryOperator::DecomposedForm Decomposed =
         cast<CXXRewrittenBinaryOperator>(E)->getDecomposedForm();
@@ -4415,6 +4611,7 @@ recurse:
   }
 
   case Expr::ConditionalOperatorClass: {
+    NotPrimaryExpr();
     const ConditionalOperator *CO = cast<ConditionalOperator>(E);
     mangleOperatorName(OO_Conditional, /*Arity=*/3);
     mangleExpression(CO->getCond());
@@ -4430,19 +4627,22 @@ recurse:
   }
 
   case Expr::ObjCBridgedCastExprClass: {
+    NotPrimaryExpr();
     // Mangle ownership casts as a vendor extended operator __bridge,
     // __bridge_transfer, or __bridge_retain.
     StringRef Kind = cast<ObjCBridgedCastExpr>(E)->getBridgeKindName();
     Out << "v1U" << Kind.size() << Kind;
+    mangleCastExpression(E, "cv");
+    break;
   }
-  // Fall through to mangle the cast itself.
-  LLVM_FALLTHROUGH;
 
   case Expr::CStyleCastExprClass:
+    NotPrimaryExpr();
     mangleCastExpression(E, "cv");
     break;
 
   case Expr::CXXFunctionalCastExprClass: {
+    NotPrimaryExpr();
     auto *Sub = cast<ExplicitCastExpr>(E)->getSubExpr()->IgnoreImplicit();
     // FIXME: Add isImplicit to CXXConstructExpr.
     if (auto *CCE = dyn_cast<CXXConstructExpr>(Sub))
@@ -4462,22 +4662,28 @@ recurse:
   }
 
   case Expr::CXXStaticCastExprClass:
+    NotPrimaryExpr();
     mangleCastExpression(E, "sc");
     break;
   case Expr::CXXDynamicCastExprClass:
+    NotPrimaryExpr();
     mangleCastExpression(E, "dc");
     break;
   case Expr::CXXReinterpretCastExprClass:
+    NotPrimaryExpr();
     mangleCastExpression(E, "rc");
     break;
   case Expr::CXXConstCastExprClass:
+    NotPrimaryExpr();
     mangleCastExpression(E, "cc");
     break;
   case Expr::CXXAddrspaceCastExprClass:
+    NotPrimaryExpr();
     mangleCastExpression(E, "ac");
     break;
 
   case Expr::CXXOperatorCallExprClass: {
+    NotPrimaryExpr();
     const CXXOperatorCallExpr *CE = cast<CXXOperatorCallExpr>(E);
     unsigned NumArgs = CE->getNumArgs();
     // A CXXOperatorCallExpr for OO_Arrow models only semantics, not syntax
@@ -4491,9 +4697,8 @@ recurse:
   }
 
   case Expr::ParenExprClass:
-    mangleExpression(cast<ParenExpr>(E)->getSubExpr(), Arity);
-    break;
-
+    E = cast<ParenExpr>(E)->getSubExpr();
+    goto recurse;
 
   case Expr::ConceptSpecializationExprClass: {
     //  <expr-primary> ::= L <mangled-name> E # external name
@@ -4507,10 +4712,12 @@ recurse:
   }
 
   case Expr::DeclRefExprClass:
-    mangleDeclRefExpr(cast<DeclRefExpr>(E)->getDecl());
+    // MangleDeclRefExpr helper handles primary-vs-nonprimary
+    MangleDeclRefExpr(cast<DeclRefExpr>(E)->getDecl());
     break;
 
   case Expr::SubstNonTypeTemplateParmPackExprClass:
+    NotPrimaryExpr();
     // FIXME: not clear how to mangle this!
     // template <unsigned N...> class A {
     //   template <class U...> void foo(U (&x)[N]...);
@@ -4519,14 +4726,16 @@ recurse:
     break;
 
   case Expr::FunctionParmPackExprClass: {
+    NotPrimaryExpr();
     // FIXME: not clear how to mangle this!
     const FunctionParmPackExpr *FPPE = cast<FunctionParmPackExpr>(E);
     Out << "v110_SUBSTPACK";
-    mangleDeclRefExpr(FPPE->getParameterPack());
+    MangleDeclRefExpr(FPPE->getParameterPack());
     break;
   }
 
   case Expr::DependentScopeDeclRefExprClass: {
+    NotPrimaryExpr();
     const DependentScopeDeclRefExpr *DRE = cast<DependentScopeDeclRefExpr>(E);
     mangleUnresolvedName(DRE->getQualifier(), DRE->getDeclName(),
                          DRE->getTemplateArgs(), DRE->getNumTemplateArgs(),
@@ -4535,24 +4744,27 @@ recurse:
   }
 
   case Expr::CXXBindTemporaryExprClass:
-    mangleExpression(cast<CXXBindTemporaryExpr>(E)->getSubExpr());
-    break;
+    E = cast<CXXBindTemporaryExpr>(E)->getSubExpr();
+    goto recurse;
 
   case Expr::ExprWithCleanupsClass:
-    mangleExpression(cast<ExprWithCleanups>(E)->getSubExpr(), Arity);
-    break;
+    E = cast<ExprWithCleanups>(E)->getSubExpr();
+    goto recurse;
 
   case Expr::FloatingLiteralClass: {
+    // <expr-primary>
     const FloatingLiteral *FL = cast<FloatingLiteral>(E);
     mangleFloatLiteral(FL->getType(), FL->getValue());
     break;
   }
 
   case Expr::FixedPointLiteralClass:
+    // Currently unimplemented -- might be <expr-primary> in future?
     mangleFixedPointLiteral();
     break;
 
   case Expr::CharacterLiteralClass:
+    // <expr-primary>
     Out << 'L';
     mangleType(E->getType());
     Out << cast<CharacterLiteral>(E)->getValue();
@@ -4561,18 +4773,21 @@ recurse:
 
   // FIXME. __objc_yes/__objc_no are mangled same as true/false
   case Expr::ObjCBoolLiteralExprClass:
+    // <expr-primary>
     Out << "Lb";
     Out << (cast<ObjCBoolLiteralExpr>(E)->getValue() ? '1' : '0');
     Out << 'E';
     break;
 
   case Expr::CXXBoolLiteralExprClass:
+    // <expr-primary>
     Out << "Lb";
     Out << (cast<CXXBoolLiteralExpr>(E)->getValue() ? '1' : '0');
     Out << 'E';
     break;
 
   case Expr::IntegerLiteralClass: {
+    // <expr-primary>
     llvm::APSInt Value(cast<IntegerLiteral>(E)->getValue());
     if (E->getType()->isSignedIntegerType())
       Value.setIsSigned(true);
@@ -4581,6 +4796,7 @@ recurse:
   }
 
   case Expr::ImaginaryLiteralClass: {
+    // <expr-primary>
     const ImaginaryLiteral *IE = cast<ImaginaryLiteral>(E);
     // Mangle as if a complex literal.
     // Proposal from David Vandevoorde, 2010.06.30.
@@ -4604,6 +4820,7 @@ recurse:
   }
 
   case Expr::StringLiteralClass: {
+    // <expr-primary>
     // Revised proposal from David Vandervoorde, 2010.07.15.
     Out << 'L';
     assert(isa<ConstantArrayType>(E->getType()));
@@ -4613,26 +4830,30 @@ recurse:
   }
 
   case Expr::GNUNullExprClass:
+    // <expr-primary>
     // Mangle as if an integer literal 0.
     mangleIntegerLiteral(E->getType(), llvm::APSInt(32));
     break;
 
   case Expr::CXXNullPtrLiteralExprClass: {
+    // <expr-primary>
     Out << "LDnE";
     break;
   }
 
   case Expr::PackExpansionExprClass:
+    NotPrimaryExpr();
     Out << "sp";
     mangleExpression(cast<PackExpansionExpr>(E)->getPattern());
     break;
 
   case Expr::SizeOfPackExprClass: {
+    NotPrimaryExpr();
     auto *SPE = cast<SizeOfPackExpr>(E);
     if (SPE->isPartiallySubstituted()) {
       Out << "sP";
       for (const auto &A : SPE->getPartialArguments())
-        mangleTemplateArg(A);
+        mangleTemplateArg(A, false);
       Out << "E";
       break;
     }
@@ -4652,12 +4873,12 @@ recurse:
     break;
   }
 
-  case Expr::MaterializeTemporaryExprClass: {
-    mangleExpression(cast<MaterializeTemporaryExpr>(E)->getSubExpr());
-    break;
-  }
+  case Expr::MaterializeTemporaryExprClass:
+    E = cast<MaterializeTemporaryExpr>(E)->getSubExpr();
+    goto recurse;
 
   case Expr::CXXFoldExprClass: {
+    NotPrimaryExpr();
     auto *FE = cast<CXXFoldExpr>(E);
     if (FE->isLeftFold())
       Out << (FE->getInit() ? "fL" : "fl");
@@ -4679,27 +4900,34 @@ recurse:
   }
 
   case Expr::CXXThisExprClass:
+    NotPrimaryExpr();
     Out << "fpT";
     break;
 
   case Expr::CoawaitExprClass:
     // FIXME: Propose a non-vendor mangling.
+    NotPrimaryExpr();
     Out << "v18co_await";
     mangleExpression(cast<CoawaitExpr>(E)->getOperand());
     break;
 
   case Expr::DependentCoawaitExprClass:
     // FIXME: Propose a non-vendor mangling.
+    NotPrimaryExpr();
     Out << "v18co_await";
     mangleExpression(cast<DependentCoawaitExpr>(E)->getOperand());
     break;
 
   case Expr::CoyieldExprClass:
     // FIXME: Propose a non-vendor mangling.
+    NotPrimaryExpr();
     Out << "v18co_yield";
     mangleExpression(cast<CoawaitExpr>(E)->getOperand());
     break;
   }
+
+  if (AsTemplateArg && !IsPrimaryExpr)
+    Out << 'E';
 }
 
 /// Mangle an expression which refers to a parameter variable.
@@ -4820,33 +5048,112 @@ void CXXNameMangler::mangleCXXDtorType(CXXDtorType T) {
   }
 }
 
-void CXXNameMangler::mangleTemplateArgs(const TemplateArgumentLoc *TemplateArgs,
+namespace {
+// Helper to provide ancillary information on a template used to mangle its
+// arguments.
+struct TemplateArgManglingInfo {
+  TemplateDecl *ResolvedTemplate = nullptr;
+  bool SeenPackExpansionIntoNonPack = false;
+  const NamedDecl *UnresolvedExpandedPack = nullptr;
+
+  TemplateArgManglingInfo(TemplateName TN) {
+    if (TemplateDecl *TD = TN.getAsTemplateDecl())
+      ResolvedTemplate = TD;
+  }
+
+  /// Do we need to mangle template arguments with exactly correct types?
+  ///
+  /// This should be called exactly once for each parameter / argument pair, in
+  /// order.
+  bool needExactType(unsigned ParamIdx, const TemplateArgument &Arg) {
+    // We need correct types when the template-name is unresolved or when it
+    // names a template that is able to be overloaded.
+    if (!ResolvedTemplate || SeenPackExpansionIntoNonPack)
+      return true;
+
+    // Move to the next parameter.
+    const NamedDecl *Param = UnresolvedExpandedPack;
+    if (!Param) {
+      assert(ParamIdx < ResolvedTemplate->getTemplateParameters()->size() &&
+             "no parameter for argument");
+      Param = ResolvedTemplate->getTemplateParameters()->getParam(ParamIdx);
+
+      // If we reach an expanded parameter pack whose argument isn't in pack
+      // form, that means Sema couldn't figure out which arguments belonged to
+      // it, because it contains a pack expansion. Track the expanded pack for
+      // all further template arguments until we hit that pack expansion.
+      if (Param->isParameterPack() && Arg.getKind() != TemplateArgument::Pack) {
+        assert(getExpandedPackSize(Param) &&
+               "failed to form pack argument for parameter pack");
+        UnresolvedExpandedPack = Param;
+      }
+    }
+
+    // If we encounter a pack argument that is expanded into a non-pack
+    // parameter, we can no longer track parameter / argument correspondence,
+    // and need to use exact types from this point onwards.
+    if (Arg.isPackExpansion() &&
+        (!Param->isParameterPack() || UnresolvedExpandedPack)) {
+      SeenPackExpansionIntoNonPack = true;
+      return true;
+    }
+
+    // We need exact types for function template arguments because they might be
+    // overloaded on template parameter type. As a special case, a member
+    // function template of a generic lambda is not overloadable.
+    if (auto *FTD = dyn_cast<FunctionTemplateDecl>(ResolvedTemplate)) {
+      auto *RD = dyn_cast<CXXRecordDecl>(FTD->getDeclContext());
+      if (!RD || !RD->isGenericLambda())
+        return true;
+    }
+
+    // Otherwise, we only need a correct type if the parameter has a deduced
+    // type.
+    //
+    // Note: for an expanded parameter pack, getType() returns the type prior
+    // to expansion. We could ask for the expanded type with getExpansionType(),
+    // but it doesn't matter because substitution and expansion don't affect
+    // whether a deduced type appears in the type.
+    auto *NTTP = dyn_cast<NonTypeTemplateParmDecl>(Param);
+    return NTTP && NTTP->getType()->getContainedDeducedType();
+  }
+};
+}
+
+void CXXNameMangler::mangleTemplateArgs(TemplateName TN,
+                                        const TemplateArgumentLoc *TemplateArgs,
                                         unsigned NumTemplateArgs) {
   // <template-args> ::= I <template-arg>+ E
   Out << 'I';
+  TemplateArgManglingInfo Info(TN);
   for (unsigned i = 0; i != NumTemplateArgs; ++i)
-    mangleTemplateArg(TemplateArgs[i].getArgument());
+    mangleTemplateArg(TemplateArgs[i].getArgument(),
+                      Info.needExactType(i, TemplateArgs[i].getArgument()));
   Out << 'E';
 }
 
-void CXXNameMangler::mangleTemplateArgs(const TemplateArgumentList &AL) {
+void CXXNameMangler::mangleTemplateArgs(TemplateName TN,
+                                        const TemplateArgumentList &AL) {
   // <template-args> ::= I <template-arg>+ E
   Out << 'I';
+  TemplateArgManglingInfo Info(TN);
   for (unsigned i = 0, e = AL.size(); i != e; ++i)
-    mangleTemplateArg(AL[i]);
+    mangleTemplateArg(AL[i], Info.needExactType(i, AL[i]));
   Out << 'E';
 }
 
-void CXXNameMangler::mangleTemplateArgs(const TemplateArgument *TemplateArgs,
+void CXXNameMangler::mangleTemplateArgs(TemplateName TN,
+                                        const TemplateArgument *TemplateArgs,
                                         unsigned NumTemplateArgs) {
   // <template-args> ::= I <template-arg>+ E
   Out << 'I';
+  TemplateArgManglingInfo Info(TN);
   for (unsigned i = 0; i != NumTemplateArgs; ++i)
-    mangleTemplateArg(TemplateArgs[i]);
+    mangleTemplateArg(TemplateArgs[i], Info.needExactType(i, TemplateArgs[i]));
   Out << 'E';
 }
 
-void CXXNameMangler::mangleTemplateArg(TemplateArgument A) {
+void CXXNameMangler::mangleTemplateArg(TemplateArgument A, bool NeedExactType) {
   // <template-arg> ::= <type>              # type or template
   //                ::= X <expression> E    # expression
   //                ::= <expr-primary>      # simple expressions
@@ -4870,26 +5177,9 @@ void CXXNameMangler::mangleTemplateArg(TemplateArgument A) {
     Out << "Dp";
     mangleType(A.getAsTemplateOrTemplatePattern());
     break;
-  case TemplateArgument::Expression: {
-    // It's possible to end up with a DeclRefExpr here in certain
-    // dependent cases, in which case we should mangle as a
-    // declaration.
-    const Expr *E = A.getAsExpr()->IgnoreParenImpCasts();
-    if (const DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(E)) {
-      const ValueDecl *D = DRE->getDecl();
-      if (isa<VarDecl>(D) || isa<FunctionDecl>(D)) {
-        Out << 'L';
-        mangle(D);
-        Out << 'E';
-        break;
-      }
-    }
-
-    Out << 'X';
-    mangleExpression(E);
-    Out << 'E';
+  case TemplateArgument::Expression:
+    mangleTemplateArgExpr(A.getAsExpr());
     break;
-  }
   case TemplateArgument::Integral:
     mangleIntegerLiteral(A.getIntegralType(), A.getAsIntegral());
     break;
@@ -4900,28 +5190,34 @@ void CXXNameMangler::mangleTemplateArg(TemplateArgument A) {
     // Template parameter objects are modeled by reproducing a source form
     // produced as if by aggregate initialization.
     if (A.getParamTypeForDecl()->isRecordType()) {
-      Out << 'X';
       auto *TPO = cast<TemplateParamObjectDecl>(D);
       mangleValueInTemplateArg(TPO->getType().getUnqualifiedType(),
-                               TPO->getValue());
-      Out << 'E';
+                               TPO->getValue(), /*TopLevel=*/true,
+                               NeedExactType);
       break;
     }
 
-    // Clang produces AST's where pointer-to-member-function expressions
-    // and pointer-to-function expressions are represented as a declaration not
-    // an expression. We compensate for it here to produce the correct mangling.
-    bool compensateMangling = !A.getParamTypeForDecl()->isReferenceType();
-    if (compensateMangling) {
-      Out << 'X';
-      mangleOperatorName(OO_Amp, 1);
-    }
-
-    mangleDeclRefExpr(D);
-
-    if (compensateMangling)
-      Out << 'E';
-
+    ASTContext &Ctx = Context.getASTContext();
+    APValue Value;
+    if (D->isCXXInstanceMember())
+      // Simple pointer-to-member with no conversion.
+      Value = APValue(D, /*IsDerivedMember=*/false, /*Path=*/{});
+    else if (D->getType()->isArrayType() &&
+             Ctx.hasSimilarType(Ctx.getDecayedType(D->getType()),
+                                A.getParamTypeForDecl()) &&
+             Ctx.getLangOpts().getClangABICompat() >
+                 LangOptions::ClangABI::Ver11)
+      // Build a value corresponding to this implicit array-to-pointer decay.
+      Value = APValue(APValue::LValueBase(D), CharUnits::Zero(),
+                      {APValue::LValuePathEntry::ArrayIndex(0)},
+                      /*OnePastTheEnd=*/false);
+    else
+      // Regular pointer or reference to a declaration.
+      Value = APValue(APValue::LValueBase(D), CharUnits::Zero(),
+                      ArrayRef<APValue::LValuePathEntry>(),
+                      /*OnePastTheEnd=*/false);
+    mangleValueInTemplateArg(A.getParamTypeForDecl(), Value, /*TopLevel=*/true,
+                             NeedExactType);
     break;
   }
   case TemplateArgument::NullPtr: {
@@ -4932,10 +5228,42 @@ void CXXNameMangler::mangleTemplateArg(TemplateArgument A) {
     //  <template-arg> ::= J <template-arg>* E
     Out << 'J';
     for (const auto &P : A.pack_elements())
-      mangleTemplateArg(P);
+      mangleTemplateArg(P, NeedExactType);
     Out << 'E';
   }
   }
+}
+
+void CXXNameMangler::mangleTemplateArgExpr(const Expr *E) {
+  ASTContext &Ctx = Context.getASTContext();
+  if (Ctx.getLangOpts().getClangABICompat() > LangOptions::ClangABI::Ver11) {
+    mangleExpression(E, UnknownArity, /*AsTemplateArg=*/true);
+    return;
+  }
+
+  // Prior to Clang 12, we didn't omit the X .. E around <expr-primary>
+  // correctly in cases where the template argument was
+  // constructed from an expression rather than an already-evaluated
+  // literal. In such a case, we would then e.g. emit 'XLi0EE' instead of
+  // 'Li0E'.
+  //
+  // We did special-case DeclRefExpr to attempt to DTRT for that one
+  // expression-kind, but while doing so, unfortunately handled ParmVarDecl
+  // (subtype of VarDecl) _incorrectly_, and emitted 'L_Z .. E' instead of
+  // the proper 'Xfp_E'.
+  E = E->IgnoreParenImpCasts();
+  if (const DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(E)) {
+    const ValueDecl *D = DRE->getDecl();
+    if (isa<VarDecl>(D) || isa<FunctionDecl>(D)) {
+      Out << 'L';
+      mangle(D);
+      Out << 'E';
+      return;
+    }
+  }
+  Out << 'X';
+  mangleExpression(E);
+  Out << 'E';
 }
 
 /// Determine whether a given value is equivalent to zero-initialization for
@@ -5028,10 +5356,35 @@ static bool isZeroInitialized(QualType T, const APValue &V) {
   llvm_unreachable("Unhandled APValue::ValueKind enum");
 }
 
-void CXXNameMangler::mangleValueInTemplateArg(QualType T, const APValue &V) {
+static QualType getLValueType(ASTContext &Ctx, const APValue &LV) {
+  QualType T = LV.getLValueBase().getType();
+  for (APValue::LValuePathEntry E : LV.getLValuePath()) {
+    if (const ArrayType *AT = Ctx.getAsArrayType(T))
+      T = AT->getElementType();
+    else if (const FieldDecl *FD =
+                 dyn_cast<FieldDecl>(E.getAsBaseOrMember().getPointer()))
+      T = FD->getType();
+    else
+      T = Ctx.getRecordType(
+          cast<CXXRecordDecl>(E.getAsBaseOrMember().getPointer()));
+  }
+  return T;
+}
+
+void CXXNameMangler::mangleValueInTemplateArg(QualType T, const APValue &V,
+                                              bool TopLevel,
+                                              bool NeedExactType) {
   // Ignore all top-level cv-qualifiers, to match GCC.
   Qualifiers Quals;
   T = getASTContext().getUnqualifiedArrayType(T, Quals);
+
+  // A top-level expression that's not a primary expression is wrapped in X...E.
+  bool IsPrimaryExpr = true;
+  auto NotPrimaryExpr = [&] {
+    if (TopLevel && IsPrimaryExpr)
+      Out << 'X';
+    IsPrimaryExpr = false;
+  };
 
   // Proposed in https://github.com/itanium-cxx-abi/cxx-abi/issues/63.
   switch (V.getKind()) {
@@ -5040,7 +5393,7 @@ void CXXNameMangler::mangleValueInTemplateArg(QualType T, const APValue &V) {
     Out << 'L';
     mangleType(T);
     Out << 'E';
-    return;
+    break;
 
   case APValue::AddrLabelDiff:
     llvm_unreachable("unexpected value kind in template argument");
@@ -5068,18 +5421,20 @@ void CXXNameMangler::mangleValueInTemplateArg(QualType T, const APValue &V) {
     }
 
     // <expression> ::= tl <type> <braced-expression>* E
+    NotPrimaryExpr();
     Out << "tl";
     mangleType(T);
     for (unsigned I = 0, N = Bases.size(); I != N; ++I)
-      mangleValueInTemplateArg(Bases[I].getType(), V.getStructBase(I));
+      mangleValueInTemplateArg(Bases[I].getType(), V.getStructBase(I), false);
     for (unsigned I = 0, N = Fields.size(); I != N; ++I) {
       if (Fields[I]->isUnnamedBitfield())
         continue;
       mangleValueInTemplateArg(Fields[I]->getType(),
-                               V.getStructField(Fields[I]->getFieldIndex()));
+                               V.getStructField(Fields[I]->getFieldIndex()),
+                               false);
     }
     Out << 'E';
-    return;
+    break;
   }
 
   case APValue::Union: {
@@ -5090,24 +5445,26 @@ void CXXNameMangler::mangleValueInTemplateArg(QualType T, const APValue &V) {
       Out << 'L';
       mangleType(T);
       Out << 'E';
-      return;
+      break;
     }
 
     // <braced-expression> ::= di <field source-name> <braced-expression>
+    NotPrimaryExpr();
     Out << "tl";
     mangleType(T);
     if (!isZeroInitialized(T, V)) {
       Out << "di";
       mangleSourceName(FD->getIdentifier());
-      mangleValueInTemplateArg(FD->getType(), V.getUnionValue());
+      mangleValueInTemplateArg(FD->getType(), V.getUnionValue(), false);
     }
     Out << 'E';
-    return;
+    break;
   }
 
   case APValue::Array: {
     QualType ElemT(T->getArrayElementTypeNoTypeQual(), 0);
 
+    NotPrimaryExpr();
     Out << "tl";
     mangleType(T);
 
@@ -5123,40 +5480,42 @@ void CXXNameMangler::mangleValueInTemplateArg(QualType T, const APValue &V) {
       const APValue &Elem = I < V.getArrayInitializedElts()
                                 ? V.getArrayInitializedElt(I)
                                 : V.getArrayFiller();
-      mangleValueInTemplateArg(ElemT, Elem);
+      mangleValueInTemplateArg(ElemT, Elem, false);
     }
     Out << 'E';
-    return;
+    break;
   }
 
   case APValue::Vector: {
     const VectorType *VT = T->castAs<VectorType>();
 
+    NotPrimaryExpr();
     Out << "tl";
     mangleType(T);
     unsigned N = V.getVectorLength();
     while (N && isZeroInitialized(VT->getElementType(), V.getVectorElt(N - 1)))
       --N;
     for (unsigned I = 0; I != N; ++I)
-      mangleValueInTemplateArg(VT->getElementType(), V.getVectorElt(I));
+      mangleValueInTemplateArg(VT->getElementType(), V.getVectorElt(I), false);
     Out << 'E';
-    return;
+    break;
   }
 
   case APValue::Int:
     mangleIntegerLiteral(T, V.getInt());
-    return;
+    break;
 
   case APValue::Float:
     mangleFloatLiteral(T, V.getFloat());
-    return;
+    break;
 
   case APValue::FixedPoint:
     mangleFixedPointLiteral();
-    return;
+    break;
 
   case APValue::ComplexFloat: {
     const ComplexType *CT = T->castAs<ComplexType>();
+    NotPrimaryExpr();
     Out << "tl";
     mangleType(T);
     if (!V.getComplexFloatReal().isPosZero() ||
@@ -5165,11 +5524,12 @@ void CXXNameMangler::mangleValueInTemplateArg(QualType T, const APValue &V) {
     if (!V.getComplexFloatImag().isPosZero())
       mangleFloatLiteral(CT->getElementType(), V.getComplexFloatImag());
     Out << 'E';
-    return;
+    break;
   }
 
   case APValue::ComplexInt: {
     const ComplexType *CT = T->castAs<ComplexType>();
+    NotPrimaryExpr();
     Out << "tl";
     mangleType(T);
     if (V.getComplexIntReal().getBoolValue() ||
@@ -5178,7 +5538,7 @@ void CXXNameMangler::mangleValueInTemplateArg(QualType T, const APValue &V) {
     if (V.getComplexIntImag().getBoolValue())
       mangleIntegerLiteral(CT->getElementType(), V.getComplexIntImag());
     Out << 'E';
-    return;
+    break;
   }
 
   case APValue::LValue: {
@@ -5188,7 +5548,7 @@ void CXXNameMangler::mangleValueInTemplateArg(QualType T, const APValue &V) {
 
     if (V.isNullPointer()) {
       mangleNullPointer(T);
-      return;
+      break;
     }
 
     APValue::LValueBase B = V.getLValueBase();
@@ -5199,54 +5559,82 @@ void CXXNameMangler::mangleValueInTemplateArg(QualType T, const APValue &V) {
       if (Offset.isZero()) {
         // This is reinterpret_cast<T*>(0), not a null pointer. Mangle this as
         // a cast, because L <type> 0 E means something else.
+        NotPrimaryExpr();
         Out << "rc";
         mangleType(T);
         Out << "Li0E";
+        if (TopLevel)
+          Out << 'E';
       } else {
         Out << "L";
         mangleType(T);
         Out << Offset.getQuantity() << 'E';
       }
-      return;
+      break;
     }
+
+    ASTContext &Ctx = Context.getASTContext();
 
     enum { Base, Offset, Path } Kind;
     if (!V.hasLValuePath()) {
       // Mangle as (T*)((char*)&base + N).
       if (T->isReferenceType()) {
+        NotPrimaryExpr();
         Out << "decvP";
         mangleType(T->getPointeeType());
       } else {
+        NotPrimaryExpr();
         Out << "cv";
         mangleType(T);
       }
       Out << "plcvPcad";
       Kind = Offset;
     } else {
-      if (T->isPointerType())
-        Out << "ad";
       if (!V.getLValuePath().empty() || V.isLValueOnePastTheEnd()) {
+        NotPrimaryExpr();
+        // A final conversion to the template parameter's type is usually
+        // folded into the 'so' mangling, but we can't do that for 'void*'
+        // parameters without introducing collisions.
+        if (NeedExactType && T->isVoidPointerType()) {
+          Out << "cv";
+          mangleType(T);
+        }
+        if (T->isPointerType())
+          Out << "ad";
         Out << "so";
-        mangleType(T->getPointeeType());
+        mangleType(T->isVoidPointerType()
+                       ? getLValueType(Ctx, V).getUnqualifiedType()
+                       : T->getPointeeType());
         Kind = Path;
       } else {
+        if (NeedExactType &&
+            !Ctx.hasSameType(T->getPointeeType(), getLValueType(Ctx, V)) &&
+            Ctx.getLangOpts().getClangABICompat() >
+                LangOptions::ClangABI::Ver11) {
+          NotPrimaryExpr();
+          Out << "cv";
+          mangleType(T);
+        }
+        if (T->isPointerType()) {
+          NotPrimaryExpr();
+          Out << "ad";
+        }
         Kind = Base;
       }
     }
 
-    QualType TypeSoFar;
+    QualType TypeSoFar = B.getType();
     if (auto *VD = B.dyn_cast<const ValueDecl*>()) {
       Out << 'L';
       mangle(VD);
       Out << 'E';
-      TypeSoFar = VD->getType();
     } else if (auto *E = B.dyn_cast<const Expr*>()) {
+      NotPrimaryExpr();
       mangleExpression(E);
-      TypeSoFar = E->getType();
     } else if (auto TI = B.dyn_cast<TypeInfoLValue>()) {
+      NotPrimaryExpr();
       Out << "ti";
       mangleType(QualType(TI.getType(), 0));
-      TypeSoFar = B.getTypeInfoType();
     } else {
       // We should never see dynamic allocations here.
       llvm_unreachable("unexpected lvalue base kind in template argument");
@@ -5258,7 +5646,7 @@ void CXXNameMangler::mangleValueInTemplateArg(QualType T, const APValue &V) {
 
     case Offset:
       Out << 'L';
-      mangleType(Context.getASTContext().getPointerDiffType());
+      mangleType(Ctx.getPointerDiffType());
       mangleNumber(V.getLValueOffset().getQuantity());
       Out << 'E';
       break;
@@ -5289,8 +5677,7 @@ void CXXNameMangler::mangleValueInTemplateArg(QualType T, const APValue &V) {
             }
             TypeSoFar = FD->getType();
           } else {
-            TypeSoFar =
-                Context.getASTContext().getRecordType(cast<CXXRecordDecl>(D));
+            TypeSoFar = Ctx.getRecordType(cast<CXXRecordDecl>(D));
           }
         }
       }
@@ -5301,18 +5688,29 @@ void CXXNameMangler::mangleValueInTemplateArg(QualType T, const APValue &V) {
       break;
     }
 
-    return;
+    break;
   }
 
   case APValue::MemberPointer:
     // Proposed in https://github.com/itanium-cxx-abi/cxx-abi/issues/47.
     if (!V.getMemberPointerDecl()) {
       mangleNullPointer(T);
-      return;
+      break;
     }
 
+    ASTContext &Ctx = Context.getASTContext();
+
+    NotPrimaryExpr();
     if (!V.getMemberPointerPath().empty()) {
       Out << "mc";
+      mangleType(T);
+    } else if (NeedExactType &&
+               !Ctx.hasSameType(
+                   T->castAs<MemberPointerType>()->getPointeeType(),
+                   V.getMemberPointerDecl()->getType()) &&
+               Ctx.getLangOpts().getClangABICompat() >
+                   LangOptions::ClangABI::Ver11) {
+      Out << "cv";
       mangleType(T);
     }
     Out << "adL";
@@ -5325,8 +5723,11 @@ void CXXNameMangler::mangleValueInTemplateArg(QualType T, const APValue &V) {
         mangleNumber(Offset.getQuantity());
       Out << 'E';
     }
-    return;
+    break;
   }
+
+  if (TopLevel && !IsPrimaryExpr)
+    Out << 'E';
 }
 
 void CXXNameMangler::mangleTemplateParameter(unsigned Depth, unsigned Index) {

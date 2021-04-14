@@ -333,7 +333,7 @@ void CodeExtractorAnalysisCache::findSideEffectInfoForBlock(BasicBlock &BB) {
         MemAddr = LI->getPointerOperand();
       }
       // Global variable can not be aliased with locals.
-      if (dyn_cast<Constant>(MemAddr))
+      if (isa<Constant>(MemAddr))
         break;
       Value *Base = MemAddr->stripInBoundsConstantOffsets();
       if (!isa<AllocaInst>(Base)) {
@@ -426,9 +426,8 @@ CodeExtractor::findOrCreateBlockForHoisting(BasicBlock *CommonExitBlock) {
   BasicBlock *NewExitBlock = CommonExitBlock->splitBasicBlock(
       CommonExitBlock->getFirstNonPHI()->getIterator());
 
-  for (auto PI = pred_begin(CommonExitBlock), PE = pred_end(CommonExitBlock);
-       PI != PE;) {
-    BasicBlock *Pred = *PI++;
+  for (BasicBlock *Pred :
+       llvm::make_early_inc_range(predecessors(CommonExitBlock))) {
     if (Blocks.count(Pred))
       continue;
     Pred->getTerminator()->replaceUsesOfWith(CommonExitBlock, NewExitBlock);
@@ -768,8 +767,7 @@ void CodeExtractor::severSplitPHINodesOfExits(
         NewBB = BasicBlock::Create(ExitBB->getContext(),
                                    ExitBB->getName() + ".split",
                                    ExitBB->getParent(), ExitBB);
-        SmallVector<BasicBlock *, 4> Preds(pred_begin(ExitBB),
-                                           pred_end(ExitBB));
+        SmallVector<BasicBlock *, 4> Preds(predecessors(ExitBB));
         for (BasicBlock *PredBB : Preds)
           if (Blocks.count(PredBB))
             PredBB->getTerminator()->replaceUsesOfWith(ExitBB, NewBB);
@@ -943,9 +941,11 @@ Function *CodeExtractor::constructFunction(const ValueSet &inputs,
       // Those attributes should be safe to propagate to the extracted function.
       case Attribute::AlwaysInline:
       case Attribute::Cold:
+      case Attribute::Hot:
       case Attribute::NoRecurse:
       case Attribute::InlineHint:
       case Attribute::MinSize:
+      case Attribute::NoCallback:
       case Attribute::NoDuplicate:
       case Attribute::NoFree:
       case Attribute::NoImplicitFloat:
@@ -970,8 +970,10 @@ Function *CodeExtractor::constructFunction(const ValueSet &inputs,
       case Attribute::StackProtectStrong:
       case Attribute::StrictFP:
       case Attribute::UWTable:
+      case Attribute::VScaleRange:
       case Attribute::NoCfCheck:
       case Attribute::MustProgress:
+      case Attribute::NoProfile:
         break;
       }
 
@@ -1159,9 +1161,8 @@ CallInst *CodeExtractor::emitCallAndSwitchStatement(Function *newFunction,
   AllocaInst *Struct = nullptr;
   if (AggregateArgs && (inputs.size() + outputs.size() > 0)) {
     std::vector<Type *> ArgTypes;
-    for (ValueSet::iterator v = StructValues.begin(),
-           ve = StructValues.end(); v != ve; ++v)
-      ArgTypes.push_back((*v)->getType());
+    for (Value *V : StructValues)
+      ArgTypes.push_back(V->getType());
 
     // Allocate a struct at the beginning of this function
     StructArgTy = StructType::get(newFunction->getContext(), ArgTypes);
@@ -1511,20 +1512,19 @@ static void fixupDebugInfoPostExtraction(Function &OldFunc, Function &NewFunc,
       continue;
     }
 
-    // If the location isn't a constant or an instruction, delete the
-    // intrinsic.
-    auto *DVI = cast<DbgVariableIntrinsic>(DII);
-    Value *Location = DVI->getVariableLocation();
-    if (!Location ||
-        (!isa<Constant>(Location) && !isa<Instruction>(Location))) {
-      DebugIntrinsicsToDelete.push_back(DVI);
-      continue;
-    }
+    auto IsInvalidLocation = [&NewFunc](Value *Location) {
+      // Location is invalid if it isn't a constant or an instruction, or is an
+      // instruction but isn't in the new function.
+      if (!Location ||
+          (!isa<Constant>(Location) && !isa<Instruction>(Location)))
+        return true;
+      Instruction *LocationInst = dyn_cast<Instruction>(Location);
+      return LocationInst && LocationInst->getFunction() != &NewFunc;
+    };
 
-    // If the variable location is an instruction but isn't in the new
-    // function, delete the intrinsic.
-    Instruction *LocationInst = dyn_cast<Instruction>(Location);
-    if (LocationInst && LocationInst->getFunction() != &NewFunc) {
+    auto *DVI = cast<DbgVariableIntrinsic>(DII);
+    // If any of the used locations are invalid, delete the intrinsic.
+    if (any_of(DVI->location_ops(), IsInvalidLocation)) {
       DebugIntrinsicsToDelete.push_back(DVI);
       continue;
     }
@@ -1537,7 +1537,7 @@ static void fixupDebugInfoPostExtraction(Function &OldFunc, Function &NewFunc,
           NewSP, OldVar->getName(), OldVar->getFile(), OldVar->getLine(),
           OldVar->getType(), /*AlwaysPreserve=*/false, DINode::FlagZero,
           OldVar->getAlignInBits());
-    DVI->setArgOperand(1, MetadataAsValue::get(Ctx, NewVar));
+    DVI->setVariable(cast<DILocalVariable>(NewVar));
   }
   for (auto *DII : DebugIntrinsicsToDelete)
     DII->eraseFromParent();
@@ -1547,7 +1547,7 @@ static void fixupDebugInfoPostExtraction(Function &OldFunc, Function &NewFunc,
   // function.
   for (Instruction &I : instructions(NewFunc)) {
     if (const DebugLoc &DL = I.getDebugLoc())
-      I.setDebugLoc(DebugLoc::get(DL.getLine(), DL.getCol(), NewSP));
+      I.setDebugLoc(DILocation::get(Ctx, DL.getLine(), DL.getCol(), NewSP));
 
     // Loop info metadata may contain line locations. Fix them up.
     auto updateLoopInfoLoc = [&Ctx,
@@ -1558,7 +1558,7 @@ static void fixupDebugInfoPostExtraction(Function &OldFunc, Function &NewFunc,
     updateLoopMetadataDebugLocations(I, updateLoopInfoLoc);
   }
   if (!TheCall.getDebugLoc())
-    TheCall.setDebugLoc(DebugLoc::get(0, 0, OldSP));
+    TheCall.setDebugLoc(DILocation::get(Ctx, 0, 0, OldSP));
 
   eraseDebugIntrinsicsWithNonLocalRefs(NewFunc);
 }
@@ -1610,15 +1610,14 @@ CodeExtractor::extractCodeRegion(const CodeExtractorAnalysisCache &CEAC) {
   DenseMap<BasicBlock *, BlockFrequency> ExitWeights;
   SmallPtrSet<BasicBlock *, 1> ExitBlocks;
   for (BasicBlock *Block : Blocks) {
-    for (succ_iterator SI = succ_begin(Block), SE = succ_end(Block); SI != SE;
-         ++SI) {
-      if (!Blocks.count(*SI)) {
+    for (BasicBlock *Succ : successors(Block)) {
+      if (!Blocks.count(Succ)) {
         // Update the branch weight for this successor.
         if (BFI) {
-          BlockFrequency &BF = ExitWeights[*SI];
-          BF += BFI->getBlockFreq(Block) * BPI->getEdgeProbability(Block, *SI);
+          BlockFrequency &BF = ExitWeights[Succ];
+          BF += BFI->getBlockFreq(Block) * BPI->getEdgeProbability(Block, Succ);
         }
-        ExitBlocks.insert(*SI);
+        ExitBlocks.insert(Succ);
       }
     }
   }

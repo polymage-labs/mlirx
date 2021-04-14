@@ -9,6 +9,7 @@
 #ifndef LLVM_LIBC_UTILS_FPUTIL_DUMMY_FENV_H
 #define LLVM_LIBC_UTILS_FPUTIL_DUMMY_FENV_H
 
+#include <fenv.h>
 #include <math.h>
 
 namespace __llvm_libc {
@@ -16,15 +17,21 @@ namespace fputil {
 
 // All dummy functions silently succeed.
 
-int clearExcept(int) { return 0; }
+static inline int clearExcept(int) { return 0; }
 
-int testExcept(int) { return 0; }
+static inline int testExcept(int) { return 0; }
 
-int raiseExcept(int) { return 0; }
+static inline int setExcept(int) { return 0; }
 
-int getRound() { return FE_TONEAREST; }
+static inline int raiseExcept(int) { return 0; }
 
-int setRound(int) { return 0; }
+static inline int getRound() { return FE_TONEAREST; }
+
+static inline int setRound(int) { return 0; }
+
+static inline int getEnv(fenv_t *) { return 0; }
+
+static inline int setEnv(const fenv_t *) { return 0; }
 
 } // namespace fputil
 } // namespace __llvm_libc
