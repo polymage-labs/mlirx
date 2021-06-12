@@ -1,10 +1,10 @@
 // RUN: mlir-opt -hopt -convert-linalg-to-loops -lower-affine -convert-std-to-llvm %s | mlir-cpu-runner -O3 -e main -entry-point-result=void -shared-libs=%mlir_runner_utils_dir/libmlir_runner_utils%shlibext | FileCheck %s
 
 func @main() {
-  %A = alloc() : memref<2088x2048xf64>
+  %A = memref.alloc() : memref<2088x2048xf64>
   // Align %B and %C since these are shape cast to vector types.
-  %B = alloc() {alignment = 32} : memref<2048x2048xf64>
-  %C = alloc() {alignment = 32} : memref<2088x2048xf64>
+  %B = memref.alloc() {alignment = 32} : memref<2048x2048xf64>
+  %C = memref.alloc() {alignment = 32} : memref<2088x2048xf64>
 
   %cf1 = constant 1.00000e+00 : f64
 
@@ -23,9 +23,9 @@ func @main() {
 
   %c0 = constant 0 : index
   %c1 = constant 1 : index
-  %M = dim %C, %c0 : memref<2088x2048xf64>
-  %N = dim %C, %c1 : memref<2088x2048xf64>
-  %K = dim %A, %c1 : memref<2088x2048xf64>
+  %M = memref.dim %C, %c0 : memref<2088x2048xf64>
+  %N = memref.dim %C, %c1 : memref<2088x2048xf64>
+  %K = memref.dim %A, %c1 : memref<2088x2048xf64>
 
   %t = subf %t_end, %t_start : f64
   %f1 = muli %M, %N : index
