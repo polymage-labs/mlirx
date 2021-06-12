@@ -14,6 +14,7 @@
 #define MLIR_SUPPORT_INTERFACESUPPORT_H
 
 #include "mlir/Support/TypeID.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/TypeName.h"
 
@@ -188,6 +189,16 @@ public:
   /// Returns true if the interface map contains an interface for the given id.
   bool contains(TypeID interfaceID) const { return lookup(interfaceID); }
 
+  /// Create an InterfaceMap given with the implementation of the interfaces.
+  /// The use of this constructor is in general discouraged in favor of
+  /// 'InterfaceMap::get<InterfaceA, ...>()'.
+  InterfaceMap(MutableArrayRef<std::pair<TypeID, void *>> elements)
+      : interfaces(elements.begin(), elements.end()) {
+    llvm::sort(interfaces, [](const auto &lhs, const auto &rhs) {
+      return compare(lhs.first, rhs.first);
+    });
+  }
+
 private:
   /// Compare two TypeID instances by comparing the underlying pointer.
   static bool compare(TypeID lhs, TypeID rhs) {
@@ -195,12 +206,6 @@ private:
   }
 
   InterfaceMap() = default;
-  InterfaceMap(MutableArrayRef<std::pair<TypeID, void *>> elements)
-      : interfaces(elements.begin(), elements.end()) {
-    llvm::sort(interfaces, [](const auto &lhs, const auto &rhs) {
-      return compare(lhs.first, rhs.first);
-    });
-  }
 
   template <typename... Ts>
   static InterfaceMap getImpl(std::tuple<Ts...> *) {

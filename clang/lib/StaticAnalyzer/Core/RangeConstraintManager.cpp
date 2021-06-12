@@ -20,6 +20,7 @@
 #include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/ImmutableSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -493,7 +494,7 @@ RangeSet RangeSet::Factory::deletePoint(RangeSet From,
 }
 
 void Range::dump(raw_ostream &OS) const {
-  OS << '[' << From().toString(10) << ", " << To().toString(10) << ']';
+  OS << '[' << toString(From(), 10) << ", " << toString(To(), 10) << ']';
 }
 
 void RangeSet::dump(raw_ostream &OS) const {
@@ -1487,15 +1488,18 @@ private:
       // This is an infeasible assumption.
       return nullptr;
 
-    ProgramStateRef NewState = setConstraint(State, Sym, NewConstraint);
-    if (auto Equality = EqualityInfo::extract(Sym, Int, Adjustment)) {
-      // If the original assumption is not Sym + Adjustment !=/</> Int,
-      // we should invert IsEquality flag.
-      Equality->IsEquality = Equality->IsEquality != EQ;
-      return track(NewState, *Equality);
+    if (ProgramStateRef NewState = setConstraint(State, Sym, NewConstraint)) {
+      if (auto Equality = EqualityInfo::extract(Sym, Int, Adjustment)) {
+        // If the original assumption is not Sym + Adjustment !=/</> Int,
+        // we should invert IsEquality flag.
+        Equality->IsEquality = Equality->IsEquality != EQ;
+        return track(NewState, *Equality);
+      }
+
+      return NewState;
     }
 
-    return NewState;
+    return nullptr;
   }
 
   ProgramStateRef track(ProgramStateRef State, EqualityInfo ToTrack) {

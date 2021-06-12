@@ -924,6 +924,12 @@ Value *InstCombinerImpl::dyn_castNegVal(Value *V) const {
     return ConstantExpr::getNeg(CV);
   }
 
+  // Negate integer vector splats.
+  if (auto *CV = dyn_cast<Constant>(V))
+    if (CV->getType()->isVectorTy() &&
+        CV->getType()->getScalarType()->isIntegerTy() && CV->getSplatValue())
+      return ConstantExpr::getNeg(CV);
+
   return nullptr;
 }
 
@@ -1098,7 +1104,7 @@ Instruction *InstCombinerImpl::foldOpIntoPhi(Instruction &I, PHINode *PN) {
     // If the incoming non-constant value is in I's block, we will remove one
     // instruction, but insert another equivalent one, leading to infinite
     // instcombine.
-    if (isPotentiallyReachable(I.getParent(), NonConstBB, &DT, LI))
+    if (isPotentiallyReachable(I.getParent(), NonConstBB, nullptr, &DT, LI))
       return nullptr;
   }
 
@@ -1682,7 +1688,7 @@ Instruction *InstCombinerImpl::foldVectorBinop(BinaryOperator &Inst) {
         Constant *MaybeUndef =
             ConstOp1 ? ConstantExpr::get(Opcode, UndefScalar, CElt)
                      : ConstantExpr::get(Opcode, CElt, UndefScalar);
-        if (!isa<UndefValue>(MaybeUndef)) {
+        if (!match(MaybeUndef, m_Undef())) {
           MayChange = false;
           break;
         }
@@ -2798,20 +2804,6 @@ Instruction *InstCombinerImpl::visitFree(CallInst &FI) {
   // when lots of inlining happens.
   if (isa<ConstantPointerNull>(Op))
     return eraseInstFromFunction(FI);
-
-  // If we free a pointer we've been explicitly told won't be freed, this
-  // would be full UB and thus we can conclude this is unreachable. Cases:
-  // 1) freeing a pointer which is explicitly nofree
-  // 2) calling free from a call site marked nofree
-  // 3) calling free in a function scope marked nofree
-  if (auto *A = dyn_cast<Argument>(Op->stripPointerCasts()))
-    if (A->hasAttribute(Attribute::NoFree) ||
-        FI.hasFnAttr(Attribute::NoFree) ||
-        FI.getFunction()->hasFnAttribute(Attribute::NoFree)) {
-      // Leave a marker since we can't modify the CFG here.
-      CreateNonTerminatorUnreachable(&FI);
-      return eraseInstFromFunction(FI);
-    }
 
   // If we optimize for code size, try to move the call to free before the null
   // test so that simplify cfg can remove the empty block and dead code
@@ -3982,8 +3974,8 @@ static bool combineInstructionsOverFunction(
       F.getContext(), TargetFolder(DL),
       IRBuilderCallbackInserter([&Worklist, &AC](Instruction *I) {
         Worklist.add(I);
-        if (match(I, m_Intrinsic<Intrinsic::assume>()))
-          AC.registerAssumption(cast<CallInst>(I));
+        if (auto *Assume = dyn_cast<AssumeInst>(I))
+          AC.registerAssumption(Assume);
       }));
 
   // Lower dbg.declare intrinsics otherwise their value may be clobbered
@@ -4059,9 +4051,6 @@ PreservedAnalyses InstCombinePass::run(Function &F,
   // Mark all the analyses that instcombine updates as preserved.
   PreservedAnalyses PA;
   PA.preserveSet<CFGAnalyses>();
-  PA.preserve<AAManager>();
-  PA.preserve<BasicAA>();
-  PA.preserve<GlobalsAA>();
   return PA;
 }
 

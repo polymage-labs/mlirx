@@ -105,12 +105,9 @@ define <2 x i8> @vsel_mixedvec() {
   ret <2 x i8> %s
 }
 
-; FIXME: Allow for undef elements in a constant vector condition.
-
 define <3 x i8> @vsel_undef_true_op(<3 x i8> %x, <3 x i8> %y) {
 ; CHECK-LABEL: @vsel_undef_true_op(
-; CHECK-NEXT:    [[S:%.*]] = select <3 x i1> <i1 true, i1 undef, i1 true>, <3 x i8> [[X:%.*]], <3 x i8> [[Y:%.*]]
-; CHECK-NEXT:    ret <3 x i8> [[S]]
+; CHECK-NEXT:    ret <3 x i8> [[X:%.*]]
 ;
   %s = select <3 x i1><i1 1, i1 undef, i1 1>, <3 x i8> %x, <3 x i8> %y
   ret <3 x i8> %s
@@ -118,8 +115,7 @@ define <3 x i8> @vsel_undef_true_op(<3 x i8> %x, <3 x i8> %y) {
 
 define <3 x i4> @vsel_undef_false_op(<3 x i4> %x, <3 x i4> %y) {
 ; CHECK-LABEL: @vsel_undef_false_op(
-; CHECK-NEXT:    [[S:%.*]] = select <3 x i1> <i1 false, i1 undef, i1 undef>, <3 x i4> [[X:%.*]], <3 x i4> [[Y:%.*]]
-; CHECK-NEXT:    ret <3 x i4> [[S]]
+; CHECK-NEXT:    ret <3 x i4> [[Y:%.*]]
 ;
   %s = select <3 x i1><i1 0, i1 undef, i1 undef>, <3 x i4> %x, <3 x i4> %y
   ret <3 x i4> %s
@@ -1017,17 +1013,28 @@ define i32 @select_neutral_sub_lhs(i32 %x, i32 %y) {
 
 define i32 @select_ctpop_zero(i32 %x) {
 ; CHECK-LABEL: @select_ctpop_zero(
-; CHECK-NEXT:  entry:
-; CHECK-NEXT:    [[TMP0:%.*]] = call i32 @llvm.ctpop.i32(i32 [[X:%.*]])
-; CHECK-NEXT:    ret i32 [[TMP0]]
+; CHECK-NEXT:    [[T1:%.*]] = call i32 @llvm.ctpop.i32(i32 [[X:%.*]])
+; CHECK-NEXT:    ret i32 [[T1]]
 ;
-entry:
-  %0 = icmp eq i32 %x, 0
-  %1 = call i32 @llvm.ctpop.i32(i32 %x)
-  %sel = select i1 %0, i32 0, i32 %1
+  %t0 = icmp eq i32 %x, 0
+  %t1 = call i32 @llvm.ctpop.i32(i32 %x)
+  %sel = select i1 %t0, i32 0, i32 %t1
   ret i32 %sel
 }
 declare i32 @llvm.ctpop.i32(i32)
+
+define <2 x i32> @vec_select_no_equivalence(<2 x i32> %x, <2 x i32> %y) {
+; CHECK-LABEL: @vec_select_no_equivalence(
+; CHECK-NEXT:    [[X10:%.*]] = shufflevector <2 x i32> [[X:%.*]], <2 x i32> undef, <2 x i32> <i32 1, i32 0>
+; CHECK-NEXT:    [[COND:%.*]] = icmp eq <2 x i32> [[X]], zeroinitializer
+; CHECK-NEXT:    [[S:%.*]] = select <2 x i1> [[COND]], <2 x i32> [[X10]], <2 x i32> zeroinitializer
+; CHECK-NEXT:    ret <2 x i32> [[S]]
+;
+  %x10 = shufflevector <2 x i32> %x, <2 x i32> undef, <2 x i32> <i32 1, i32 0>
+  %cond = icmp eq <2 x i32> %x, zeroinitializer
+  %s = select <2 x i1> %cond, <2 x i32> %x10, <2 x i32> zeroinitializer
+  ret <2 x i32> %s
+}
 
 ; TODO: these can be optimized more
 

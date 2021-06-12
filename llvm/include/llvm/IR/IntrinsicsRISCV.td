@@ -68,6 +68,53 @@ let TargetPrefix = "riscv" in {
 } // TargetPrefix = "riscv"
 
 //===----------------------------------------------------------------------===//
+// Bitmanip (Bit Manipulation) Extension
+
+let TargetPrefix = "riscv" in {
+
+  class BitManipGPRIntrinsics
+      : Intrinsic<[llvm_any_ty],
+                  [LLVMMatchType<0>],
+                  [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
+  class BitManipGPRGPRIntrinsics
+      : Intrinsic<[llvm_any_ty],
+                  [LLVMMatchType<0>, LLVMMatchType<0>],
+                  [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
+
+  // Zbb
+  def int_riscv_orc_b : BitManipGPRIntrinsics;
+
+  // Zbc
+  def int_riscv_clmul  : BitManipGPRGPRIntrinsics;
+  def int_riscv_clmulh : BitManipGPRGPRIntrinsics;
+  def int_riscv_clmulr : BitManipGPRGPRIntrinsics;
+
+  // Zbe
+  def int_riscv_bcompress   : BitManipGPRGPRIntrinsics;
+  def int_riscv_bdecompress : BitManipGPRGPRIntrinsics;
+
+  // Zbp
+  def int_riscv_grev  : BitManipGPRGPRIntrinsics;
+  def int_riscv_gorc  : BitManipGPRGPRIntrinsics;
+  def int_riscv_shfl  : BitManipGPRGPRIntrinsics;
+  def int_riscv_unshfl  : BitManipGPRGPRIntrinsics;
+  def int_riscv_xperm_n  : BitManipGPRGPRIntrinsics;
+  def int_riscv_xperm_b  : BitManipGPRGPRIntrinsics;
+  def int_riscv_xperm_h  : BitManipGPRGPRIntrinsics;
+  def int_riscv_xperm_w  : BitManipGPRGPRIntrinsics;
+
+  // Zbr
+  def int_riscv_crc32_b : BitManipGPRIntrinsics;
+  def int_riscv_crc32_h : BitManipGPRIntrinsics;
+  def int_riscv_crc32_w : BitManipGPRIntrinsics;
+  def int_riscv_crc32_d : BitManipGPRIntrinsics;
+  def int_riscv_crc32c_b : BitManipGPRIntrinsics;
+  def int_riscv_crc32c_h : BitManipGPRIntrinsics;
+  def int_riscv_crc32c_w : BitManipGPRIntrinsics;
+  def int_riscv_crc32c_d : BitManipGPRIntrinsics;
+} // TargetPrefix = "riscv"
+
+//===----------------------------------------------------------------------===//
 // Vectors
 
 class RISCVVIntrinsic {
@@ -515,15 +562,15 @@ let TargetPrefix = "riscv" in {
   // Output: (scalar type)
   // Input: (vector_in, vl)
   class RISCVMaskUnarySOutNoMask
-        : Intrinsic<[llvm_anyint_ty],
-                    [llvm_anyvector_ty, LLVMMatchType<0>],
+        : Intrinsic<[LLVMMatchType<1>],
+                    [llvm_anyvector_ty, llvm_anyint_ty],
                     [IntrNoMem]>, RISCVVIntrinsic;
   // For unary operations with scalar type output with mask
   // Output: (scalar type)
   // Input: (vector_in, mask, vl)
   class RISCVMaskUnarySOutMask
-        : Intrinsic<[llvm_anyint_ty],
-                    [llvm_anyvector_ty, LLVMMatchType<1>, LLVMMatchType<0>],
+        : Intrinsic<[LLVMMatchType<1>],
+                    [llvm_anyvector_ty, LLVMMatchType<0>, llvm_anyint_ty],
                     [IntrNoMem]>, RISCVVIntrinsic;
   // For destination vector type is NOT the same as source vector.
   // Input: (vector_in, vl)
@@ -956,6 +1003,8 @@ let TargetPrefix = "riscv" in {
   defm vmsle : RISCVCompare;
   defm vmsgtu : RISCVCompare;
   defm vmsgt : RISCVCompare;
+  defm vmsgeu : RISCVCompare;
+  defm vmsge : RISCVCompare;
 
   defm vminu : RISCVBinaryAAX;
   defm vmin : RISCVBinaryAAX;

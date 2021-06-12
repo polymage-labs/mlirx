@@ -10,17 +10,16 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "clang/Sema/Ownership.h"
-#include "clang/Sema/SemaInternal.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTDiagnostic.h"
 #include "clang/AST/ASTLambda.h"
-#include "clang/AST/CharUnits.h"
 #include "clang/AST/CXXInheritance.h"
+#include "clang/AST/CharUnits.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/EvaluatedExprVisitor.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
+#include "clang/AST/IgnoreExpr.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtObjC.h"
@@ -30,8 +29,10 @@
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Sema/Initialization.h"
 #include "clang/Sema/Lookup.h"
+#include "clang/Sema/Ownership.h"
 #include "clang/Sema/Scope.h"
 #include "clang/Sema/ScopeInfo.h"
+#include "clang/Sema/SemaInternal.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -541,6 +542,12 @@ Sema::ActOnLabelStmt(SourceLocation IdentLoc, LabelDecl *TheDecl,
     return SubStmt;
   }
 
+  ReservedIdentifierStatus Status = TheDecl->isReserved(getLangOpts());
+  if (Status != ReservedIdentifierStatus::NotReserved &&
+      !Context.getSourceManager().isInSystemHeader(IdentLoc))
+    Diag(IdentLoc, diag::warn_reserved_extern_symbol)
+        << TheDecl << static_cast<int>(Status);
+
   // Otherwise, things are good.  Fill in the declaration and return it.
   LabelStmt *LS = new (Context) LabelStmt(IdentLoc, TheDecl, SubStmt);
   TheDecl->setStmt(LS);
@@ -555,12 +562,286 @@ Sema::ActOnLabelStmt(SourceLocation IdentLoc, LabelDecl *TheDecl,
   return LS;
 }
 
-StmtResult Sema::ActOnAttributedStmt(SourceLocation AttrLoc,
-                                     ArrayRef<const Attr*> Attrs,
+StmtResult Sema::BuildAttributedStmt(SourceLocation AttrsLoc,
+                                     ArrayRef<const Attr *> Attrs,
                                      Stmt *SubStmt) {
-  // Fill in the declaration and return it.
-  AttributedStmt *LS = AttributedStmt::Create(Context, AttrLoc, Attrs, SubStmt);
-  return LS;
+  // FIXME: this code should move when a planned refactoring around statement
+  // attributes lands.
+  for (const auto *A : Attrs) {
+    if (A->getKind() == attr::MustTail) {
+      if (!checkAndRewriteMustTailAttr(SubStmt, *A)) {
+        return SubStmt;
+      }
+      setFunctionHasMustTail();
+    }
+  }
+
+  return AttributedStmt::Create(Context, AttrsLoc, Attrs, SubStmt);
+}
+
+StmtResult Sema::ActOnAttributedStmt(const ParsedAttributesWithRange &Attrs,
+                                     Stmt *SubStmt) {
+  SmallVector<const Attr *, 1> SemanticAttrs;
+  ProcessStmtAttributes(SubStmt, Attrs, SemanticAttrs);
+  if (!SemanticAttrs.empty())
+    return BuildAttributedStmt(Attrs.Range.getBegin(), SemanticAttrs, SubStmt);
+  // If none of the attributes applied, that's fine, we can recover by
+  // returning the substatement directly instead of making an AttributedStmt
+  // with no attributes on it.
+  return SubStmt;
+}
+
+bool Sema::checkAndRewriteMustTailAttr(Stmt *St, const Attr &MTA) {
+  ReturnStmt *R = cast<ReturnStmt>(St);
+  Expr *E = R->getRetValue();
+
+  if (CurContext->isDependentContext() || (E && E->isInstantiationDependent()))
+    // We have to suspend our check until template instantiation time.
+    return true;
+
+  if (!checkMustTailAttr(St, MTA))
+    return false;
+
+  // FIXME: Replace Expr::IgnoreImplicitAsWritten() with this function.
+  // Currently it does not skip implicit constructors in an initialization
+  // context.
+  auto IgnoreImplicitAsWritten = [](Expr *E) -> Expr * {
+    return IgnoreExprNodes(E, IgnoreImplicitAsWrittenSingleStep,
+                           IgnoreElidableImplicitConstructorSingleStep);
+  };
+
+  // Now that we have verified that 'musttail' is valid here, rewrite the
+  // return value to remove all implicit nodes, but retain parentheses.
+  R->setRetValue(IgnoreImplicitAsWritten(E));
+  return true;
+}
+
+bool Sema::checkMustTailAttr(const Stmt *St, const Attr &MTA) {
+  assert(!CurContext->isDependentContext() &&
+         "musttail cannot be checked from a dependent context");
+
+  // FIXME: Add Expr::IgnoreParenImplicitAsWritten() with this definition.
+  auto IgnoreParenImplicitAsWritten = [](const Expr *E) -> const Expr * {
+    return IgnoreExprNodes(const_cast<Expr *>(E), IgnoreParensSingleStep,
+                           IgnoreImplicitAsWrittenSingleStep,
+                           IgnoreElidableImplicitConstructorSingleStep);
+  };
+
+  const Expr *E = cast<ReturnStmt>(St)->getRetValue();
+  const auto *CE = dyn_cast_or_null<CallExpr>(IgnoreParenImplicitAsWritten(E));
+
+  if (!CE) {
+    Diag(St->getBeginLoc(), diag::err_musttail_needs_call) << &MTA;
+    return false;
+  }
+
+  if (const auto *EWC = dyn_cast<ExprWithCleanups>(E)) {
+    if (EWC->cleanupsHaveSideEffects()) {
+      Diag(St->getBeginLoc(), diag::err_musttail_needs_trivial_args) << &MTA;
+      return false;
+    }
+  }
+
+  // We need to determine the full function type (including "this" type, if any)
+  // for both caller and callee.
+  struct FuncType {
+    enum {
+      ft_non_member,
+      ft_static_member,
+      ft_non_static_member,
+      ft_pointer_to_member,
+    } MemberType = ft_non_member;
+
+    QualType This;
+    const FunctionProtoType *Func;
+    const CXXMethodDecl *Method = nullptr;
+  } CallerType, CalleeType;
+
+  auto GetMethodType = [this, St, MTA](const CXXMethodDecl *CMD, FuncType &Type,
+                                       bool IsCallee) -> bool {
+    if (isa<CXXConstructorDecl, CXXDestructorDecl>(CMD)) {
+      Diag(St->getBeginLoc(), diag::err_musttail_structors_forbidden)
+          << IsCallee << isa<CXXDestructorDecl>(CMD);
+      if (IsCallee)
+        Diag(CMD->getBeginLoc(), diag::note_musttail_structors_forbidden)
+            << isa<CXXDestructorDecl>(CMD);
+      Diag(MTA.getLocation(), diag::note_tail_call_required) << &MTA;
+      return false;
+    }
+    if (CMD->isStatic())
+      Type.MemberType = FuncType::ft_static_member;
+    else {
+      Type.This = CMD->getThisType()->getPointeeType();
+      Type.MemberType = FuncType::ft_non_static_member;
+    }
+    Type.Func = CMD->getType()->castAs<FunctionProtoType>();
+    return true;
+  };
+
+  const auto *CallerDecl = dyn_cast<FunctionDecl>(CurContext);
+
+  // Find caller function signature.
+  if (!CallerDecl) {
+    int ContextType;
+    if (isa<BlockDecl>(CurContext))
+      ContextType = 0;
+    else if (isa<ObjCMethodDecl>(CurContext))
+      ContextType = 1;
+    else
+      ContextType = 2;
+    Diag(St->getBeginLoc(), diag::err_musttail_forbidden_from_this_context)
+        << &MTA << ContextType;
+    return false;
+  } else if (const auto *CMD = dyn_cast<CXXMethodDecl>(CurContext)) {
+    // Caller is a class/struct method.
+    if (!GetMethodType(CMD, CallerType, false))
+      return false;
+  } else {
+    // Caller is a non-method function.
+    CallerType.Func = CallerDecl->getType()->getAs<FunctionProtoType>();
+  }
+
+  const Expr *CalleeExpr = CE->getCallee()->IgnoreParens();
+  const auto *CalleeBinOp = dyn_cast<BinaryOperator>(CalleeExpr);
+  SourceLocation CalleeLoc = CE->getCalleeDecl()
+                                 ? CE->getCalleeDecl()->getBeginLoc()
+                                 : St->getBeginLoc();
+
+  // Find callee function signature.
+  if (const CXXMethodDecl *CMD =
+          dyn_cast_or_null<CXXMethodDecl>(CE->getCalleeDecl())) {
+    // Call is: obj.method(), obj->method(), functor(), etc.
+    if (!GetMethodType(CMD, CalleeType, true))
+      return false;
+  } else if (CalleeBinOp && CalleeBinOp->isPtrMemOp()) {
+    // Call is: obj->*method_ptr or obj.*method_ptr
+    const auto *MPT =
+        CalleeBinOp->getRHS()->getType()->castAs<MemberPointerType>();
+    CalleeType.This = QualType(MPT->getClass(), 0);
+    CalleeType.Func = MPT->getPointeeType()->castAs<FunctionProtoType>();
+    CalleeType.MemberType = FuncType::ft_pointer_to_member;
+  } else if (isa<CXXPseudoDestructorExpr>(CalleeExpr)) {
+    Diag(St->getBeginLoc(), diag::err_musttail_structors_forbidden)
+        << /* IsCallee = */ 1 << /* IsDestructor = */ 1;
+    Diag(MTA.getLocation(), diag::note_tail_call_required) << &MTA;
+    return false;
+  } else {
+    // Non-method function.
+    CalleeType.Func =
+        CalleeExpr->getType()->getPointeeType()->getAs<FunctionProtoType>();
+  }
+
+  // Both caller and callee must have a prototype (no K&R declarations).
+  if (!CalleeType.Func || !CallerType.Func) {
+    Diag(St->getBeginLoc(), diag::err_musttail_needs_prototype) << &MTA;
+    if (!CalleeType.Func && CE->getDirectCallee()) {
+      Diag(CE->getDirectCallee()->getBeginLoc(),
+           diag::note_musttail_fix_non_prototype);
+    }
+    if (!CallerType.Func)
+      Diag(CallerDecl->getBeginLoc(), diag::note_musttail_fix_non_prototype);
+    return false;
+  }
+
+  // Caller and callee must have matching calling conventions.
+  //
+  // Some calling conventions are physically capable of supporting tail calls
+  // even if the function types don't perfectly match. LLVM is currently too
+  // strict to allow this, but if LLVM added support for this in the future, we
+  // could exit early here and skip the remaining checks if the functions are
+  // using such a calling convention.
+  if (CallerType.Func->getCallConv() != CalleeType.Func->getCallConv()) {
+    if (const auto *ND = dyn_cast_or_null<NamedDecl>(CE->getCalleeDecl()))
+      Diag(St->getBeginLoc(), diag::err_musttail_callconv_mismatch)
+          << true << ND->getDeclName();
+    else
+      Diag(St->getBeginLoc(), diag::err_musttail_callconv_mismatch) << false;
+    Diag(CalleeLoc, diag::note_musttail_callconv_mismatch)
+        << FunctionType::getNameForCallConv(CallerType.Func->getCallConv())
+        << FunctionType::getNameForCallConv(CalleeType.Func->getCallConv());
+    Diag(MTA.getLocation(), diag::note_tail_call_required) << &MTA;
+    return false;
+  }
+
+  if (CalleeType.Func->isVariadic() || CallerType.Func->isVariadic()) {
+    Diag(St->getBeginLoc(), diag::err_musttail_no_variadic) << &MTA;
+    return false;
+  }
+
+  // Caller and callee must match in whether they have a "this" parameter.
+  if (CallerType.This.isNull() != CalleeType.This.isNull()) {
+    if (const auto *ND = dyn_cast_or_null<NamedDecl>(CE->getCalleeDecl())) {
+      Diag(St->getBeginLoc(), diag::err_musttail_member_mismatch)
+          << CallerType.MemberType << CalleeType.MemberType << true
+          << ND->getDeclName();
+      Diag(CalleeLoc, diag::note_musttail_callee_defined_here)
+          << ND->getDeclName();
+    } else
+      Diag(St->getBeginLoc(), diag::err_musttail_member_mismatch)
+          << CallerType.MemberType << CalleeType.MemberType << false;
+    Diag(MTA.getLocation(), diag::note_tail_call_required) << &MTA;
+    return false;
+  }
+
+  auto CheckTypesMatch = [this](FuncType CallerType, FuncType CalleeType,
+                                PartialDiagnostic &PD) -> bool {
+    enum {
+      ft_different_class,
+      ft_parameter_arity,
+      ft_parameter_mismatch,
+      ft_return_type,
+    };
+
+    auto DoTypesMatch = [this, &PD](QualType A, QualType B,
+                                    unsigned Select) -> bool {
+      if (!Context.hasSimilarType(A, B)) {
+        PD << Select << A.getUnqualifiedType() << B.getUnqualifiedType();
+        return false;
+      }
+      return true;
+    };
+
+    if (!CallerType.This.isNull() &&
+        !DoTypesMatch(CallerType.This, CalleeType.This, ft_different_class))
+      return false;
+
+    if (!DoTypesMatch(CallerType.Func->getReturnType(),
+                      CalleeType.Func->getReturnType(), ft_return_type))
+      return false;
+
+    if (CallerType.Func->getNumParams() != CalleeType.Func->getNumParams()) {
+      PD << ft_parameter_arity << CallerType.Func->getNumParams()
+         << CalleeType.Func->getNumParams();
+      return false;
+    }
+
+    ArrayRef<QualType> CalleeParams = CalleeType.Func->getParamTypes();
+    ArrayRef<QualType> CallerParams = CallerType.Func->getParamTypes();
+    size_t N = CallerType.Func->getNumParams();
+    for (size_t I = 0; I < N; I++) {
+      if (!DoTypesMatch(CalleeParams[I], CallerParams[I],
+                        ft_parameter_mismatch)) {
+        PD << static_cast<int>(I) + 1;
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+  PartialDiagnostic PD = PDiag(diag::note_musttail_mismatch);
+  if (!CheckTypesMatch(CallerType, CalleeType, PD)) {
+    if (const auto *ND = dyn_cast_or_null<NamedDecl>(CE->getCalleeDecl()))
+      Diag(St->getBeginLoc(), diag::err_musttail_mismatch)
+          << true << ND->getDeclName();
+    else
+      Diag(St->getBeginLoc(), diag::err_musttail_mismatch) << false;
+    Diag(CalleeLoc, PD);
+    Diag(MTA.getLocation(), diag::note_tail_call_required) << &MTA;
+    return false;
+  }
+
+  return true;
 }
 
 namespace {
@@ -586,7 +867,7 @@ StmtResult Sema::ActOnIfStmt(SourceLocation IfLoc, bool IsConstexpr,
     Cond = ConditionResult(
         *this, nullptr,
         MakeFullExpr(new (Context) OpaqueValueExpr(SourceLocation(),
-                                                   Context.BoolTy, VK_RValue),
+                                                   Context.BoolTy, VK_PRValue),
                      IfLoc),
         false);
 
@@ -825,8 +1106,8 @@ static void checkCaseValue(Sema &S, SourceLocation Loc, const llvm::APSInt &Val,
     // type versus "switch expression cannot have this value". Use proper
     // IntRange checking rather than just looking at the unpromoted type here.
     if (ConvVal != Val)
-      S.Diag(Loc, diag::warn_case_value_overflow) << Val.toString(10)
-                                                  << ConvVal.toString(10);
+      S.Diag(Loc, diag::warn_case_value_overflow) << toString(Val, 10)
+                                                  << toString(ConvVal, 10);
   }
 }
 
@@ -1151,7 +1432,7 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, Stmt *Switch,
         if (OverlapStmt) {
           // If we have a duplicate, report it.
           Diag(CR->getLHS()->getBeginLoc(), diag::err_duplicate_case)
-              << OverlapVal.toString(10);
+              << toString(OverlapVal, 10);
           Diag(OverlapStmt->getLHS()->getBeginLoc(),
                diag::note_duplicate_case_prev);
           // FIXME: We really want to remove the bogus case stmt from the
@@ -1167,7 +1448,7 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, Stmt *Switch,
       // TODO: it would be nice if we printed enums as enums, chars as
       // chars, etc.
       Diag(CondExpr->getExprLoc(), diag::warn_missing_case_for_condition)
-        << ConstantCondValue.toString(10)
+        << toString(ConstantCondValue, 10)
         << CondExpr->getSourceRange();
     }
 
@@ -1990,7 +2271,7 @@ Sema::ActOnObjCForCollectionStmt(SourceLocation ForLoc,
       // If the type contained 'auto', deduce the 'auto' to 'id'.
       if (FirstType->getContainedAutoType()) {
         OpaqueValueExpr OpaqueId(D->getLocation(), Context.getObjCIdType(),
-                                 VK_RValue);
+                                 VK_PRValue);
         Expr *DeducedInit = &OpaqueId;
         if (DeduceAutoType(D->getTypeSourceInfo(), DeducedInit, FirstType) ==
                 DAR_Failed)

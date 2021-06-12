@@ -29,6 +29,37 @@ class ComplexArithmeticOp<string mnemonic, list<OpTrait> traits = []> :
   let verifier = ?;
 }
 
+// Base class for standard unary operations on complex numbers with a
+// floating-point element type. These operations take one operand and return
+// one result; the operand must be a complex number.
+class ComplexUnaryOp<string mnemonic, list<OpTrait> traits = []> :
+    Complex_Op<mnemonic, traits # [NoSideEffect]> {
+  let arguments = (ins Complex<AnyFloat>:$complex);
+  let assemblyFormat = "$complex attr-dict `:` type($complex)";
+  let verifier = ?;
+}
+
+//===----------------------------------------------------------------------===//
+// AbsOp
+//===----------------------------------------------------------------------===//
+
+def AbsOp : ComplexUnaryOp<"abs",
+    [TypesMatchWith<"complex element type matches result type",
+                    "complex", "result",
+                    "$_self.cast<ComplexType>().getElementType()">]> {
+  let summary = "computes absolute value of a complex number";
+  let description = [{
+    The `abs` op takes a single complex number and computes its absolute value.
+
+    Example:
+
+    ```mlir
+    %a = complex.abs %b : complex<f32>
+    ```
+  }];
+  let results = (outs AnyFloat:$result);
+}
+
 //===----------------------------------------------------------------------===//
 // AddOp
 //===----------------------------------------------------------------------===//
@@ -47,32 +78,6 @@ def AddOp : ComplexArithmeticOp<"add"> {
 }
 
 //===----------------------------------------------------------------------===//
-// AbsOp
-//===----------------------------------------------------------------------===//
-
-def AbsOp : Complex_Op<"abs",
-    [NoSideEffect,
-     TypesMatchWith<"complex element type matches result type",
-                    "complex", "result",
-                    "$_self.cast<ComplexType>().getElementType()">]> {
-  let summary = "computes absolute value of a complex number";
-  let description = [{
-    The `abs` op takes a single complex number and computes its absolute value.
-
-    Example:
-
-    ```mlir
-    %a = complex.abs %b : complex<f32>
-    ```
-  }];
-
-  let arguments = (ins Complex<AnyFloat>:$complex);
-  let results = (outs AnyFloat:$result);
-
-  let assemblyFormat = "$complex attr-dict `:` type($complex)";
-}
-
-//===----------------------------------------------------------------------===//
 // CreateOp
 //===----------------------------------------------------------------------===//
 
@@ -88,7 +93,7 @@ def CreateOp : Complex_Op<"create",
 
   let summary = "complex number creation operation";
   let description = [{
-    The `complex.complex` operation creates a complex number from two
+    The `complex.create` operation creates a complex number from two
     floating-point operands, the real and the imaginary part.
 
     Example:
@@ -102,6 +107,7 @@ def CreateOp : Complex_Op<"create",
   let results = (outs Complex<AnyFloat>:$complex);
 
   let assemblyFormat = "$real `,` $imaginary attr-dict `:` type($complex)";
+  let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -121,12 +127,40 @@ def DivOp : ComplexArithmeticOp<"div"> {
 }
 
 //===----------------------------------------------------------------------===//
+// EqualOp
+//===----------------------------------------------------------------------===//
+
+def EqualOp : Complex_Op<"eq",
+    [NoSideEffect, AllTypesMatch<["lhs", "rhs"]>,
+    DeclareOpInterfaceMethods<VectorUnrollOpInterface>] #
+    ElementwiseMappable.traits> {
+  let summary = "computes whether two complex values are equal";
+  let description = [{
+    The `eq` op takes two complex numbers and returns whether they are equal.
+
+    Example:
+
+    ```mlir
+    %a = complex.eq %b, %c : complex<f32>
+    ```
+  }];
+
+  let arguments = (ins Complex<AnyFloat>:$lhs, Complex<AnyFloat>:$rhs);
+  let results = (outs I1:$result);
+  let builders = [
+    OpBuilder<(ins "Value":$lhs, "Value":$rhs), [{
+      build($_builder, $_state, $_builder.getI1Type(), lhs, rhs);
+    }]>];
+
+  let assemblyFormat = "$lhs `,` $rhs  attr-dict `:` type($lhs)";
+}
+
+//===----------------------------------------------------------------------===//
 // ImOp
 //===----------------------------------------------------------------------===//
 
-def ImOp : Complex_Op<"im",
-    [NoSideEffect,
-     TypesMatchWith<"complex element type matches result type",
+def ImOp : ComplexUnaryOp<"im",
+    [TypesMatchWith<"complex element type matches result type",
                     "complex", "imaginary",
                     "$_self.cast<ComplexType>().getElementType()">]> {
   let summary = "extracts the imaginary part of a complex number";
@@ -140,10 +174,8 @@ def ImOp : Complex_Op<"im",
     ```
   }];
 
-  let arguments = (ins Complex<AnyFloat>:$complex);
   let results = (outs AnyFloat:$imaginary);
-
-  let assemblyFormat = "$complex attr-dict `:` type($complex)";
+  let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -162,12 +194,41 @@ def MulOp : ComplexArithmeticOp<"mul"> {
 }
 
 //===----------------------------------------------------------------------===//
+// NotEqualOp
+//===----------------------------------------------------------------------===//
+
+def NotEqualOp : Complex_Op<"neq",
+    [NoSideEffect, AllTypesMatch<["lhs", "rhs"]>,
+    DeclareOpInterfaceMethods<VectorUnrollOpInterface>] #
+    ElementwiseMappable.traits> {
+  let summary = "computes whether two complex values are not equal";
+  let description = [{
+    The `neq` op takes two complex numbers and returns whether they are not
+    equal.
+
+    Example:
+
+    ```mlir
+    %a = complex.neq %b, %c : complex<f32>
+    ```
+  }];
+
+  let arguments = (ins Complex<AnyFloat>:$lhs, Complex<AnyFloat>:$rhs);
+  let results = (outs I1:$result);
+  let builders = [
+    OpBuilder<(ins "Value":$lhs, "Value":$rhs), [{
+      build($_builder, $_state, $_builder.getI1Type(), lhs, rhs);
+    }]>];
+
+  let assemblyFormat = "$lhs `,` $rhs  attr-dict `:` type($lhs)";
+}
+
+//===----------------------------------------------------------------------===//
 // ReOp
 //===----------------------------------------------------------------------===//
 
-def ReOp : Complex_Op<"re",
-    [NoSideEffect,
-     TypesMatchWith<"complex element type matches result type",
+def ReOp : ComplexUnaryOp<"re",
+    [TypesMatchWith<"complex element type matches result type",
                     "complex", "real",
                     "$_self.cast<ComplexType>().getElementType()">]> {
   let summary = "extracts the real part of a complex number";
@@ -181,10 +242,8 @@ def ReOp : Complex_Op<"re",
     ```
   }];
 
-  let arguments = (ins Complex<AnyFloat>:$complex);
   let results = (outs AnyFloat:$real);
-
-  let assemblyFormat = "$complex attr-dict `:` type($complex)";
+  let hasFolder = 1;
 }
 
 

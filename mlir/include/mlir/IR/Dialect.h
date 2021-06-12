@@ -68,6 +68,13 @@ public:
   /// These are represented with OpaqueType.
   bool allowsUnknownTypes() const { return unknownTypesAllowed; }
 
+  /// Register dialect-wide canonicalization patterns. This method should only
+  /// be used to register canonicalization patterns that do not conceptually
+  /// belong to any single operation in the dialect. (In that case, use the op's
+  /// canonicalizer.) E.g., canonicalization patterns for op interfaces should
+  /// be registered here.
+  virtual void getCanonicalizationPatterns(RewritePatternSet &results) const {}
+
   /// Registered hook to materialize a single constant operation from a given
   /// attribute value with the desired resultant type. This method should use
   /// the provided builder to create the operation without changing the
@@ -193,6 +200,11 @@ protected:
     (void)std::initializer_list<int>{0, (addType<Args>(), 0)...};
   }
 
+  /// Register a type instance with this dialect.
+  /// The use of this method is in general discouraged in favor of
+  /// 'addTypes<CustomType>()'.
+  void addType(TypeID typeID, AbstractType &&typeInfo);
+
   /// Register a set of attribute classes with this dialect.
   template <typename... Args> void addAttributes() {
     (void)std::initializer_list<int>{0, (addAttribute<Args>(), 0)...};
@@ -231,7 +243,6 @@ private:
     addType(T::getTypeID(), AbstractType::get<T>(*this));
     detail::TypeUniquer::registerType<T>(context);
   }
-  void addType(TypeID typeID, AbstractType &&typeInfo);
 
   /// The namespace of this dialect.
   StringRef name;

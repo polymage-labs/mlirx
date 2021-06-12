@@ -1603,6 +1603,11 @@ static void __kmp_invoke_task(kmp_int32 gtid, kmp_task_t *task,
       __ompt_task_start(task, current_task, gtid);
 #endif
 
+#if OMPD_SUPPORT
+    if (ompd_state & OMPD_ENABLE_BP)
+      ompd_bp_task_begin();
+#endif
+
 #if USE_ITT_BUILD && USE_ITT_NOTIFY
     kmp_uint64 cur_time;
     kmp_int32 kmp_itt_count_task =
@@ -1638,6 +1643,11 @@ static void __kmp_invoke_task(kmp_int32 gtid, kmp_task_t *task,
     KMP_FSYNC_RELEASING(taskdata->td_parent); // releasing parent
 #endif
   }
+
+#if OMPD_SUPPORT
+  if (ompd_state & OMPD_ENABLE_BP)
+    ompd_bp_task_end();
+#endif
 
   // Proxy tasks are not handled by the runtime
   if (taskdata->td_flags.proxy != TASK_PROXY) {
@@ -2497,6 +2507,7 @@ void __kmpc_taskgroup(ident_t *loc, int gtid) {
   tg_new->parent = taskdata->td_taskgroup;
   tg_new->reduce_data = NULL;
   tg_new->reduce_num_data = 0;
+  tg_new->gomp_data = NULL;
   taskdata->td_taskgroup = tg_new;
 
 #if OMPT_SUPPORT && OMPT_OPTIONAL
@@ -2595,7 +2606,8 @@ void __kmpc_end_taskgroup(ident_t *loc, int gtid) {
   }
   KMP_DEBUG_ASSERT(taskgroup->count == 0);
 
-  if (taskgroup->reduce_data != NULL) { // need to reduce?
+  if (taskgroup->reduce_data != NULL &&
+      !taskgroup->gomp_data) { // need to reduce?
     int cnt;
     void *reduce_data;
     kmp_team_t *t = thread->th.th_team;

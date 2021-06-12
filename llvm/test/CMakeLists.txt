@@ -1,6 +1,6 @@
 llvm_canonicalize_cmake_booleans(
   BUILD_SHARED_LIBS
-  HAVE_LIBXAR
+  LLVM_HAVE_LIBXAR
   HAVE_OCAMLOPT
   HAVE_OCAML_OUNIT
   LLVM_ENABLE_DIA_SDK
@@ -100,6 +100,7 @@ set(LLVM_TEST_DEPENDS
           llvm-objdump
           llvm-opt-fuzzer
           llvm-opt-report
+          llvm-otool
           llvm-pdbutil
           llvm-profdata
           llvm-profgen
@@ -115,7 +116,9 @@ set(LLVM_TEST_DEPENDS
           llvm-strip
           llvm-symbolizer
           llvm-tblgen
+          llvm-tapi-diff
           llvm-undname
+          llvm-windres
           llvm-xray
           not
           obj2yaml

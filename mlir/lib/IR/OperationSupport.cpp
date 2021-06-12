@@ -224,7 +224,7 @@ void OperationState::addRegions(
 //===----------------------------------------------------------------------===//
 
 detail::OperandStorage::OperandStorage(Operation *owner, ValueRange values)
-    : representation(0) {
+    : inlineStorage() {
   auto &inlineStorage = getInlineStorage();
   inlineStorage.numOperands = inlineStorage.capacity = values.size();
   auto *operandPtrBegin = getTrailingObjects<OpOperand>();
@@ -237,7 +237,9 @@ detail::OperandStorage::~OperandStorage() {
   if (isDynamicStorage()) {
     TrailingOperandStorage &storage = getDynamicStorage();
     storage.~TrailingOperandStorage();
-    free(&storage);
+    // Workaround false positive in -Wfree-nonheap-object
+    auto *mem = &storage;
+    free(mem);
   } else {
     getInlineStorage().~TrailingOperandStorage();
   }
@@ -371,12 +373,14 @@ MutableArrayRef<OpOperand> detail::OperandStorage::resize(Operation *owner,
     new (&newOperands[numOperands]) OpOperand(owner);
 
   // If the current storage is also dynamic, free it.
-  if (isDynamicStorage())
-    free(&storage);
+  if (isDynamicStorage()) {
+    // Workaround false positive in -Wfree-nonheap-object
+    auto *mem = &storage;
+    free(mem);
+  }
 
   // Update the storage representation to use the new dynamic storage.
-  representation = reinterpret_cast<intptr_t>(newStorage);
-  representation |= DynamicStorageBit;
+  dynamicStorage.setPointerAndInt(newStorage, true);
   return newOperands;
 }
 

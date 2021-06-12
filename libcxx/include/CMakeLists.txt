@@ -7,27 +7,61 @@ set(files
   __config
   __debug
   __errc
+  __format/format_error.h
+  __format/format_parse_context.h
+  __function_like.h
   __functional_03
   __functional_base
   __functional_base_03
   __hash_table
+  __iterator/advance.h
+  __iterator/concepts.h
+  __iterator/default_sentinel.h
+  __iterator/incrementable_traits.h
+  __iterator/iter_move.h
+  __iterator/iterator_traits.h
+  __iterator/next.h
+  __iterator/prev.h
+  __iterator/projected.h
+  __iterator/readable_traits.h
   __libcpp_version
   __locale
+  __memory/addressof.h
+  __memory/allocation_guard.h
+  __memory/allocator.h
   __memory/allocator_traits.h
-  __memory/base.h
+  __memory/auto_ptr.h
+  __memory/compressed_pair.h
+  __memory/construct_at.h
+  __memory/pointer_safety.h
   __memory/pointer_traits.h
-  __memory/utilities.h
+  __memory/raw_storage_iterator.h
+  __memory/shared_ptr.h
+  __memory/temporary_buffer.h
+  __memory/uninitialized_algorithms.h
+  __memory/unique_ptr.h
   __mutex_base
   __node_handle
   __nullptr
+  __ranges/access.h
+  __ranges/concepts.h
+  __ranges/data.h
+  __ranges/empty.h
+  __ranges/empty_view.h
+  __ranges/enable_borrowed_range.h
+  __ranges/enable_view.h
+  __ranges/view_interface.h
+  __ranges/ref_view.h
+  __ranges/size.h
+  __ranges/subrange.h
   __split_buffer
-  __sso_allocator
   __std_stream
   __string
   __threading_support
   __tree
   __tuple
   __undef_macros
+  __utility/to_underlying.h
   algorithm
   any
   array
@@ -131,7 +165,9 @@ set(files
   ostream
   queue
   random
+  ranges
   ratio
+  ranges
   regex
   scoped_allocator
   semaphore
@@ -191,9 +227,9 @@ set(files
   wctype.h
   )
 
-configure_file("__config_site.in" "${LIBCXX_GENERATED_INCLUDE_DIR}/__config_site" @ONLY)
+configure_file("__config_site.in" "${LIBCXX_GENERATED_INCLUDE_TARGET_DIR}/__config_site" @ONLY)
 
-set(_all_includes "${LIBCXX_GENERATED_INCLUDE_DIR}/__config_site")
+set(_all_includes "${LIBCXX_GENERATED_INCLUDE_TARGET_DIR}/__config_site")
 foreach(f ${files})
   set(src "${CMAKE_CURRENT_SOURCE_DIR}/${f}")
   set(dst "${LIBCXX_GENERATED_INCLUDE_DIR}/${f}")
@@ -204,30 +240,32 @@ foreach(f ${files})
   list(APPEND _all_includes "${dst}")
 endforeach()
 
-add_custom_target(generate-cxx-headers DEPENDS ${_all_includes})
+add_custom_target(generate-cxx-headers ALL DEPENDS ${_all_includes})
 
 add_library(cxx-headers INTERFACE)
 add_dependencies(cxx-headers generate-cxx-headers ${LIBCXX_CXX_ABI_HEADER_TARGET})
 # TODO: Use target_include_directories once we figure out why that breaks the runtimes build
 if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC" OR "${CMAKE_CXX_SIMULATE_ID}" STREQUAL "MSVC")
-  target_compile_options(cxx-headers INTERFACE /I "${LIBCXX_GENERATED_INCLUDE_DIR}")
+  target_compile_options(cxx-headers INTERFACE /I${LIBCXX_GENERATED_INCLUDE_DIR}
+                                     INTERFACE /I${LIBCXX_GENERATED_INCLUDE_TARGET_DIR})
 else()
-  target_compile_options(cxx-headers INTERFACE -I "${LIBCXX_GENERATED_INCLUDE_DIR}")
+  target_compile_options(cxx-headers INTERFACE -I${LIBCXX_GENERATED_INCLUDE_DIR}
+                                     INTERFACE -I${LIBCXX_GENERATED_INCLUDE_TARGET_DIR})
 endif()
 
 if (LIBCXX_INSTALL_HEADERS)
   foreach(file ${files})
     get_filename_component(dir ${file} DIRECTORY)
     install(FILES ${file}
-      DESTINATION include/c++/v1/${dir}
+      DESTINATION ${LIBCXX_INSTALL_INCLUDE_DIR}/${dir}
       COMPONENT cxx-headers
       PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ
     )
   endforeach()
 
   # Install the generated __config_site.
-  install(FILES ${LIBCXX_GENERATED_INCLUDE_DIR}/__config_site
-    DESTINATION include/c++/v1
+  install(FILES ${LIBCXX_GENERATED_INCLUDE_TARGET_DIR}/__config_site
+    DESTINATION ${LIBCXX_INSTALL_INCLUDE_TARGET_DIR}
     PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ
     COMPONENT cxx-headers)
 

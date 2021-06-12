@@ -195,7 +195,8 @@ AMDGPUSubtarget::AMDGPUSubtarget(const Triple &TT) :
   { }
 
 GCNSubtarget::GCNSubtarget(const Triple &TT, StringRef GPU, StringRef FS,
-                           const GCNTargetMachine &TM) :
+                           const GCNTargetMachine &TM)
+    : // clang-format off
     AMDGPUGenSubtargetInfo(TT, GPU, /*TuneCPU*/ GPU, FS),
     AMDGPUSubtarget(TT),
     TargetTriple(TT),
@@ -238,6 +239,8 @@ GCNSubtarget::GCNSubtarget(const Triple &TT, StringRef GPU, StringRef FS,
     GFX10_3Insts(false),
     GFX7GFX8GFX9Insts(false),
     SGPRInitBug(false),
+    NegativeScratchOffsetBug(false),
+    NegativeUnalignedScratchOffsetBug(false),
     HasSMemRealTime(false),
     HasIntClamp(false),
     HasFmaMixInsts(false),
@@ -259,6 +262,7 @@ GCNSubtarget::GCNSubtarget(const Triple &TT, StringRef GPU, StringRef FS,
     HasGFX10A16(false),
     HasG16(false),
     HasNSAEncoding(false),
+    GFX10_AEncoding(false),
     GFX10_BEncoding(false),
     HasDLInsts(false),
     HasDot1Insts(false),
@@ -286,6 +290,7 @@ GCNSubtarget::GCNSubtarget(const Triple &TT, StringRef GPU, StringRef FS,
     FlatGlobalInsts(false),
     FlatScratchInsts(false),
     ScalarFlatScratchInsts(false),
+    HasArchitectedFlatScratch(false),
     AddNoCarryInsts(false),
     HasUnpackedD16VMem(false),
     LDSMisalignedBug(false),
@@ -303,6 +308,7 @@ GCNSubtarget::GCNSubtarget(const Triple &TT, StringRef GPU, StringRef FS,
     HasVcmpxExecWARHazard(false),
     HasLdsBranchVmemWARHazard(false),
     HasNSAtoVMEMBug(false),
+    HasNSAClauseBug(false),
     HasOffset3fBug(false),
     HasFlatSegmentOffsetBug(false),
     HasImageStoreD16Bug(false),
@@ -312,6 +318,7 @@ GCNSubtarget::GCNSubtarget(const Triple &TT, StringRef GPU, StringRef FS,
     InstrInfo(initializeSubtargetDependencies(TT, GPU, FS)),
     TLInfo(TM, *this),
     FrameLowering(TargetFrameLowering::StackGrowsUp, getStackAlignment(), 0) {
+  // clang-format on
   MaxWavesPerEU = AMDGPU::IsaInfo::getMaxWavesPerEU(this);
   CallLoweringInfo.reset(new AMDGPUCallLowering(*getTargetLowering()));
   InlineAsmLoweringInfo.reset(new InlineAsmLowering(getTargetLowering()));
@@ -322,7 +329,8 @@ GCNSubtarget::GCNSubtarget(const Triple &TT, StringRef GPU, StringRef FS,
 }
 
 bool GCNSubtarget::enableFlatScratch() const {
-  return EnableFlatScratch && hasFlatScratchInsts();
+  return flatScratchIsArchitected() ||
+         (EnableFlatScratch && hasFlatScratchInsts());
 }
 
 unsigned GCNSubtarget::getConstantBusLimit(unsigned Opcode) const {

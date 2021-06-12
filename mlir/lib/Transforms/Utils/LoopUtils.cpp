@@ -38,7 +38,6 @@
 #define DEBUG_TYPE "LoopUtils"
 
 using namespace mlir;
-using llvm::SetVector;
 using llvm::SmallMapVector;
 
 namespace {
@@ -1268,8 +1267,9 @@ LogicalResult mlir::loopUnrollByFactor(scf::ForOp forOp,
 
   // Create epilogue clean up loop starting at 'upperBoundUnrolled'.
   if (generateEpilogueLoop) {
-    OpBuilder epilogueBuilder(forOp->getBlock(),
-                              std::next(Block::iterator(forOp)));
+    OpBuilder epilogueBuilder(forOp->getContext());
+    epilogueBuilder.setInsertionPoint(forOp->getBlock(),
+                                      std::next(Block::iterator(forOp)));
     auto epilogueForOp = cast<scf::ForOp>(epilogueBuilder.clone(*forOp));
     epilogueForOp.setLowerBound(upperBoundUnrolled);
 
@@ -3436,7 +3436,7 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
         getVectorizedType(loadOp.getMemRefType().getElementType(), vectorWidth),
         loadOp.getResult());
     SmallPtrSet<Operation *, 1> exceptions = {splat};
-    replaceAllUsesExcept(loadOp, splat, exceptions);
+    loadOp.getResult().replaceAllUsesExcept(splat, exceptions);
   }
 
   // Vectorize store ops with the loop being vectorized indexing the fastest

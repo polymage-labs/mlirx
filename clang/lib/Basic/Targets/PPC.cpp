@@ -56,7 +56,10 @@ bool PPCTargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
       HasP10Vector = true;
     } else if (Feature == "+pcrelative-memops") {
       HasPCRelativeMemops = true;
+    } else if (Feature == "+prefix-instrs") {
+      HasPrefixInstrs = true;
     } else if (Feature == "+spe" || Feature == "+efpu2") {
+      HasStrictFP = false;
       HasSPE = true;
       LongDoubleWidth = LongDoubleAlign = 64;
       LongDoubleFormat = &llvm::APFloat::IEEEdouble();
@@ -82,6 +85,9 @@ bool PPCTargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
 /// #defines that are not tied to a specific subtarget.
 void PPCTargetInfo::getTargetDefines(const LangOptions &Opts,
                                      MacroBuilder &Builder) const {
+
+  defineXLCompatMacros(Builder);
+
   // Target identification.
   Builder.defineMacro("__ppc__");
   Builder.defineMacro("__PPC__");
@@ -394,6 +400,7 @@ void PPCTargetInfo::addP10SpecificFeatures(
   Features["mma"] = true;
   Features["power10-vector"] = true;
   Features["pcrelative-memops"] = true;
+  Features["prefix-instrs"] = true;
   return;
 }
 
@@ -419,6 +426,7 @@ bool PPCTargetInfo::hasFeature(StringRef Feature) const {
       .Case("paired-vector-memops", PairedVectorMemops)
       .Case("power10-vector", HasP10Vector)
       .Case("pcrelative-memops", HasPCRelativeMemops)
+      .Case("prefix-instrs", HasPrefixInstrs)
       .Case("spe", HasSPE)
       .Case("mma", HasMMA)
       .Case("rop-protect", HasROPProtect)
@@ -451,6 +459,8 @@ void PPCTargetInfo::setFeatureEnabled(llvm::StringMap<bool> &Features,
       Features["power8-vector"] = Features["power9-vector"] = true;
     if (Name == "pcrel")
       Features["pcrelative-memops"] = true;
+    else if (Name == "prefixed")
+      Features["prefix-instrs"] = true;
     else
       Features[Name] = true;
   } else {
@@ -471,6 +481,8 @@ void PPCTargetInfo::setFeatureEnabled(llvm::StringMap<bool> &Features,
           Features["power10-vector"] = false;
     if (Name == "pcrel")
       Features["pcrelative-memops"] = false;
+    else if (Name == "prefixed")
+      Features["prefix-instrs"] = false;
     else
       Features[Name] = false;
   }
@@ -553,17 +565,17 @@ ArrayRef<TargetInfo::AddlRegName> PPCTargetInfo::getGCCAddlRegNames() const {
 }
 
 static constexpr llvm::StringLiteral ValidCPUNames[] = {
-    {"generic"}, {"440"},     {"450"},       {"601"},     {"602"},
-    {"603"},     {"603e"},    {"603ev"},     {"604"},     {"604e"},
-    {"620"},     {"630"},     {"g3"},        {"7400"},    {"g4"},
-    {"7450"},    {"g4+"},     {"750"},       {"8548"},    {"970"},
-    {"g5"},      {"a2"},      {"e500"},      {"e500mc"},  {"e5500"},
-    {"power3"},  {"pwr3"},    {"power4"},    {"pwr4"},    {"power5"},
-    {"pwr5"},    {"power5x"}, {"pwr5x"},     {"power6"},  {"pwr6"},
-    {"power6x"}, {"pwr6x"},   {"power7"},    {"pwr7"},    {"power8"},
-    {"pwr8"},    {"power9"},  {"pwr9"},      {"power10"}, {"pwr10"},
-    {"powerpc"}, {"ppc"},     {"powerpc64"}, {"ppc64"},   {"powerpc64le"},
-    {"ppc64le"}, {"future"}};
+    {"generic"},     {"440"},     {"450"},    {"601"},       {"602"},
+    {"603"},         {"603e"},    {"603ev"},  {"604"},       {"604e"},
+    {"620"},         {"630"},     {"g3"},     {"7400"},      {"g4"},
+    {"7450"},        {"g4+"},     {"750"},    {"8548"},      {"970"},
+    {"g5"},          {"a2"},      {"e500"},   {"e500mc"},    {"e5500"},
+    {"power3"},      {"pwr3"},    {"power4"}, {"pwr4"},      {"power5"},
+    {"pwr5"},        {"power5x"}, {"pwr5x"},  {"power6"},    {"pwr6"},
+    {"power6x"},     {"pwr6x"},   {"power7"}, {"pwr7"},      {"power8"},
+    {"pwr8"},        {"power9"},  {"pwr9"},   {"power10"},   {"pwr10"},
+    {"powerpc"},     {"ppc"},     {"ppc32"},  {"powerpc64"}, {"ppc64"},
+    {"powerpc64le"}, {"ppc64le"}, {"future"}};
 
 bool PPCTargetInfo::isValidCPUName(StringRef Name) const {
   return llvm::find(ValidCPUNames, Name) != std::end(ValidCPUNames);

@@ -152,6 +152,9 @@ public:
 
   void Post(const parser::AccDefaultClause &);
 
+  bool Pre(const parser::AccClause::Attach &);
+  bool Pre(const parser::AccClause::Detach &);
+
   bool Pre(const parser::AccClause::Copy &x) {
     ResolveAccObjectList(x.v, Symbol::Flag::AccCopyIn);
     ResolveAccObjectList(x.v, Symbol::Flag::AccCopyOut);
@@ -222,6 +225,8 @@ private:
       const parser::Name &, const Symbol &, Symbol::Flag);
   void AllowOnlyArrayAndSubArray(const parser::AccObjectList &objectList);
   void DoNotAllowAssumedSizedArray(const parser::AccObjectList &objectList);
+  void EnsureAllocatableOrPointer(
+      const llvm::acc::Clause clause, const parser::AccObjectList &objectList);
 };
 
 // Data-sharing and Data-mapping attributes for data-refs in OpenMP construct
@@ -317,6 +322,12 @@ public:
   void Post(const parser::OpenMPDeclareSimdConstruct &) { PopContext(); }
   bool Pre(const parser::OpenMPThreadprivate &);
   void Post(const parser::OpenMPThreadprivate &) { PopContext(); }
+
+  bool Pre(const parser::OpenMPDeclarativeAllocate &);
+  void Post(const parser::OpenMPDeclarativeAllocate &) { PopContext(); }
+
+  bool Pre(const parser::OpenMPExecutableAllocate &);
+  void Post(const parser::OpenMPExecutableAllocate &);
 
   // 2.15.3 Data-Sharing Attribute Clauses
   void Post(const parser::OmpDefaultClause &);
@@ -479,6 +490,7 @@ private:
       const parser::OpenMPLoopConstruct &);
   void ResolveSeqLoopIndexInParallelOrTaskConstruct(const parser::Name &);
 
+  bool IsNestedInDirective(llvm::omp::Directive directive);
   void ResolveOmpObjectList(const parser::OmpObjectList &, Symbol::Flag);
   void ResolveOmpObject(const parser::OmpObject &, Symbol::Flag);
   Symbol *ResolveOmp(const parser::Name &, Symbol::Flag, Scope &);
@@ -487,6 +499,7 @@ private:
   void ResolveOmpNameList(const std::list<parser::Name> &, Symbol::Flag);
   void ResolveOmpName(const parser::Name &, Symbol::Flag);
   Symbol *ResolveName(const parser::Name *);
+  Symbol *ResolveOmpObjectScope(const parser::Name *);
   Symbol *DeclareOrMarkOtherAccessEntity(const parser::Name &, Symbol::Flag);
   Symbol *DeclareOrMarkOtherAccessEntity(Symbol &, Symbol::Flag);
   void CheckMultipleAppearances(
@@ -839,6 +852,45 @@ void AccAttributeVisitor::PrivatizeAssociatedLoopIndex(
     loop = it != block.end() ? GetDoConstructIf(*it) : nullptr;
   }
   CHECK(level == 0);
+}
+
+void AccAttributeVisitor::EnsureAllocatableOrPointer(
+    const llvm::acc::Clause clause, const parser::AccObjectList &objectList) {
+  for (const auto &accObject : objectList.v) {
+    std::visit(
+        common::visitors{
+            [&](const parser::Designator &designator) {
+              const auto &lastName{GetLastName(designator)};
+              if (!IsAllocatableOrPointer(*lastName.symbol))
+                context_.Say(designator.source,
+                    "Argument `%s` on the %s clause must be a variable or "
+                    "array with the POINTER or ALLOCATABLE attribute"_err_en_US,
+                    lastName.symbol->name(),
+                    parser::ToUpperCaseLetters(
+                        llvm::acc::getOpenACCClauseName(clause).str()));
+            },
+            [&](const auto &name) {
+              context_.Say(name.source,
+                  "Argument on the %s clause must be a variable or "
+                  "array with the POINTER or ALLOCATABLE attribute"_err_en_US,
+                  parser::ToUpperCaseLetters(
+                      llvm::acc::getOpenACCClauseName(clause).str()));
+            },
+        },
+        accObject.u);
+  }
+}
+
+bool AccAttributeVisitor::Pre(const parser::AccClause::Attach &x) {
+  // Restriction - line 1708-1709
+  EnsureAllocatableOrPointer(llvm::acc::Clause::ACCC_attach, x.v);
+  return true;
+}
+
+bool AccAttributeVisitor::Pre(const parser::AccClause::Detach &x) {
+  // Restriction - line 1715-1717
+  EnsureAllocatableOrPointer(llvm::acc::Clause::ACCC_detach, x.v);
+  return true;
 }
 
 void AccAttributeVisitor::Post(const parser::AccDefaultClause &x) {
@@ -1287,6 +1339,21 @@ bool OmpAttributeVisitor::Pre(const parser::OpenMPThreadprivate &x) {
   return true;
 }
 
+bool OmpAttributeVisitor::Pre(const parser::OpenMPDeclarativeAllocate &x) {
+  PushContext(x.source, llvm::omp::Directive::OMPD_allocate);
+  const auto &list{std::get<parser::OmpObjectList>(x.t)};
+  ResolveOmpObjectList(list, Symbol::Flag::OmpDeclarativeAllocateDirective);
+  return false;
+}
+
+bool OmpAttributeVisitor::Pre(const parser::OpenMPExecutableAllocate &x) {
+  PushContext(x.source, llvm::omp::Directive::OMPD_allocate);
+  const auto &list{std::get<std::optional<parser::OmpObjectList>>(x.t)};
+  if (list)
+    ResolveOmpObjectList(*list, Symbol::Flag::OmpExecutableAllocateDirective);
+  return true;
+}
+
 void OmpAttributeVisitor::Post(const parser::OmpDefaultClause &x) {
   if (!dirContext_.empty()) {
     switch (x.v) {
@@ -1304,6 +1371,36 @@ void OmpAttributeVisitor::Post(const parser::OmpDefaultClause &x) {
       break;
     }
   }
+}
+
+bool OmpAttributeVisitor::IsNestedInDirective(llvm::omp::Directive directive) {
+  if (dirContext_.size() >= 1) {
+    for (std::size_t i = dirContext_.size() - 1; i > 0; --i) {
+      if (dirContext_[i - 1].directive == directive)
+        return true;
+    }
+  }
+  return false;
+}
+
+void OmpAttributeVisitor::Post(const parser::OpenMPExecutableAllocate &x) {
+  bool hasAllocator = false;
+  // TODO: Investigate whether searching the clause list can be done with
+  // parser::Unwrap instead of the following loop
+  const auto &clauseList{std::get<parser::OmpClauseList>(x.t)};
+  for (const auto &clause : clauseList.v) {
+    if (std::get_if<parser::OmpClause::Allocator>(&clause.u))
+      hasAllocator = true;
+  }
+
+  if (IsNestedInDirective(llvm::omp::Directive::OMPD_target) && !hasAllocator)
+    // TODO: expand this check to exclude the case when a requires
+    //       directive with the dynamic_allocators clause is present
+    //       in the same compilation unit (OMP5.0 2.11.3).
+    context_.Say(x.source,
+        "ALLOCATE directives that appear in a TARGET region "
+        "must specify an allocator clause"_err_en_US);
+  PopContext();
 }
 
 // For OpenMP constructs, check all the data-refs within the constructs
@@ -1375,6 +1472,31 @@ Symbol *OmpAttributeVisitor::ResolveOmpCommonBlockName(
   return nullptr;
 }
 
+// Use this function over ResolveOmpName when an omp object's scope needs
+// resolving, it's symbol flag isn't important and a simple check for resolution
+// failure is desired. Using ResolveOmpName means needing to work with the
+// context to check for failure, whereas here a pointer comparison is all that's
+// needed.
+Symbol *OmpAttributeVisitor::ResolveOmpObjectScope(const parser::Name *name) {
+
+  // TODO: Investigate whether the following block can be replaced by, or
+  // included in, the ResolveOmpName function
+  if (auto *prev{name ? GetContext().scope.parent().FindSymbol(name->source)
+                      : nullptr}) {
+    name->symbol = prev;
+    return nullptr;
+  }
+
+  // TODO: Investigate whether the following block can be replaced by, or
+  // included in, the ResolveOmpName function
+  if (auto *ompSymbol{
+          name ? GetContext().scope.FindSymbol(name->source) : nullptr}) {
+    name->symbol = ompSymbol;
+    return ompSymbol;
+  }
+  return nullptr;
+}
+
 void OmpAttributeVisitor::ResolveOmpObjectList(
     const parser::OmpObjectList &ompObjectList, Symbol::Flag ompFlag) {
   for (const auto &ompObject : ompObjectList.v) {
@@ -1403,6 +1525,21 @@ void OmpAttributeVisitor::ResolveOmpObject(
                   if (ompFlag == Symbol::Flag::OmpAllocate) {
                     AddAllocateName(name);
                   }
+                }
+                if (ompFlag == Symbol::Flag::OmpDeclarativeAllocateDirective &&
+                    IsAllocatable(*symbol)) {
+                  context_.Say(designator.source,
+                      "List items specified in the ALLOCATE directive must not "
+                      "have the ALLOCATABLE attribute unless the directive is "
+                      "associated with an ALLOCATE statement"_err_en_US);
+                }
+                if ((ompFlag == Symbol::Flag::OmpDeclarativeAllocateDirective ||
+                        ompFlag ==
+                            Symbol::Flag::OmpExecutableAllocateDirective) &&
+                    ResolveOmpObjectScope(name) == nullptr) {
+                  context_.Say(designator.source, // 2.15.3
+                      "List items must be declared in the same scoping unit "
+                      "in which the ALLOCATE directive appears"_err_en_US);
                 }
               }
             } else {

@@ -254,7 +254,7 @@ func @affine_max(%arg0 : index, %arg1 : index, %arg2 : index) {
 // -----
 
 func @affine_parallel(%arg0 : index, %arg1 : index, %arg2 : index) {
-  // expected-error@+1 {{region argument count and num results of upper bounds, lower bounds, and steps must all match}}
+  // expected-error@+1 {{the number of region arguments (1) and the number of map groups for lower (2) and upper bound (2), and the number of steps (2) must all match}}
   affine.parallel (%i) = (0, 0) to (100, 100) step (10, 10) {
   }
 }
@@ -262,7 +262,7 @@ func @affine_parallel(%arg0 : index, %arg1 : index, %arg2 : index) {
 // -----
 
 func @affine_parallel(%arg0 : index, %arg1 : index, %arg2 : index) {
-  // expected-error@+1 {{region argument count and num results of upper bounds, lower bounds, and steps must all match}}
+  // expected-error@+1 {{the number of region arguments (2) and the number of map groups for lower (1) and upper bound (2), and the number of steps (2) must all match}}
   affine.parallel (%i, %j) = (0) to (100, 100) step (10, 10) {
   }
 }
@@ -270,7 +270,7 @@ func @affine_parallel(%arg0 : index, %arg1 : index, %arg2 : index) {
 // -----
 
 func @affine_parallel(%arg0 : index, %arg1 : index, %arg2 : index) {
-  // expected-error@+1 {{region argument count and num results of upper bounds, lower bounds, and steps must all match}}
+  // expected-error@+1 {{the number of region arguments (2) and the number of map groups for lower (2) and upper bound (1), and the number of steps (2) must all match}}
   affine.parallel (%i, %j) = (0, 0) to (100) step (10, 10) {
   }
 }
@@ -278,7 +278,7 @@ func @affine_parallel(%arg0 : index, %arg1 : index, %arg2 : index) {
 // -----
 
 func @affine_parallel(%arg0 : index, %arg1 : index, %arg2 : index) {
-  // expected-error@+1 {{region argument count and num results of upper bounds, lower bounds, and steps must all match}}
+  // expected-error@+1 {{the number of region arguments (2) and the number of map groups for lower (2) and upper bound (2), and the number of steps (1) must all match}}
   affine.parallel (%i, %j) = (0, 0) to (100, 100) step (10) {
   }
 }

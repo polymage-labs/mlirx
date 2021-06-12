@@ -93,6 +93,7 @@ public:
   explicit DescriptorAddendum(
       const typeInfo::DerivedType *dt = nullptr, std::uint64_t flags = 0)
       : derivedType_{dt}, flags_{flags} {}
+  DescriptorAddendum &operator=(const DescriptorAddendum &);
 
   const typeInfo::DerivedType *derivedType() const { return derivedType_; }
   DescriptorAddendum &set_derivedType(const typeInfo::DerivedType *dt) {
@@ -245,10 +246,18 @@ public:
     return nullptr;
   }
 
-  void GetLowerBounds(SubscriptValue subscript[]) const {
+  int GetLowerBounds(SubscriptValue subscript[]) const {
     for (int j{0}; j < raw_.rank; ++j) {
       subscript[j] = GetDimension(j).LowerBound();
     }
+    return raw_.rank;
+  }
+
+  int GetShape(SubscriptValue subscript[]) const {
+    for (int j{0}; j < raw_.rank; ++j) {
+      subscript[j] = GetDimension(j).Extent();
+    }
+    return raw_.rank;
   }
 
   // When the passed subscript vector contains the last (or first)
@@ -313,9 +322,13 @@ public:
     return true;
   }
 
-  void Check() const;
+  // Establishes a pointer to a section or element.
+  bool EstablishPointerSection(const Descriptor &source,
+      const SubscriptValue *lower = nullptr,
+      const SubscriptValue *upper = nullptr,
+      const SubscriptValue *stride = nullptr);
 
-  // TODO: creation of array sections
+  void Check() const;
 
   void Dump(FILE * = stdout) const;
 

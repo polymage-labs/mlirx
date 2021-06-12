@@ -383,8 +383,10 @@ private:
 
   /// maps assembly-time variable names to variables.
   struct Variable {
+    enum RedefinableKind { NOT_REDEFINABLE, WARN_ON_REDEFINITION, REDEFINABLE };
+
     StringRef Name;
-    bool Redefinable = true;
+    RedefinableKind Redefinable = REDEFINABLE;
     bool IsText = false;
     int64_t NumericValue = 0;
     std::string TextValue;
@@ -540,6 +542,8 @@ public:
   /// }
 
 private:
+  const AsmToken peekTok(bool ShouldSkipSpace = true);
+
   bool parseStatement(ParseStatementInfo &Info,
                       MCAsmParserSemaCallback *SI);
   bool parseCurlyBlockScope(SmallVectorImpl<AsmRewrite>& AsmStrRewrites);
@@ -865,7 +869,7 @@ private:
 
   // "=", "equ", "textequ"
   bool parseDirectiveEquate(StringRef IDVal, StringRef Name,
-                            DirectiveKind DirKind);
+                            DirectiveKind DirKind, SMLoc NameLoc);
 
   bool parseDirectiveOrg(); // ".org"
   bool parseDirectiveAlign();  // "align"
@@ -1029,8 +1033,8 @@ MasmParser::MasmParser(SourceMgr &SM, MCContext &Ctx, MCStreamer &Out,
   EndStatementAtEOFStack.push_back(true);
 
   // Initialize the platform / file format parser.
-  switch (Ctx.getObjectFileInfo()->getObjectFileType()) {
-  case MCObjectFileInfo::IsCOFF:
+  switch (Ctx.getObjectFileType()) {
+  case MCContext::IsCOFF:
     PlatformParser.reset(createCOFFMasmParser());
     break;
   default:
@@ -1120,8 +1124,22 @@ const AsmToken &MasmParser::Lex() {
   }
 
   const AsmToken *tok = &Lexer.Lex();
+  bool StartOfStatement = Lexer.isAtStartOfStatement();
 
   while (tok->is(AsmToken::Identifier)) {
+    if (StartOfStatement) {
+      AsmToken NextTok;
+
+      MutableArrayRef<AsmToken> Buf(NextTok);
+      size_t ReadCount = Lexer.peekTokens(Buf);
+      if (ReadCount && NextTok.is(AsmToken::Identifier) &&
+          (NextTok.getString().equals_lower("equ") ||
+           NextTok.getString().equals_lower("textequ"))) {
+        // This looks like an EQU or TEXTEQU directive; don't expand the
+        // identifier, allowing for redefinitions.
+        break;
+      }
+    }
     auto it = Variables.find(tok->getIdentifier().lower());
     const llvm::MCAsmMacro *M =
         getContext().lookupMacro(tok->getIdentifier().lower());
@@ -1138,7 +1156,7 @@ const AsmToken &MasmParser::Lex() {
                       /*EndStatementAtEOF=*/false);
       EndStatementAtEOFStack.push_back(false);
       tok = &Lexer.Lex();
-    } else if (M && M->IsFunction && Lexer.peekTok().is(AsmToken::LParen)) {
+    } else if (M && M->IsFunction && peekTok().is(AsmToken::LParen)) {
       // This is a macro function invocation; expand it in place.
       const AsmToken MacroTok = *tok;
       tok = &Lexer.Lex();
@@ -1161,7 +1179,7 @@ const AsmToken &MasmParser::Lex() {
 
   // Recognize and bypass line continuations.
   while (tok->is(AsmToken::BackSlash) &&
-         Lexer.peekTok().is(AsmToken::EndOfStatement)) {
+         peekTok().is(AsmToken::EndOfStatement)) {
     // Eat both the backslash and the end of statement.
     Lexer.Lex();
     tok = &Lexer.Lex();
@@ -1181,6 +1199,29 @@ const AsmToken &MasmParser::Lex() {
   }
 
   return *tok;
+}
+
+const AsmToken MasmParser::peekTok(bool ShouldSkipSpace) {
+  AsmToken Tok;
+
+  MutableArrayRef<AsmToken> Buf(Tok);
+  size_t ReadCount = Lexer.peekTokens(Buf, ShouldSkipSpace);
+
+  if (ReadCount == 0) {
+    // If this is the end of an included file, pop the parent file off the
+    // include stack.
+    SMLoc ParentIncludeLoc = SrcMgr.getParentIncludeLoc(CurBuffer);
+    if (ParentIncludeLoc != SMLoc()) {
+      EndStatementAtEOFStack.pop_back();
+      jumpToLoc(ParentIncludeLoc, 0, EndStatementAtEOFStack.back());
+      return peekTok(ShouldSkipSpace);
+    }
+    EndStatementAtEOFStack.pop_back();
+    assert(EndStatementAtEOFStack.empty());
+  }
+
+  assert(ReadCount == 1);
+  return Tok;
 }
 
 bool MasmParser::enabledGenDwarfForAssembly() {
@@ -1547,8 +1588,14 @@ bool MasmParser::parsePrimaryExpr(const MCExpr *&Res, SMLoc &EndLoc,
     }
 
     MCSymbol *Sym = getContext().getInlineAsmLabel(SymbolName);
-    if (!Sym)
+    if (!Sym) {
+      // Variables use case-insensitive symbol names; if this is a variable, we
+      // find the symbol using its canonical name.
+      auto VarIt = Variables.find(SymbolName.lower());
+      if (VarIt != Variables.end())
+        SymbolName = VarIt->second.Name;
       Sym = getContext().getOrCreateSymbol(SymbolName);
+    }
 
     // If this is an absolute variable reference, substitute it now to preserve
     // semantics in the face of reassignment.
@@ -2434,6 +2481,8 @@ bool MasmParser::parseStatement(ParseStatementInfo &Info,
   const StringRef nextVal = nextTok.getString();
   const SMLoc nextLoc = nextTok.getLoc();
 
+  const AsmToken afterNextTok = peekTok();
+
   // There are several entities interested in parsing infix directives:
   //
   // 1. Asm parser extensions. For example, platform-specific parsers
@@ -2475,27 +2524,57 @@ bool MasmParser::parseStatement(ParseStatementInfo &Info,
   case DK_EQU:
   case DK_TEXTEQU:
     Lex();
-    return parseDirectiveEquate(nextVal, IDVal, DirKind);
+    return parseDirectiveEquate(nextVal, IDVal, DirKind, IDLoc);
   case DK_BYTE:
+    if (afterNextTok.is(AsmToken::Identifier) &&
+        afterNextTok.getString().equals_lower("ptr")) {
+      // Size directive; part of an instruction.
+      break;
+    }
+    LLVM_FALLTHROUGH;
   case DK_SBYTE:
   case DK_DB:
     Lex();
     return parseDirectiveNamedValue(nextVal, 1, IDVal, IDLoc);
   case DK_WORD:
+    if (afterNextTok.is(AsmToken::Identifier) &&
+        afterNextTok.getString().equals_lower("ptr")) {
+      // Size directive; part of an instruction.
+      break;
+    }
+    LLVM_FALLTHROUGH;
   case DK_SWORD:
   case DK_DW:
     Lex();
     return parseDirectiveNamedValue(nextVal, 2, IDVal, IDLoc);
   case DK_DWORD:
+    if (afterNextTok.is(AsmToken::Identifier) &&
+        afterNextTok.getString().equals_lower("ptr")) {
+      // Size directive; part of an instruction.
+      break;
+    }
+    LLVM_FALLTHROUGH;
   case DK_SDWORD:
   case DK_DD:
     Lex();
     return parseDirectiveNamedValue(nextVal, 4, IDVal, IDLoc);
   case DK_FWORD:
+    if (afterNextTok.is(AsmToken::Identifier) &&
+        afterNextTok.getString().equals_lower("ptr")) {
+      // Size directive; part of an instruction.
+      break;
+    }
+    LLVM_FALLTHROUGH;
   case DK_DF:
     Lex();
     return parseDirectiveNamedValue(nextVal, 6, IDVal, IDLoc);
   case DK_QWORD:
+    if (afterNextTok.is(AsmToken::Identifier) &&
+        afterNextTok.getString().equals_lower("ptr")) {
+      // Size directive; part of an instruction.
+      break;
+    }
+    LLVM_FALLTHROUGH;
   case DK_SQWORD:
   case DK_DQ:
     Lex();
@@ -3001,7 +3080,7 @@ bool MasmParser::parseMacroArguments(const MCAsmMacro *M,
     SMLoc IDLoc = Lexer.getLoc();
     MCAsmMacroParameter FA;
 
-    if (Lexer.is(AsmToken::Identifier) && Lexer.peekTok().is(AsmToken::Equal)) {
+    if (Lexer.is(AsmToken::Identifier) && peekTok().is(AsmToken::Equal)) {
       if (parseIdentifier(FA.Name))
         return Error(IDLoc, "invalid argument identifier for formal argument");
 
@@ -3232,14 +3311,13 @@ bool MasmParser::parseIdentifier(StringRef &Res) {
 
     // Consume the prefix character, and check for a following identifier.
 
-    AsmToken Buf[1];
-    Lexer.peekTokens(Buf, false);
+    AsmToken nextTok = peekTok(false);
 
-    if (Buf[0].isNot(AsmToken::Identifier))
+    if (nextTok.isNot(AsmToken::Identifier))
       return true;
 
     // We have a '$' or '@' followed by an identifier, make sure they are adjacent.
-    if (PrefixLoc.getPointer() + 1 != Buf[0].getLoc().getPointer())
+    if (PrefixLoc.getPointer() + 1 != nextTok.getLoc().getPointer())
       return true;
 
     // eat $ or @
@@ -3265,33 +3343,49 @@ bool MasmParser::parseIdentifier(StringRef &Res) {
 ///  ::= name "=" expression
 ///    | name "equ" expression    (not redefinable)
 ///    | name "equ" text-list
-///    | name "textequ" text-list
+///    | name "textequ" text-list (redefinability unspecified)
 bool MasmParser::parseDirectiveEquate(StringRef IDVal, StringRef Name,
-                                      DirectiveKind DirKind) {
-  Variable &Var = Variables[Name];
+                                      DirectiveKind DirKind, SMLoc NameLoc) {
+  Variable &Var = Variables[Name.lower()];
   if (Var.Name.empty()) {
     Var.Name = Name;
-  } else if (!Var.Redefinable) {
-    return TokError("invalid variable redefinition");
   }
-  Var.Redefinable = (DirKind != DK_EQU);
 
+  SMLoc StartLoc = Lexer.getLoc();
   if (DirKind == DK_EQU || DirKind == DK_TEXTEQU) {
     // "equ" and "textequ" both allow text expressions.
     std::string Value;
-    if (!parseTextItem(Value)) {
-      Var.IsText = true;
-      Var.TextValue = Value;
+    std::string TextItem;
+    if (!parseTextItem(TextItem)) {
+      Value += TextItem;
 
       // Accept a text-list, not just one text-item.
       auto parseItem = [&]() -> bool {
-        if (parseTextItem(Value))
+        if (parseTextItem(TextItem))
           return TokError("expected text item");
-        Var.TextValue += Value;
+        Value += TextItem;
         return false;
       };
       if (parseOptionalToken(AsmToken::Comma) && parseMany(parseItem))
         return addErrorSuffix(" in '" + Twine(IDVal) + "' directive");
+
+      if (!Var.IsText || Var.TextValue != Value) {
+        switch (Var.Redefinable) {
+        case Variable::NOT_REDEFINABLE:
+          return Error(getTok().getLoc(), "invalid variable redefinition");
+        case Variable::WARN_ON_REDEFINITION:
+          if (Warning(NameLoc, "redefining '" + Name +
+                                   "', already defined on the command line")) {
+            return true;
+          }
+          break;
+        default:
+          break;
+        }
+      }
+      Var.IsText = true;
+      Var.TextValue = Value;
+      Var.Redefinable = Variable::REDEFINABLE;
 
       return false;
     }
@@ -3301,22 +3395,56 @@ bool MasmParser::parseDirectiveEquate(StringRef IDVal, StringRef Name,
 
   // Parse as expression assignment.
   const MCExpr *Expr;
-  SMLoc EndLoc, StartLoc = Lexer.getLoc();
+  SMLoc EndLoc;
   if (parseExpression(Expr, EndLoc))
     return addErrorSuffix(" in '" + Twine(IDVal) + "' directive");
+
+  int64_t Value;
+  if (!Expr->evaluateAsAbsolute(Value, getStreamer().getAssemblerPtr())) {
+    // Not an absolute expression; define as a text replacement.
+    StringRef ExprAsString = StringRef(
+        StartLoc.getPointer(), EndLoc.getPointer() - StartLoc.getPointer());
+    if (!Var.IsText || Var.TextValue != ExprAsString) {
+      switch (Var.Redefinable) {
+      case Variable::NOT_REDEFINABLE:
+        return Error(getTok().getLoc(), "invalid variable redefinition");
+      case Variable::WARN_ON_REDEFINITION:
+        if (Warning(NameLoc, "redefining '" + Name +
+                                 "', already defined on the command line")) {
+          return true;
+        }
+        break;
+      default:
+        break;
+      }
+    }
+    Var.IsText = true;
+    Var.TextValue = ExprAsString.str();
+  } else {
+    if (Var.IsText || Var.NumericValue != Value) {
+      switch (Var.Redefinable) {
+      case Variable::NOT_REDEFINABLE:
+        return Error(getTok().getLoc(), "invalid variable redefinition");
+      case Variable::WARN_ON_REDEFINITION:
+        if (Warning(NameLoc, "redefining '" + Name +
+                                 "', already defined on the command line")) {
+          return true;
+        }
+        break;
+      default:
+        break;
+      }
+    }
+    Var.NumericValue = Value;
+  }
+  Var.Redefinable = (DirKind == DK_ASSIGN) ? Variable::REDEFINABLE
+                                           : Variable::NOT_REDEFINABLE;
+
   MCSymbol *Sym = getContext().getOrCreateSymbol(Var.Name);
-  Sym->setRedefinable(Var.Redefinable);
+  Sym->setRedefinable(Var.Redefinable != Variable::NOT_REDEFINABLE);
   Sym->setVariableValue(Expr);
   Sym->setExternal(false);
 
-  if (Expr->evaluateAsAbsolute(Var.NumericValue,
-                               getStreamer().getAssemblerPtr()))
-    return false;
-
-  // Not an absolute expression; define as a text replacement.
-  Var.IsText = true;
-  Var.TextValue = StringRef(StartLoc.getPointer(),
-                            EndLoc.getPointer() - StartLoc.getPointer()).str();
   return false;
 }
 
@@ -3378,21 +3506,30 @@ bool MasmParser::parseTextItem(std::string &Data) {
   case AsmToken::LessGreater:
     return parseAngleBracketString(Data);
   case AsmToken::Identifier: {
+    // This must be a text macro; we need to expand it accordingly.
     StringRef ID;
     if (parseIdentifier(ID))
       return true;
     Data = ID.str();
 
-    auto it = Variables.find(ID);
-    if (it == Variables.end())
+    auto it = Variables.find(ID.lower());
+    if (it == Variables.end()) {
+      // Not a variable; since we haven't used the token, put it back for better
+      // error recovery.
+      getLexer().UnLex(AsmToken(AsmToken::Identifier, ID));
       return true;
+    }
 
     while (it != Variables.end()) {
       const Variable &Var = it->second;
-      if (!Var.IsText)
+      if (!Var.IsText) {
+        // Not a text macro; not usable in TextItem context. Since we haven't
+        // used the token, put it back for better error recovery.
+        getLexer().UnLex(AsmToken(AsmToken::Identifier, ID));
         return true;
+      }
       Data = Var.TextValue;
-      it = Variables.find(Data);
+      it = Variables.find(StringRef(Data).lower());
     }
     return false;
   }
@@ -3659,7 +3796,7 @@ bool MasmParser::parseRealInstList(const fltSemantics &Semantics,
   while (getTok().isNot(EndToken) ||
          (EndToken == AsmToken::Greater &&
           getTok().isNot(AsmToken::GreaterGreater))) {
-    const AsmToken NextTok = Lexer.peekTok();
+    const AsmToken NextTok = peekTok();
     if (NextTok.is(AsmToken::Identifier) &&
         NextTok.getString().equals_lower("dup")) {
       const MCExpr *Value;
@@ -4023,7 +4160,7 @@ bool MasmParser::parseStructInstList(
   while (getTok().isNot(EndToken) ||
          (EndToken == AsmToken::Greater &&
           getTok().isNot(AsmToken::GreaterGreater))) {
-    const AsmToken NextTok = Lexer.peekTok();
+    const AsmToken NextTok = peekTok();
     if (NextTok.is(AsmToken::Identifier) &&
         NextTok.getString().equals_lower("dup")) {
       const MCExpr *Value;
@@ -4457,8 +4594,9 @@ bool MasmParser::parseDirectiveAlign() {
     return addErrorSuffix(" in align directive");
   // Ignore empty 'align' directives.
   if (getTok().is(AsmToken::EndOfStatement)) {
-    Warning(AlignmentLoc, "align directive with no operand is ignored");
-    return parseToken(AsmToken::EndOfStatement);
+    return Warning(AlignmentLoc,
+                   "align directive with no operand is ignored") &&
+           parseToken(AsmToken::EndOfStatement);
   }
   if (parseAbsoluteExpression(Alignment) ||
       parseToken(AsmToken::EndOfStatement))
@@ -5591,8 +5729,7 @@ bool MasmParser::parseDirectiveMacro(StringRef Name, SMLoc NameLoc) {
           --MacroDepth;
         }
       } else if (getTok().getIdentifier().equals_lower("exitm")) {
-        if (MacroDepth == 0 &&
-            getLexer().peekTok().isNot(AsmToken::EndOfStatement)) {
+        if (MacroDepth == 0 && peekTok().isNot(AsmToken::EndOfStatement)) {
           IsMacroFunction = true;
         }
       } else if (isMacroLikeDirective()) {
@@ -5817,9 +5954,9 @@ bool MasmParser::parseDirectiveInclude() {
   std::string Filename;
   SMLoc IncludeLoc = getTok().getLoc();
 
-  if (!parseAngleBracketString(Filename))
+  if (parseAngleBracketString(Filename))
     Filename = parseStringTo(AsmToken::EndOfStatement);
-  if (check(!Filename.empty(), "missing filename in 'include' directive") ||
+  if (check(Filename.empty(), "missing filename in 'include' directive") ||
       check(getTok().isNot(AsmToken::EndOfStatement),
             "unexpected token in 'include' directive") ||
       // Attempt to switch the lexer to the included file before consuming the
@@ -5945,10 +6082,10 @@ bool MasmParser::parseDirectiveIfdef(SMLoc DirectiveLoc, bool expect_defined) {
           parseToken(AsmToken::EndOfStatement, "unexpected token in 'ifdef'"))
         return true;
 
-      if (Variables.find(Name) != Variables.end()) {
+      if (Variables.find(Name.lower()) != Variables.end()) {
         is_defined = true;
       } else {
-        MCSymbol *Sym = getContext().lookupSymbol(Name);
+        MCSymbol *Sym = getContext().lookupSymbol(Name.lower());
         is_defined = (Sym && !Sym->isUndefined(false));
       }
     }
@@ -6067,7 +6204,7 @@ bool MasmParser::parseDirectiveElseIfdef(SMLoc DirectiveLoc,
                      "unexpected token in 'elseifdef'"))
         return true;
 
-      if (Variables.find(Name) != Variables.end()) {
+      if (Variables.find(Name.lower()) != Variables.end()) {
         is_defined = true;
       } else {
         MCSymbol *Sym = getContext().lookupSymbol(Name);
@@ -6237,7 +6374,7 @@ bool MasmParser::parseDirectiveErrorIfdef(SMLoc DirectiveLoc,
     if (check(parseIdentifier(Name), "expected identifier after '.errdef'"))
       return true;
 
-    if (Variables.find(Name) != Variables.end()) {
+    if (Variables.find(Name.lower()) != Variables.end()) {
       IsDefined = true;
     } else {
       MCSymbol *Sym = getContext().lookupSymbol(Name);
@@ -6496,8 +6633,8 @@ bool MasmParser::isMacroLikeDirective() {
     if (IsMacroLike)
       return true;
   }
-  if (getLexer().peekTok().is(AsmToken::Identifier) &&
-      getLexer().peekTok().getIdentifier().equals_lower("macro"))
+  if (peekTok().is(AsmToken::Identifier) &&
+      peekTok().getIdentifier().equals_lower("macro"))
     return true;
 
   return false;
@@ -6910,10 +7047,14 @@ bool MasmParser::defineMacro(StringRef Name, StringRef Value) {
   Variable &Var = Variables[Name.lower()];
   if (Var.Name.empty()) {
     Var.Name = Name;
-  } else if (!Var.Redefinable) {
-    return TokError("invalid variable redefinition");
+  } else if (Var.Redefinable == Variable::NOT_REDEFINABLE) {
+    return Error(SMLoc(), "invalid variable redefinition");
+  } else if (Var.Redefinable == Variable::WARN_ON_REDEFINITION &&
+             Warning(SMLoc(), "redefining '" + Name +
+                                  "', already defined on the command line")) {
+    return true;
   }
-  Var.Redefinable = true;
+  Var.Redefinable = Variable::WARN_ON_REDEFINITION;
   Var.IsText = true;
   Var.TextValue = Value.str();
   return false;

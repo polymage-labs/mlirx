@@ -110,6 +110,28 @@
 // RUN: %clang -### -c -g %s -target powerpc64-ibm-aix-xcoff 2>&1 \
 // RUN:             | FileCheck -check-prefix=G_LIMITED -check-prefix=G_DBX %s
 
+// For DBX, -g defaults to -gstrict-dwarf.
+// RUN: %clang -### -c -g %s -target powerpc-ibm-aix-xcoff 2>&1 \
+// RUN:             | FileCheck -check-prefix=STRICT %s
+// RUN: %clang -### -c -g %s -target powerpc64-ibm-aix-xcoff 2>&1 \
+// RUN:             | FileCheck -check-prefix=STRICT %s
+// RUN: %clang -### -c -g -gno-strict-dwarf %s -target powerpc-ibm-aix-xcoff \
+// RUN:             2>&1 | FileCheck -check-prefix=NOSTRICT %s
+// RUN: %clang -### -c -g %s -target x86_64-linux-gnu 2>&1 \
+// RUN:             | FileCheck -check-prefix=NOSTRICT %s
+// RUN: %clang -### -c -g -ggdb %s -target powerpc-ibm-aix-xcoff 2>&1 \
+// RUN:             | FileCheck -check-prefix=NOSTRICT %s
+
+// On the AIX, -g defaults to -gno-column-info.
+// RUN: %clang -### -c -g %s -target powerpc-ibm-aix-xcoff 2>&1 \
+// RUN:             | FileCheck -check-prefix=NOCI %s
+// RUN: %clang -### -c -g %s -target powerpc64-ibm-aix-xcoff 2>&1 \
+// RUN:             | FileCheck -check-prefix=NOCI %s
+// RUN: %clang -### -c -g %s -target powerpc-ibm-aix-xcoff -gcolumn-info 2>&1 \
+// RUN:             | FileCheck -check-prefix=CI %s
+// RUN: %clang -### -c -g %s -target powerpc64-ibm-aix-xcoff -gcolumn-info \
+// RUN:             2>&1 | FileCheck -check-prefix=CI %s
+
 // RUN: %clang -### -c -gdwarf-2 %s 2>&1 \
 // RUN:             | FileCheck -check-prefix=G_ONLY_DWARF2 %s
 //
@@ -303,6 +325,9 @@
 // G_LLDB: "-debugger-tuning=lldb"
 // G_SCE:  "-debugger-tuning=sce"
 // G_DBX:  "-debugger-tuning=dbx"
+//
+// STRICT:  "-gstrict-dwarf"
+// NOSTRICT-NOT:  "-gstrict-dwarf"
 //
 // G_NOTUNING: "-cc1"
 // G_NOTUNING-NOT: "-debugger-tuning="
