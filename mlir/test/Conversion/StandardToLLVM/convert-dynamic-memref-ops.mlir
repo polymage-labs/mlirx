@@ -383,7 +383,7 @@ func @memref_vector_cast_dynamic(%M : memref<?x?xf32>) -> memref<?x?xvector<16xf
 // CHECK-NEXT:   llvm.insertvalue %[[size2]], %{{.*}}[3, 1] : !llvm.struct<(ptr<vector<16xf32>>, ptr<vector<16xf32>>, i64, array<2 x i64>, array<2 x i64>)>
 // CHECK-NEXT:   llvm.insertvalue %[[st2]], %{{.*}}[4, 1] : !llvm.struct<(ptr<vector<16xf32>>, ptr<vector<16xf32>>, i64, array<2 x i64>, array<2 x i64>)>
 // CHECK-NEXT:   llvm.return %{{.*}} : !llvm.struct<(ptr<vector<16xf32>>, ptr<vector<16xf32>>, i64, array<2 x i64>, array<2 x i64>)>
-  %MV = memref_vector_cast %M : memref<?x?xf32> to memref<?x?xvector<16xf32>>
+  %MV = memref.vector_cast %M : memref<?x?xf32> to memref<?x?xvector<16xf32>>
   return %MV : memref<?x?xvector<16xf32>>
 }
 

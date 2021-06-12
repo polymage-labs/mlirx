@@ -643,10 +643,10 @@ func @memref_cast(%arg0: memref<4xf32>, %arg1 : memref<?xf32>, %arg2 : memref<64
 
 // CHECK-LABEL: func @memref_vector_cast
 func @memref_vector_cast(%arg0: memref<60x8xf32>, %arg1: memref<?x?xf32>) -> memref<60x2xvector<4xf32>> {
-  // CHECK: {{.*}} = memref_vector_cast %arg0 : memref<60x8xf32> to memref<60x2xvector<4xf32>>
-  %0 = memref_vector_cast %arg0 : memref<60x8xf32> to memref<60x2xvector<4xf32>>
-  // CHECK: memref_vector_cast %arg1 : memref<?x?xf32> to memref<?x?xvector<4xf32>>
-  %1 = memref_vector_cast %arg1 : memref<?x?xf32> to memref<?x?xvector<4xf32>>
+  // CHECK: memref.vector_cast %arg{{.*}} : memref<60x8xf32> to memref<60x2xvector<4xf32>>
+  %0 = memref.vector_cast %arg0 : memref<60x8xf32> to memref<60x2xvector<4xf32>>
+  // CHECK: memref.vector_cast %arg{{.*}} : memref<?x?xf32> to memref<?x?xvector<4xf32>>
+  %1 = memref.vector_cast %arg1 : memref<?x?xf32> to memref<?x?xvector<4xf32>>
   return %0 : memref<60x2xvector<4xf32>>
 }
 

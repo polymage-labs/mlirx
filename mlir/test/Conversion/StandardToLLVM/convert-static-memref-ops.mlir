@@ -252,7 +252,7 @@ func @memref_vector_cast(%M : memref<42x16xf32>) -> memref<42x4xvector<4xf32>> {
 // CHECK-NEXT:   llvm.insertvalue %[[size2]], %{{.*}}[3, 1] : !llvm.struct<(ptr<vector<4xf32>>, ptr<vector<4xf32>>, i64, array<2 x i64>, array<2 x i64>)>
 // CHECK-NEXT:   llvm.insertvalue %[[st2]], %{{.*}}[4, 1] : !llvm.struct<(ptr<vector<4xf32>>, ptr<vector<4xf32>>, i64, array<2 x i64>, array<2 x i64>)>
 // CHECK-NEXT:   llvm.return %{{.*}} : !llvm.struct<(ptr<vector<4xf32>>, ptr<vector<4xf32>>, i64, array<2 x i64>, array<2 x i64>)>
-  %MV = memref_vector_cast %M : memref<42x16xf32> to memref<42x4xvector<4xf32>>
+  %MV = memref.vector_cast %M : memref<42x16xf32> to memref<42x4xvector<4xf32>>
   return %MV : memref<42x4xvector<4xf32>>
 }
 

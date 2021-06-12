@@ -36,7 +36,12 @@ createAffineLoopInvariantCodeMotionPass();
 /// of dead stores, and dead allocs.
 std::unique_ptr<OperationPass<FuncOp>> createAffineScalarReplacementPass();
 
-/// Creates a pass to vectorize affine loops (the new one).
+/// Creates a pass to vectorize affine loops. This isn't available upstream.
+/// A memref.vector_cast op is used to create a vector element type version of
+/// the memref involved in the vectorization. If such a memref is a function
+/// argument attribute, its `memref.alignment` argument attribute is checked to
+/// determine if it has the desired alignment; otherwise, vectorization is
+/// not performed.
 std::unique_ptr<OperationPass<FuncOp>> createAffineVectorizePass();
 
 /// Creates a pass to convert all parallel affine.for's into 1-d affine.parallel

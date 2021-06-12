@@ -2618,22 +2618,19 @@ struct MemRefCastOpLowering : public ConvertOpToLLVMPattern<memref::CastOp> {
 };
 
 struct MemRefVectorCastOpLowering
-    : public ConvertOpToLLVMPattern<MemRefVectorCastOp> {
-  using ConvertOpToLLVMPattern<MemRefVectorCastOp>::ConvertOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<memref::VectorCastOp> {
+  using ConvertOpToLLVMPattern<memref::VectorCastOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(MemRefVectorCastOp op, ArrayRef<Value> operands,
+  matchAndRewrite(memref::VectorCastOp op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const override {
-    auto memRefShapeCastOp = cast<MemRefVectorCastOp>(op);
-    MemRefType sourceType =
-        memRefShapeCastOp.getOperand().getType().cast<MemRefType>();
-    MemRefType targetType = memRefShapeCastOp.getType();
+    MemRefType sourceType = op.getOperand().getType().cast<MemRefType>();
+    MemRefType targetType = op.getType();
 
-    MemRefVectorCastOp::Adaptor transformed(operands);
+    memref::VectorCastOp::Adaptor transformed(operands);
     MemRefDescriptor srcMemRefDesc(transformed.source());
 
-    Type targetStructType =
-        typeConverter->convertType(memRefShapeCastOp.getType());
+    Type targetStructType = typeConverter->convertType(op.getType());
     if (!targetStructType)
       return failure();
     Location loc = op->getLoc();

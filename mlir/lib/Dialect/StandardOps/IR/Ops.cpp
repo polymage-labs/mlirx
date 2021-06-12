@@ -1535,68 +1535,6 @@ static LogicalResult verify(ExecuteRegionOp op) {
 }
 
 //===----------------------------------------------------------------------===//
-// MemRefVectorCastOp
-//===----------------------------------------------------------------------===//
-
-bool MemRefVectorCastOp::areCastCompatible(Type a, Type b) {
-  auto aT = a.dyn_cast<MemRefType>();
-  auto bT = b.dyn_cast<MemRefType>();
-
-  if (!aT || !bT)
-    return false;
-
-  if (aT.getAffineMaps() != bT.getAffineMaps())
-    return false;
-
-  if (aT.getMemorySpace() != bT.getMemorySpace())
-    return false;
-
-  // With rank 0, there is no vec cast.
-  if (aT.getRank() == 0)
-    return false;
-
-  if (aT.getRank() != bT.getRank())
-    return false;
-
-  // Should have the same shape up until the last n-1 dimensions.
-  if (!std::equal(aT.getShape().begin(), std::prev(aT.getShape().end()),
-                  bT.getShape().begin()))
-    return false;
-
-  // The source memref can't have a vector elemental type.
-  if (auto shapedEltType = aT.getElementType().dyn_cast<ShapedType>())
-    return false;
-
-  // The destination memref elt type has be a vector type.
-  auto vectorEltTypeB = bT.getElementType().dyn_cast<VectorType>();
-  if (!vectorEltTypeB)
-    return false;
-
-  auto eltA = aT.getElementType();
-  auto eltB = vectorEltTypeB.getElementType();
-  if (eltA != eltB)
-    return false;
-
-  int64_t lastDimA = aT.getShape().back();
-  int64_t lastDimB = bT.getShape().back();
-
-  // If one of them is dynamic but not the other, they are incompatible.
-  if (lastDimA * lastDimB < 0)
-    return false;
-
-  // The last dim of the target should be of the right size.
-  if (lastDimB != MemRefType::kDynamicSize &&
-      lastDimA / vectorEltTypeB.getNumElements() != lastDimB)
-    return false;
-
-  return true;
-}
-
-OpFoldResult MemRefVectorCastOp::fold(ArrayRef<Attribute> operands) {
-  return impl::foldCastOp(*this);
-}
-
-//===----------------------------------------------------------------------===//
 // MulFOp
 //===----------------------------------------------------------------------===//
 

@@ -3235,8 +3235,8 @@ static Value createVectorMemRef(Value scalMemRef, unsigned vectorWidth) {
     allocOp.alignmentAttr(
         b.getI64IntegerAttr(vecMemRefEltType.getSizeInBits() / 8));
 
-  return b.create<MemRefVectorCastOp>(b.getUnknownLoc(), vecMemRefType,
-                                     scalMemRef);
+  return b.create<memref::VectorCastOp>(b.getUnknownLoc(), vecMemRefType,
+                                        scalMemRef);
 }
 
 /// Returns an affine map with the last result of `input' scaled down by

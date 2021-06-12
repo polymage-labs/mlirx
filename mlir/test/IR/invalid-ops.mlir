@@ -1106,7 +1106,7 @@ func @invalid_memref_cast() {
 
 func @invalid_memref_vector_cast_1() {
   %0 = memref.alloc() : memref<2x4xf32>
-  %1 = memref_vector_cast %0 : memref<2x4xf32> to memref<2x2xf64>
+  %1 = memref.vector_cast %0 : memref<2x4xf32> to memref<2x2xf64>
   // expected-error@-1 {{operand type 'memref<2x4xf32>' and result type 'memref<2x2xf64>' are cast incompatible}}
 }
 
@@ -1114,7 +1114,7 @@ func @invalid_memref_vector_cast_1() {
 
 func @invalid_memref_vector_cast_2() {
   %0 = memref.alloc() : memref<2x4xf32>
-  memref_vector_cast %0 : memref<2x4xf32> to memref<2xvector<4xf32>>
+  memref.vector_cast %0 : memref<2x4xf32> to memref<2xvector<4xf32>>
   // expected-error@-1 {{operand type 'memref<2x4xf32>' and result type 'memref<2xvector<4xf32>>' are cast incompatible}}
   return
 }
@@ -1123,7 +1123,7 @@ func @invalid_memref_vector_cast_2() {
 
 func @invalid_memref_vector_cast_3() {
   %0 = memref.alloc() : memref<2x4xf32>
-  memref_vector_cast %0 : memref<2x4xf32> to memref<2x?xvector<4xf32>>
+  memref.vector_cast %0 : memref<2x4xf32> to memref<2x?xvector<4xf32>>
   // expected-error@-1 {{operand type 'memref<2x4xf32>' and result type 'memref<2x?xvector<4xf32>>' are cast incompatible}}
   return
 }
@@ -1132,7 +1132,7 @@ func @invalid_memref_vector_cast_3() {
 
 func @invalid_memref_vector_cast_4() {
   %0 = memref.alloc() : memref<2x4xf32>
-  memref_vector_cast %0 : memref<2x4xf32> to memref<?x1xvector<4xf32>>
+  memref.vector_cast %0 : memref<2x4xf32> to memref<?x1xvector<4xf32>>
   // expected-error@-1 {{operand type 'memref<2x4xf32>' and result type 'memref<?x1xvector<4xf32>>' are cast incompatible}}
   return
 }
@@ -1141,7 +1141,7 @@ func @invalid_memref_vector_cast_4() {
 
 func @invalid_memref_vector_cast_5() {
   %0 = memref.alloc() : memref<2x4xf32>
-  %1 = memref_vector_cast %0 : memref<2x4xf32> to memref<4x2xf32>
+  %1 = memref.vector_cast %0 : memref<2x4xf32> to memref<4x2xf32>
   // expected-error@-1 {{operand type 'memref<2x4xf32>' and result type 'memref<4x2xf32>' are cast incompatible}}
 }
 
@@ -1149,7 +1149,7 @@ func @invalid_memref_vector_cast_5() {
 
 func @invalid_memref_vector_cast_6() {
   %0 = memref.alloc() : memref<2x4xf32>
-  %1 = memref_vector_cast %0 : memref<2x4xf32> to memref<2x4xf32>
+  %1 = memref.vector_cast %0 : memref<2x4xf32> to memref<2x4xf32>
   // expected-error@-1 {{operand type 'memref<2x4xf32>' and result type 'memref<2x4xf32>' are cast incompatible}}
 }
 
