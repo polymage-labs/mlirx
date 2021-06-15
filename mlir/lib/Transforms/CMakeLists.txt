@@ -23,6 +23,7 @@ add_mlir_library(MLIRTransforms
   SymbolDCE.cpp
   ViewOpGraph.cpp
   ViewRegionGraph.cpp
+  MemRefDataFlowOpt.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Transforms
