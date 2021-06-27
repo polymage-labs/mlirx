@@ -1,9 +1,9 @@
 // Driver for sgemm matmul with initialization and GFLOPS reporting.
 func @main() {
-  %A = alloc() : memref<2088x2048xf32>
+  %A = memref.alloc() : memref<2088x2048xf32>
   // Align %B and %C since these are shape cast to vector types.
-  %B = alloc() {alignment = 32} : memref<2048x2048xf32>
-  %C = alloc() {alignment = 32} : memref<2088x2048xf32>
+  %B = memref.alloc() {alignment = 32} : memref<2048x2048xf32>
+  %C = memref.alloc() {alignment = 32} : memref<2088x2048xf32>
 
   %cf1 = constant 1.00000e+00 : f32
 
@@ -18,14 +18,14 @@ func @main() {
     call @matmul_hop(%A, %B, %C) : (memref<2088x2048xf32>, memref<2048x2048xf32>, memref<2088x2048xf32>) -> ()
   }
   %t_end = call @rtclock() : () -> (f64)
-  %pC = memref_cast %C : memref<2088x2048xf32> to memref<*xf32>
+  %pC = memref.cast %C : memref<2088x2048xf32> to memref<*xf32>
   call @print_memref_f32(%pC): (memref<*xf32>) -> ()
 
   %c0 = constant 0 : index
   %c1 = constant 1 : index
-  %M = dim %C, %c0 : memref<2088x2048xf32>
-  %N = dim %C, %c1 : memref<2088x2048xf32>
-  %K = dim %A, %c1 : memref<2088x2048xf32>
+  %M = memref.dim %C, %c0 : memref<2088x2048xf32>
+  %N = memref.dim %C, %c1 : memref<2088x2048xf32>
+  %K = memref.dim %A, %c1 : memref<2088x2048xf32>
 
   %t = subf %t_end, %t_start : f64
   %f1 = muli %M, %N : index
