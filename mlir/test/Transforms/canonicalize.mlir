@@ -550,33 +550,6 @@ func @hoist_constant(%arg0: memref<8xi32>) {
   return
 }
 
-// CHECK-LABEL: func @propagate_into_execute_region
-func @propagate_into_execute_region() {
-  %cond = constant 0 : i1
-  affine.for %i = 0 to 100 {
-    "foo"() : () -> ()
-    %v = execute_region -> i64 {
-      cond_br %cond, ^bb1, ^bb2
-
-    ^bb1:
-      %c1 = constant 1 : i64
-      br ^bb3(%c1 : i64)
-
-    ^bb2:
-      %c2 = constant 2 : i64
-      br ^bb3(%c2 : i64)
-
-    ^bb3(%x : i64):
-      return %x : i64
-    }
-    "bar"(%v) : (i64) -> ()
-    // CHECK:       std.execute_region -> i64 {
-    // CHECK-NEXT:    return %c2_i64 : i64
-    // CHECK-NEXT:  }
-  }
-  return
-}
-
 // CHECK-LABEL: func @const_fold_propagate
 func @const_fold_propagate() -> memref<?x?xf32> {
   %VT_i = constant 512 : index

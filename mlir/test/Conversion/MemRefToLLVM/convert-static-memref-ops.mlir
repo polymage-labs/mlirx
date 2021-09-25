@@ -115,9 +115,9 @@ func @static_dealloc(%static: memref<10x8xf32>) {
 
 // CHECK-LABEL: func @memref_vector_cast
 func @memref_vector_cast(%M : memref<42x16xf32>) -> memref<42x4xvector<4xf32>> {
-// CHECK:        %[[SRC:.*]] = llvm.insertvalue %{{.*}}, %{{.*}}[4, 1]
+// CHECK:        %[[SRC:.*]] = builtin.unrealized_conversion_cast
 // CHECK-NEXT:   llvm.mlir.undef : !llvm.struct<(ptr<vector<4xf32>>, ptr<vector<4xf32>>, i64, array<2 x i64>, array<2 x i64>)>
-// CHECK-NEXT:   llvm.extractvalue %{{.*}}[0] : !llvm.struct<(ptr<f32>, ptr<f32>, i64, array<2 x i64>, array<2 x i64>)>
+// CHECK-NEXT:   llvm.extractvalue %[[SRC]][0] : !llvm.struct<(ptr<f32>, ptr<f32>, i64, array<2 x i64>, array<2 x i64>)>
 // CHECK-NEXT:   llvm.bitcast %{{.*}} : !llvm.ptr<f32> to !llvm.ptr<vector<4xf32>>
 // CHECK-NEXT:   llvm.insertvalue %{{.*}}, %{{.*}}[0] : !llvm.struct<(ptr<vector<4xf32>>, ptr<vector<4xf32>>, i64, array<2 x i64>, array<2 x i64>)>
 // CHECK-NEXT:   llvm.extractvalue %{{.*}}[1] : !llvm.struct<(ptr<f32>, ptr<f32>, i64, array<2 x i64>, array<2 x i64>)>
@@ -134,7 +134,6 @@ func @memref_vector_cast(%M : memref<42x16xf32>) -> memref<42x4xvector<4xf32>> {
 // CHECK-NEXT:   llvm.insertvalue %[[st1]], %{{.*}}[4, 0] : !llvm.struct<(ptr<vector<4xf32>>, ptr<vector<4xf32>>, i64, array<2 x i64>, array<2 x i64>)>
 // CHECK-NEXT:   llvm.insertvalue %[[size2]], %{{.*}}[3, 1] : !llvm.struct<(ptr<vector<4xf32>>, ptr<vector<4xf32>>, i64, array<2 x i64>, array<2 x i64>)>
 // CHECK-NEXT:   llvm.insertvalue %[[st2]], %{{.*}}[4, 1] : !llvm.struct<(ptr<vector<4xf32>>, ptr<vector<4xf32>>, i64, array<2 x i64>, array<2 x i64>)>
-// CHECK-NEXT:   llvm.return %{{.*}} : !llvm.struct<(ptr<vector<4xf32>>, ptr<vector<4xf32>>, i64, array<2 x i64>, array<2 x i64>)>
   %MV = memref.vector_cast %M : memref<42x16xf32> to memref<42x4xvector<4xf32>>
   return %MV : memref<42x4xvector<4xf32>>
 }

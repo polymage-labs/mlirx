@@ -595,27 +595,6 @@ func @calls(%arg0: i32) {
   // CHECK: %4 = call_indirect %f_0(%arg0) : (i32) -> i32
   %3 = "std.call_indirect"(%f_0, %arg0) : ((i32) -> i32, i32) -> i32
 
-  // CHECK:      execute_region -> i64 {
-  // CHECK-NEXT:   constant
-  // CHECK-NEXT:   return
-  // CHECK-NEXT: }
-  %4 = execute_region -> i64 {
-    %c1 = constant 1 : i64
-    return %c1 : i64
-  }
-
-  // CHECK:       execute_region {
-  // CHECK-NEXT:    br ^bb1
-  // CHECK-NEXT:  ^bb1:
-  // CHECK-NEXT:    return
-  // CHECK-NEXT:  }
-  "std.execute_region"() ({
-  ^bb0:
-    br ^bb1
-  ^bb1:
-    return
-  }) : () -> ()
-
   return
 }
 

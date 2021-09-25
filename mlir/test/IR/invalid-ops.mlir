@@ -1090,17 +1090,6 @@ func @assume_alignment(%0: memref<4x4xf16>) {
 
 // -----
 
-func @execute_region() {
-  // expected-error @+1 {{region cannot have any arguments}}
-  "std.execute_region"() ({
-  ^bb0(%i : i32):
-    return
-  }) : () -> ()
-  return
-}
-
-// -----
-
 "alloca_without_scoped_alloc_parent"() ( {
   memref.alloca() : memref<1xf32>
   // expected-error@-1 {{requires an ancestor op with AutomaticAllocationScope trait}}
