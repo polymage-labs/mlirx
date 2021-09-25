@@ -154,6 +154,13 @@ def Builtin_Function : Builtin_Type<"Function", [
     unsigned getNumResults() const;
     Type getResult(unsigned i) const { return getResults()[i]; }
 
+    /// Returns a new function type with the specified arguments and results
+    /// inserted.
+    FunctionType getWithArgsAndResults(ArrayRef<unsigned> argIndices,
+                                       TypeRange argTypes,
+                                       ArrayRef<unsigned> resultIndices,
+                                       TypeRange resultTypes);
+
     /// Returns a new function type without the specified arguments and results.
     FunctionType getWithoutArgsAndResults(ArrayRef<unsigned> argIndices,
                                           ArrayRef<unsigned> resultIndices);
@@ -751,7 +758,7 @@ def Builtin_Tuple : Builtin_Type<"Tuple", [
 
     **Rationale:** Though this type is first class in the type system, MLIR
     provides no standard operations for operating on `tuple` types
-    ([rationale](Rationale/Rationale.md/#tuple-types)).
+    ([rationale](Rationale/Rationale/#tuple-types)).
 
     Examples:
 

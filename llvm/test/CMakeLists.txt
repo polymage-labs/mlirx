@@ -26,6 +26,7 @@ configure_lit_site_cfg(
   MAIN_CONFIG
   ${CMAKE_CURRENT_SOURCE_DIR}/lit.cfg.py
   PATHS
+  "CMAKE_OSX_SYSROOT"
   "LLVM_SOURCE_DIR"
   "LLVM_BINARY_DIR"
   "LLVM_TOOLS_DIR"
@@ -76,7 +77,6 @@ set(LLVM_TEST_DEPENDS
           dsymutil
           llvm-dwarfdump
           llvm-dwp
-          llvm-elfabi
           llvm-exegesis
           llvm-extract
           llvm-gsymutil
@@ -110,8 +110,10 @@ set(LLVM_TEST_DEPENDS
           llvm-readelf
           llvm-reduce
           llvm-rtdyld
+          llvm-sim
           llvm-size
           llvm-split
+          llvm-stress
           llvm-strings
           llvm-strip
           llvm-symbolizer
@@ -160,6 +162,12 @@ if(LLVM_BUILD_EXAMPLES)
     Kaleidoscope-Ch6
     Kaleidoscope-Ch7
     LLJITWithThinLTOSummaries
+    OrcV2CBindingsBasicUsage
+    OrcV2CBindingsAddObjectFile
+    OrcV2CBindingsRemovableCode
+    OrcV2CBindingsReflectProcessSymbols
+    OrcV2CBindingsLazy
+    OrcV2CBindingsVeryLazy
     )
   if(CMAKE_HOST_UNIX)
     list(APPEND LLVM_TEST_DEPENDS

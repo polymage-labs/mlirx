@@ -10,7 +10,14 @@ See the benchmark/ directory in mlir/.
 To execute the included benchmark:
 
 ```
-$ mlir-opt -hopt='vect=true copy=true unroll=true scalrep=true' benchmark/dgemm-tiled-benchmark.mlir -convert-linalg-to-loops -lower-affine -convert-scf-to-std -convert-std-to-llvm='use-aligned-alloc=1'  -canonicalize  | mlir-cpu-runner  -O3  -e main -time -reps=5   -entry-point-result=void    -shared-libs=lib/libmlir_runner_utils.so > /dev/null
+$ mlir-opt benchmark/dgemm-tiled-benchmark.mlir \
+    -hopt='vect=true copy=true unroll=true scalrep=true' \
+    -convert-linalg-to-loops -lower-affine -convert-scf-to-std \
+    -convert-memref-to-llvm='use-aligned-alloc=1' -convert-std-to-llvm \
+    -canonicalize \
+    | mlir-cpu-runner  -O3  -e main -time -reps=5 -entry-point-result=void \
+    -shared-libs=lib/libmlir_runner_utils.so \
+    -shared-libs=lib/libmlir_c_runner_utils.so > /dev/null
 ```
 
 The generated MLIR can be inspected by running the following while

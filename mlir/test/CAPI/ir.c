@@ -19,6 +19,7 @@
 #include "mlir-c/Dialect/Standard.h"
 #include "mlir-c/IntegerSet.h"
 #include "mlir-c/Registration.h"
+#include "mlir-c/Support.h"
 
 #include <assert.h>
 #include <inttypes.h>
@@ -97,8 +98,8 @@ MlirModule makeAndDumpAdd(MlirContext ctx, MlirLocation location) {
       mlirNamedAttributeGet(
           mlirIdentifierGet(ctx, mlirStringRefCreateFromCString("sym_name")),
           funcNameAttr)};
-  MlirOperationState funcState =
-      mlirOperationStateGet(mlirStringRefCreateFromCString("func"), location);
+  MlirOperationState funcState = mlirOperationStateGet(
+      mlirStringRefCreateFromCString("builtin.func"), location);
   mlirOperationStateAddAttributes(&funcState, 2, funcAttrs);
   mlirOperationStateAddOwnedRegions(&funcState, 1, &funcBodyRegion);
   MlirOperation func = mlirOperationCreate(&funcState);
@@ -323,13 +324,20 @@ static void printFirstOfEach(MlirContext ctx, MlirOperation operation) {
   assert(mlirModuleIsNull(mlirModuleFromOperation(operation)));
 
   // Verify that parent operation and block report correctly.
+  // CHECK: Parent operation eq: 1
   fprintf(stderr, "Parent operation eq: %d\n",
           mlirOperationEqual(mlirOperationGetParentOperation(operation),
                              parentOperation));
+  // CHECK: Block eq: 1
   fprintf(stderr, "Block eq: %d\n",
           mlirBlockEqual(mlirOperationGetBlock(operation), block));
-  // CHECK: Parent operation eq: 1
-  // CHECK: Block eq: 1
+  // CHECK: Block parent operation eq: 1
+  fprintf(
+      stderr, "Block parent operation eq: %d\n",
+      mlirOperationEqual(mlirBlockGetParentOperation(block), parentOperation));
+  // CHECK: Block parent region eq: 1
+  fprintf(stderr, "Block parent region eq: %d\n",
+          mlirRegionEqual(mlirBlockGetParentRegion(block), region));
 
   // In the module we created, the first operation of the first function is
   // an "memref.dim", which has an attribute and a single result that we can
@@ -441,7 +449,8 @@ static void printFirstOfEach(MlirContext ctx, MlirOperation operation) {
       operation, mlirStringRefCreateFromCString("elts"),
       mlirDenseElementsAttrInt32Get(
           mlirRankedTensorTypeGet(1, eltsShape, mlirIntegerTypeGet(ctx, 32),
-                                  mlirAttributeGetNull()), 4, eltsData));
+                                  mlirAttributeGetNull()),
+          4, eltsData));
   MlirOpPrintingFlags flags = mlirOpPrintingFlagsCreate();
   mlirOpPrintingFlagsElideLargeElementsAttrs(flags, 2);
   mlirOpPrintingFlagsPrintGenericOpForm(flags);
@@ -479,6 +488,7 @@ static int constructAndTraverseIr(MlirContext ctx) {
 /// block/operation-relative API and their final order is checked.
 static void buildWithInsertionsAndPrint(MlirContext ctx) {
   MlirLocation loc = mlirLocationUnknownGet(ctx);
+  mlirContextSetAllowUnregisteredDialects(ctx, true);
 
   MlirRegion owningRegion = mlirRegionCreate();
   MlirBlock nullBlock = mlirRegionGetFirstBlock(owningRegion);
@@ -542,6 +552,7 @@ static void buildWithInsertionsAndPrint(MlirContext ctx) {
 
   mlirOperationDump(op);
   mlirOperationDestroy(op);
+  mlirContextSetAllowUnregisteredDialects(ctx, false);
   // clang-format off
   // CHECK-LABEL:  "insertion.order.test"
   // CHECK:      ^{{.*}}(%{{.*}}: i1
@@ -907,25 +918,25 @@ int printBuiltinAttributes(MlirContext ctx) {
       mlirRankedTensorTypeGet(2, shape, mlirIntegerTypeGet(ctx, 8), encoding),
       2, ints8);
   MlirAttribute uint32Elements = mlirDenseElementsAttrUInt32Get(
-      mlirRankedTensorTypeGet(2, shape,
-                              mlirIntegerTypeUnsignedGet(ctx, 32), encoding),
+      mlirRankedTensorTypeGet(2, shape, mlirIntegerTypeUnsignedGet(ctx, 32),
+                              encoding),
       2, uints32);
   MlirAttribute int32Elements = mlirDenseElementsAttrInt32Get(
       mlirRankedTensorTypeGet(2, shape, mlirIntegerTypeGet(ctx, 32), encoding),
       2, ints32);
   MlirAttribute uint64Elements = mlirDenseElementsAttrUInt64Get(
-      mlirRankedTensorTypeGet(2, shape,
-                              mlirIntegerTypeUnsignedGet(ctx, 64), encoding),
+      mlirRankedTensorTypeGet(2, shape, mlirIntegerTypeUnsignedGet(ctx, 64),
+                              encoding),
       2, uints64);
   MlirAttribute int64Elements = mlirDenseElementsAttrInt64Get(
       mlirRankedTensorTypeGet(2, shape, mlirIntegerTypeGet(ctx, 64), encoding),
       2, ints64);
   MlirAttribute floatElements = mlirDenseElementsAttrFloatGet(
-      mlirRankedTensorTypeGet(2, shape, mlirF32TypeGet(ctx), encoding),
-      2, floats);
+      mlirRankedTensorTypeGet(2, shape, mlirF32TypeGet(ctx), encoding), 2,
+      floats);
   MlirAttribute doubleElements = mlirDenseElementsAttrDoubleGet(
-      mlirRankedTensorTypeGet(2, shape, mlirF64TypeGet(ctx), encoding),
-      2, doubles);
+      mlirRankedTensorTypeGet(2, shape, mlirF64TypeGet(ctx), encoding), 2,
+      doubles);
 
   if (!mlirAttributeIsADenseElements(boolElements) ||
       !mlirAttributeIsADenseElements(uint8Elements) ||
@@ -1076,19 +1087,19 @@ int printBuiltinAttributes(MlirContext ctx) {
   // CHECK: 1.000000e+00 : f32
   // CHECK: 1.000000e+00 : f64
 
-  int64_t indices[] = {4, 7};
-  int64_t two = 2;
+  int64_t indices[] = {0, 1};
+  int64_t one = 1;
   MlirAttribute indicesAttr = mlirDenseElementsAttrInt64Get(
-      mlirRankedTensorTypeGet(1, &two, mlirIntegerTypeGet(ctx, 64), encoding),
+      mlirRankedTensorTypeGet(2, shape, mlirIntegerTypeGet(ctx, 64), encoding),
       2, indices);
   MlirAttribute valuesAttr = mlirDenseElementsAttrFloatGet(
-      mlirRankedTensorTypeGet(1, &two, mlirF32TypeGet(ctx), encoding),
-      2, floats);
+      mlirRankedTensorTypeGet(1, &one, mlirF32TypeGet(ctx), encoding), 1,
+      floats);
   MlirAttribute sparseAttr = mlirSparseElementsAttribute(
       mlirRankedTensorTypeGet(2, shape, mlirF32TypeGet(ctx), encoding),
       indicesAttr, valuesAttr);
   mlirAttributeDump(sparseAttr);
-  // CHECK: sparse<[4, 7], [0.000000e+00, 1.000000e+00]> : tensor<1x2xf32>
+  // CHECK: sparse<{{\[}}[0, 1]], 0.000000e+00> : tensor<1x2xf32>
 
   return 0;
 }
@@ -1561,6 +1572,8 @@ int testOperands() {
   // CHECK-LABEL: @testOperands
 
   MlirContext ctx = mlirContextCreate();
+  mlirRegisterAllDialects(ctx);
+  mlirContextGetOrLoadDialect(ctx, mlirStringRefCreateFromCString("test"));
   MlirLocation loc = mlirLocationUnknownGet(ctx);
   MlirType indexType = mlirIndexTypeGet(ctx);
 
@@ -1590,6 +1603,7 @@ int testOperands() {
   MlirValue constOneValue = mlirOperationGetResult(constOne, 0);
 
   // Create the operation under test.
+  mlirContextSetAllowUnregisteredDialects(ctx, true);
   MlirOperationState opState =
       mlirOperationStateGet(mlirStringRefCreateFromCString("dummy.op"), loc);
   MlirValue initialOperands[] = {constZeroValue};
@@ -1604,13 +1618,13 @@ int testOperands() {
   MlirValue opOperand = mlirOperationGetOperand(op, 0);
   fprintf(stderr, "Original operand: ");
   mlirValuePrint(opOperand, printToStderr, NULL);
-  // CHECK: Original operand: {{.+}} {value = 0 : index}
+  // CHECK: Original operand: {{.+}} constant 0 : index
 
   mlirOperationSetOperand(op, 0, constOneValue);
   opOperand = mlirOperationGetOperand(op, 0);
   fprintf(stderr, "Updated operand: ");
   mlirValuePrint(opOperand, printToStderr, NULL);
-  // CHECK: Updated operand: {{.+}} {value = 1 : index}
+  // CHECK: Updated operand: {{.+}} constant 1 : index
 
   mlirOperationDestroy(op);
   mlirOperationDestroy(constZero);
@@ -1626,13 +1640,16 @@ int testClone() {
   // CHECK-LABEL: @testClone
 
   MlirContext ctx = mlirContextCreate();
+  mlirRegisterAllDialects(ctx);
+  mlirContextGetOrLoadDialect(ctx, mlirStringRefCreateFromCString("std"));
   MlirLocation loc = mlirLocationUnknownGet(ctx);
   MlirType indexType = mlirIndexTypeGet(ctx);
-  MlirStringRef valueStringRef =  mlirStringRefCreateFromCString("value");
+  MlirStringRef valueStringRef = mlirStringRefCreateFromCString("value");
 
   MlirAttribute indexZeroLiteral =
       mlirAttributeParseGet(ctx, mlirStringRefCreateFromCString("0 : index"));
-  MlirNamedAttribute indexZeroValueAttr = mlirNamedAttributeGet(mlirIdentifierGet(ctx, valueStringRef), indexZeroLiteral);
+  MlirNamedAttribute indexZeroValueAttr = mlirNamedAttributeGet(
+      mlirIdentifierGet(ctx, valueStringRef), indexZeroLiteral);
   MlirOperationState constZeroState = mlirOperationStateGet(
       mlirStringRefCreateFromCString("std.constant"), loc);
   mlirOperationStateAddResults(&constZeroState, 1, &indexType);
@@ -1646,8 +1663,8 @@ int testClone() {
 
   mlirOperationPrint(constZero, printToStderr, NULL);
   mlirOperationPrint(constOne, printToStderr, NULL);
-  // CHECK: %0 = "std.constant"() {value = 0 : index} : () -> index
-  // CHECK: %0 = "std.constant"() {value = 1 : index} : () -> index
+  // CHECK: constant 0 : index
+  // CHECK: constant 1 : index
 
   return 0;
 }
@@ -1687,6 +1704,14 @@ void testDiagnostics() {
           ctx, mlirStringRefCreateFromCString("other-file.c"), 2, 3),
       fileLineColLoc);
   mlirEmitError(callSiteLoc, "test diagnostics");
+  MlirLocation null = {0};
+  MlirLocation nameLoc =
+      mlirLocationNameGet(ctx, mlirStringRefCreateFromCString("named"), null);
+  mlirEmitError(nameLoc, "test diagnostics");
+  MlirLocation locs[2] = {nameLoc, callSiteLoc};
+  MlirAttribute nullAttr = {0};
+  MlirLocation fusedLoc = mlirLocationFusedGet(ctx, 2, locs, nullAttr);
+  mlirEmitError(fusedLoc, "test diagnostics");
   mlirContextDetachDiagnosticHandler(ctx, id);
   mlirEmitError(unknownLoc, "more test diagnostics");
   // CHECK-LABEL: @test_diagnostics
@@ -1702,6 +1727,13 @@ void testDiagnostics() {
   // CHECK:   test diagnostics
   // CHECK:   loc(callsite("other-file.c":2:3 at "file.c":1:2))
   // CHECK: >> end of diagnostic (userData: 42)
+  // CHECK: processing diagnostic (userData: 42) <<
+  // CHECK:   test diagnostics
+  // CHECK:   loc("named")
+  // CHECK: >> end of diagnostic (userData: 42)
+  // CHECK: processing diagnostic (userData: 42) <<
+  // CHECK:   test diagnostics
+  // CHECK:   loc(fused["named", callsite("other-file.c":2:3 at "file.c":1:2)])
   // CHECK: deleting user data (userData: 42)
   // CHECK-NOT: processing diagnostic
   // CHECK:     more test diagnostics

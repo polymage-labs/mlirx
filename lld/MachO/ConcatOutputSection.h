@@ -24,13 +24,14 @@ class Defined;
 // files that are labeled with the same segment and section name. This class
 // contains all such sections and writes the data from each section sequentially
 // in the final binary.
-class ConcatOutputSection : public OutputSection {
+class ConcatOutputSection final : public OutputSection {
 public:
   explicit ConcatOutputSection(StringRef name)
       : OutputSection(ConcatKind, name) {}
 
   const ConcatInputSection *firstSection() const { return inputs.front(); }
   const ConcatInputSection *lastSection() const { return inputs.back(); }
+  bool isNeeded() const override { return !inputs.empty(); }
 
   // These accessors will only be valid after finalizing the section
   uint64_t getSize() const override { return size; }
@@ -50,8 +51,10 @@ public:
     return sec->kind() == ConcatKind;
   }
 
+  static ConcatOutputSection *getOrCreateForInput(const InputSection *);
+
 private:
-  void mergeFlags(InputSection *input);
+  void finalizeFlags(InputSection *input);
 
   size_t size = 0;
   uint64_t fileSize = 0;
@@ -78,6 +81,12 @@ struct ThunkInfo {
   uint32_t thunkCallCount = 0; // how many call sites went to thunk?
   uint8_t sequence = 0;        // how many thunks created so-far?
 };
+
+NamePair maybeRenameSection(NamePair key);
+
+// Output sections are added to output segments in iteration order
+// of ConcatOutputSection, so must have deterministic iteration order.
+extern llvm::MapVector<NamePair, ConcatOutputSection *> concatOutputSections;
 
 extern llvm::DenseMap<Symbol *, ThunkInfo> thunkMap;
 

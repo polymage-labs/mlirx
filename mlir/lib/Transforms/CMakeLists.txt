@@ -22,7 +22,6 @@ add_mlir_library(MLIRTransforms
   StripDebugInfo.cpp
   SymbolDCE.cpp
   ViewOpGraph.cpp
-  ViewRegionGraph.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Transforms
@@ -35,11 +34,11 @@ add_mlir_library(MLIRTransforms
   MLIRAffine
   MLIRAnalysis
   MLIRCopyOpInterface
-  MLIRLinalg
   MLIRLoopLikeInterface
   MLIRMemRef
   MLIRSCF
   MLIRPass
+  MLIRSupport
   MLIRTransformUtils
   MLIRVector
   )

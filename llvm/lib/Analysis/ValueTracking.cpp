@@ -26,6 +26,7 @@
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AssumeBundleQueries.h"
 #include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/Analysis/EHPersonalities.h"
 #include "llvm/Analysis/GuardUtils.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/Loads.h"
@@ -164,7 +165,7 @@ static bool getShuffleDemandedElts(const ShuffleVectorInst *Shuf,
   int NumElts =
       cast<FixedVectorType>(Shuf->getOperand(0)->getType())->getNumElements();
   int NumMaskElts = cast<FixedVectorType>(Shuf->getType())->getNumElements();
-  DemandedLHS = DemandedRHS = APInt::getNullValue(NumElts);
+  DemandedLHS = DemandedRHS = APInt::getZero(NumElts);
   if (DemandedElts.isNullValue())
     return true;
   // Simple case of a shuffle with zeroinitializer.
@@ -205,7 +206,7 @@ static void computeKnownBits(const Value *V, KnownBits &Known, unsigned Depth,
 
   auto *FVTy = dyn_cast<FixedVectorType>(V->getType());
   APInt DemandedElts =
-      FVTy ? APInt::getAllOnesValue(FVTy->getNumElements()) : APInt(1, 1);
+      FVTy ? APInt::getAllOnes(FVTy->getNumElements()) : APInt(1, 1);
   computeKnownBits(V, DemandedElts, Known, Depth, Q);
 }
 
@@ -278,16 +279,11 @@ bool llvm::haveNoCommonBitsSet(const Value *LHS, const Value *RHS,
   return KnownBits::haveNoCommonBitsSet(LHSKnown, RHSKnown);
 }
 
-bool llvm::isOnlyUsedInZeroEqualityComparison(const Instruction *CxtI) {
-  for (const User *U : CxtI->users()) {
-    if (const ICmpInst *IC = dyn_cast<ICmpInst>(U))
-      if (IC->isEquality())
-        if (Constant *C = dyn_cast<Constant>(IC->getOperand(1)))
-          if (C->isNullValue())
-            continue;
-    return false;
-  }
-  return true;
+bool llvm::isOnlyUsedInZeroEqualityComparison(const Instruction *I) {
+  return !I->user_empty() && all_of(I->users(), [](const User *U) {
+    ICmpInst::Predicate P;
+    return match(U, m_ICmp(P, m_Value(), m_Zero())) && ICmpInst::isEquality(P);
+  });
 }
 
 static bool isKnownToBeAPowerOfTwo(const Value *V, bool OrZero, unsigned Depth,
@@ -377,7 +373,7 @@ static unsigned ComputeNumSignBits(const Value *V, unsigned Depth,
 
   auto *FVTy = dyn_cast<FixedVectorType>(V->getType());
   APInt DemandedElts =
-      FVTy ? APInt::getAllOnesValue(FVTy->getNumElements()) : APInt(1, 1);
+      FVTy ? APInt::getAllOnes(FVTy->getNumElements()) : APInt(1, 1);
   return ComputeNumSignBits(V, DemandedElts, Depth, Q);
 }
 
@@ -581,7 +577,7 @@ static bool cmpExcludesZero(CmpInst::Predicate Pred, const Value *RHS) {
     return false;
 
   ConstantRange TrueValues = ConstantRange::makeExactICmpRegion(Pred, *C);
-  return !TrueValues.contains(APInt::getNullValue(C->getBitWidth()));
+  return !TrueValues.contains(APInt::getZero(C->getBitWidth()));
 }
 
 static bool isKnownNonZeroFromAssume(const Value *V, const Query &Q) {
@@ -1182,6 +1178,47 @@ static void computeKnownBitsFromOperator(const Operator *I,
       computeKnownBits(I->getOperand(0), Known, Depth + 1, Q);
       break;
     }
+
+    // Handle cast from vector integer type to scalar or vector integer.
+    auto *SrcVecTy = dyn_cast<FixedVectorType>(SrcTy);
+    if (!SrcVecTy || !SrcVecTy->getElementType()->isIntegerTy() ||
+        !I->getType()->isIntOrIntVectorTy())
+      break;
+
+    // Look through a cast from narrow vector elements to wider type.
+    // Examples: v4i32 -> v2i64, v3i8 -> v24
+    unsigned SubBitWidth = SrcVecTy->getScalarSizeInBits();
+    if (BitWidth % SubBitWidth == 0) {
+      // Known bits are automatically intersected across demanded elements of a
+      // vector. So for example, if a bit is computed as known zero, it must be
+      // zero across all demanded elements of the vector.
+      //
+      // For this bitcast, each demanded element of the output is sub-divided
+      // across a set of smaller vector elements in the source vector. To get
+      // the known bits for an entire element of the output, compute the known
+      // bits for each sub-element sequentially. This is done by shifting the
+      // one-set-bit demanded elements parameter across the sub-elements for
+      // consecutive calls to computeKnownBits. We are using the demanded
+      // elements parameter as a mask operator.
+      //
+      // The known bits of each sub-element are then inserted into place
+      // (dependent on endian) to form the full result of known bits.
+      unsigned NumElts = DemandedElts.getBitWidth();
+      unsigned SubScale = BitWidth / SubBitWidth;
+      APInt SubDemandedElts = APInt::getZero(NumElts * SubScale);
+      for (unsigned i = 0; i != NumElts; ++i) {
+        if (DemandedElts[i])
+          SubDemandedElts.setBit(i * SubScale);
+      }
+
+      KnownBits KnownSrc(SubBitWidth);
+      for (unsigned i = 0; i != SubScale; ++i) {
+        computeKnownBits(I->getOperand(0), SubDemandedElts.shl(i), KnownSrc,
+                         Depth + 1, Q);
+        unsigned ShiftElt = Q.DL.isLittleEndian() ? i : SubScale - 1 - i;
+        Known.insertBits(KnownSrc, ShiftElt * SubBitWidth);
+      }
+    }
     break;
   }
   case Instruction::SExt: {
@@ -1647,6 +1684,33 @@ static void computeKnownBitsFromOperator(const Operator *I,
         if (BitWidth >= 32)
           Known.Zero.setBitsFrom(31);
         break;
+      case Intrinsic::vscale: {
+        if (!II->getParent() || !II->getFunction() ||
+            !II->getFunction()->hasFnAttribute(Attribute::VScaleRange))
+          break;
+
+        auto VScaleRange = II->getFunction()
+                               ->getFnAttribute(Attribute::VScaleRange)
+                               .getVScaleRangeArgs();
+
+        if (VScaleRange.second == 0)
+          break;
+
+        // If vscale min = max then we know the exact value at compile time
+        // and hence we know the exact bits.
+        if (VScaleRange.first == VScaleRange.second) {
+          Known.One = VScaleRange.first;
+          Known.Zero = VScaleRange.first;
+          Known.Zero.flipAllBits();
+          break;
+        }
+
+        unsigned FirstZeroHighBit = 32 - countLeadingZeros(VScaleRange.second);
+        if (FirstZeroHighBit < BitWidth)
+          Known.Zero.setBitsFrom(FirstZeroHighBit);
+
+        break;
+      }
       }
     }
     break;
@@ -1721,7 +1785,7 @@ static void computeKnownBitsFromOperator(const Operator *I,
       break;
     }
     unsigned NumElts = cast<FixedVectorType>(Vec->getType())->getNumElements();
-    APInt DemandedVecElts = APInt::getAllOnesValue(NumElts);
+    APInt DemandedVecElts = APInt::getAllOnes(NumElts);
     if (CIdx && CIdx->getValue().ult(NumElts))
       DemandedVecElts = APInt::getOneBitSet(NumElts, CIdx->getZExtValue());
     computeKnownBits(Vec, DemandedVecElts, Known, Depth + 1, Q);
@@ -2490,7 +2554,7 @@ bool isKnownNonZero(const Value *V, const APInt &DemandedElts, unsigned Depth,
     auto *CIdx = dyn_cast<ConstantInt>(Idx);
     if (auto *VecTy = dyn_cast<FixedVectorType>(Vec->getType())) {
       unsigned NumElts = VecTy->getNumElements();
-      APInt DemandedVecElts = APInt::getAllOnesValue(NumElts);
+      APInt DemandedVecElts = APInt::getAllOnes(NumElts);
       if (CIdx && CIdx->getValue().ult(NumElts))
         DemandedVecElts = APInt::getOneBitSet(NumElts, CIdx->getZExtValue());
       return isKnownNonZero(Vec, DemandedVecElts, Depth, Q);
@@ -2517,7 +2581,7 @@ bool isKnownNonZero(const Value* V, unsigned Depth, const Query& Q) {
 
   auto *FVTy = dyn_cast<FixedVectorType>(V->getType());
   APInt DemandedElts =
-      FVTy ? APInt::getAllOnesValue(FVTy->getNumElements()) : APInt(1, 1);
+      FVTy ? APInt::getAllOnes(FVTy->getNumElements()) : APInt(1, 1);
   return isKnownNonZero(V, DemandedElts, Depth, Q);
 }
 
@@ -4491,6 +4555,12 @@ AllocaInst *llvm::findAllocaForValue(Value *V, bool OffsetZero) {
       if (OffsetZero && !GEP->hasAllZeroIndices())
         return nullptr;
       AddWork(GEP->getPointerOperand());
+    } else if (CallBase *CB = dyn_cast<CallBase>(V)) {
+      Value *Returned = CB->getReturnedArgOperand();
+      if (Returned)
+        AddWork(Returned);
+      else
+        return nullptr;
     } else {
       return nullptr;
     }
@@ -5231,6 +5301,22 @@ bool llvm::isGuaranteedToTransferExecutionToSuccessor(const Instruction *I) {
     return false;
   if (isa<UnreachableInst>(I))
     return false;
+
+  // Note: Do not add new checks here; instead, change Instruction::mayThrow or
+  // Instruction::willReturn.
+  //
+  // FIXME: Move this check into Instruction::willReturn.
+  if (isa<CatchPadInst>(I)) {
+    switch (classifyEHPersonality(I->getFunction()->getPersonalityFn())) {
+    default:
+      // A catchpad may invoke exception object constructors and such, which
+      // in some languages can be arbitrary code, so be conservative by default.
+      return false;
+    case EHPersonality::CoreCLR:
+      // For CoreCLR, it just involves a type test.
+      return true;
+    }
+  }
 
   // An instruction that returns without throwing must transfer control flow
   // to a successor.
@@ -6195,6 +6281,16 @@ CmpInst::Predicate llvm::getInverseMinMaxPred(SelectPatternFlavor SPF) {
   return getMinMaxPred(getInverseMinMaxFlavor(SPF));
 }
 
+APInt llvm::getMinMaxLimit(SelectPatternFlavor SPF, unsigned BitWidth) {
+  switch (SPF) {
+  case SPF_SMAX: return APInt::getSignedMaxValue(BitWidth);
+  case SPF_SMIN: return APInt::getSignedMinValue(BitWidth);
+  case SPF_UMAX: return APInt::getMaxValue(BitWidth);
+  case SPF_UMIN: return APInt::getMinValue(BitWidth);
+  default: llvm_unreachable("Unexpected flavor");
+  }
+}
+
 std::pair<Intrinsic::ID, bool>
 llvm::canConvertToMinOrMaxIntrinsic(ArrayRef<Value *> VL) {
   // Check if VL contains select instructions that can be folded into a min/max
@@ -6424,8 +6520,7 @@ isImpliedCondMatchingImmOperands(CmpInst::Predicate APred,
                                  const ConstantInt *C2) {
   ConstantRange DomCR =
       ConstantRange::makeExactICmpRegion(APred, C1->getValue());
-  ConstantRange CR =
-      ConstantRange::makeAllowedICmpRegion(BPred, C2->getValue());
+  ConstantRange CR = ConstantRange::makeExactICmpRegion(BPred, C2->getValue());
   ConstantRange Intersection = DomCR.intersectWith(CR);
   ConstantRange Difference = DomCR.difference(CR);
   if (Intersection.isEmptySet())
@@ -6679,7 +6774,7 @@ static void setLimitsForBinOp(const BinaryOperator &BO, APInt &Lower,
   case Instruction::LShr:
     if (match(BO.getOperand(1), m_APInt(C)) && C->ult(Width)) {
       // 'lshr x, C' produces [0, UINT_MAX >> C].
-      Upper = APInt::getAllOnesValue(Width).lshr(*C) + 1;
+      Upper = APInt::getAllOnes(Width).lshr(*C) + 1;
     } else if (match(BO.getOperand(0), m_APInt(C))) {
       // 'lshr C, x' produces [C >> (Width-1), C].
       unsigned ShiftAmount = Width - 1;
@@ -6889,7 +6984,7 @@ static void setLimitsForSelectPattern(const SelectInst &SI, APInt &Lower,
     // If the negation part of the abs (in RHS) has the NSW flag,
     // then the result of abs(X) is [0..SIGNED_MAX],
     // otherwise it is [0..SIGNED_MIN], as -SIGNED_MIN == SIGNED_MIN.
-    Lower = APInt::getNullValue(BitWidth);
+    Lower = APInt::getZero(BitWidth);
     if (match(RHS, m_Neg(m_Specific(LHS))) &&
         IIQ.hasNoSignedWrap(cast<Instruction>(RHS)))
       Upper = APInt::getSignedMaxValue(BitWidth) + 1;
@@ -6932,6 +7027,7 @@ static void setLimitsForSelectPattern(const SelectInst &SI, APInt &Lower,
 ConstantRange llvm::computeConstantRange(const Value *V, bool UseInstrInfo,
                                          AssumptionCache *AC,
                                          const Instruction *CtxI,
+                                         const DominatorTree *DT,
                                          unsigned Depth) {
   assert(V->getType()->isIntOrIntVectorTy() && "Expected integer instruction");
 
@@ -6970,7 +7066,7 @@ ConstantRange llvm::computeConstantRange(const Value *V, bool UseInstrInfo,
       assert(I->getCalledFunction()->getIntrinsicID() == Intrinsic::assume &&
              "must be an assume intrinsic");
 
-      if (!isValidAssumeForContext(I, CtxI, nullptr))
+      if (!isValidAssumeForContext(I, CtxI, DT))
         continue;
       Value *Arg = I->getArgOperand(0);
       ICmpInst *Cmp = dyn_cast<ICmpInst>(Arg);
@@ -6978,9 +7074,9 @@ ConstantRange llvm::computeConstantRange(const Value *V, bool UseInstrInfo,
       if (!Cmp || Cmp->getOperand(0) != V)
         continue;
       ConstantRange RHS = computeConstantRange(Cmp->getOperand(1), UseInstrInfo,
-                                               AC, I, Depth + 1);
+                                               AC, I, DT, Depth + 1);
       CR = CR.intersectWith(
-          ConstantRange::makeSatisfyingICmpRegion(Cmp->getPredicate(), RHS));
+          ConstantRange::makeAllowedICmpRegion(Cmp->getPredicate(), RHS));
     }
   }
 

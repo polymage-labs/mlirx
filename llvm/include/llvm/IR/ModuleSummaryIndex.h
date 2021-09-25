@@ -45,6 +45,8 @@
 
 namespace llvm {
 
+template <class GraphType> struct GraphTraits;
+
 namespace yaml {
 
 template <typename T> struct MappingTraits;
@@ -697,6 +699,8 @@ public:
 
   /// Return the list of <CalleeValueInfo, CalleeInfo> pairs.
   ArrayRef<EdgeTy> calls() const { return CallGraphEdgeList; }
+
+  std::vector<EdgeTy> &mutableCalls() { return CallGraphEdgeList; }
 
   void addCall(EdgeTy E) { CallGraphEdgeList.push_back(E); }
 

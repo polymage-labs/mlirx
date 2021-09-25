@@ -19,6 +19,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "LegalizeTypes.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
@@ -256,7 +257,7 @@ SDValue DAGTypeLegalizer::SoftenFloatRes_FABS(SDNode *N) {
   unsigned Size = NVT.getSizeInBits();
 
   // Mask = ~(1 << (Size-1))
-  APInt API = APInt::getAllOnesValue(Size);
+  APInt API = APInt::getAllOnes(Size);
   API.clearBit(Size - 1);
   SDValue Mask = DAG.getConstant(API, SDLoc(N), NVT);
   SDValue Op = GetSoftenedFloat(N->getOperand(0));
@@ -572,7 +573,8 @@ SDValue DAGTypeLegalizer::SoftenFloatRes_FPOW(SDNode *N) {
 SDValue DAGTypeLegalizer::SoftenFloatRes_FPOWI(SDNode *N) {
   bool IsStrict = N->isStrictFPOpcode();
   unsigned Offset = IsStrict ? 1 : 0;
-  assert(N->getOperand(1 + Offset).getValueType() == MVT::i32 &&
+  assert((N->getOperand(1 + Offset).getValueType() == MVT::i16 ||
+          N->getOperand(1 + Offset).getValueType() == MVT::i32) &&
          "Unsupported power type!");
   RTLIB::Libcall LC = RTLIB::getPOWI(N->getValueType(0));
   assert(LC != RTLIB::UNKNOWN_LIBCALL && "Unexpected fpowi.");
@@ -580,6 +582,14 @@ SDValue DAGTypeLegalizer::SoftenFloatRes_FPOWI(SDNode *N) {
     // Some targets don't have a powi libcall; use pow instead.
     // FIXME: Implement this if some target needs it.
     DAG.getContext()->emitError("Don't know how to soften fpowi to fpow");
+    return DAG.getUNDEF(N->getValueType(0));
+  }
+
+  if (DAG.getLibInfo().getIntSize() !=
+      N->getOperand(1 + Offset).getValueType().getSizeInBits()) {
+    // If the exponent does not match with sizeof(int) a libcall to RTLIB::POWI
+    // would use the wrong type for the argument.
+    DAG.getContext()->emitError("POWI exponent does not match sizeof(int)");
     return DAG.getUNDEF(N->getValueType(0));
   }
 
@@ -810,6 +820,7 @@ bool DAGTypeLegalizer::SoftenFloatOperand(SDNode *N, unsigned OpNo) {
 
   case ISD::BITCAST:     Res = SoftenFloatOp_BITCAST(N); break;
   case ISD::BR_CC:       Res = SoftenFloatOp_BR_CC(N); break;
+  case ISD::STRICT_FP_TO_FP16:
   case ISD::FP_TO_FP16:  // Same as FP_ROUND for softening purposes
   case ISD::STRICT_FP_ROUND:
   case ISD::FP_ROUND:    Res = SoftenFloatOp_FP_ROUND(N); break;
@@ -861,13 +872,17 @@ SDValue DAGTypeLegalizer::SoftenFloatOp_FP_ROUND(SDNode *N) {
   // We actually deal with the partially-softened FP_TO_FP16 node too, which
   // returns an i16 so doesn't meet the constraints necessary for FP_ROUND.
   assert(N->getOpcode() == ISD::FP_ROUND || N->getOpcode() == ISD::FP_TO_FP16 ||
+         N->getOpcode() == ISD::STRICT_FP_TO_FP16 ||
          N->getOpcode() == ISD::STRICT_FP_ROUND);
 
   bool IsStrict = N->isStrictFPOpcode();
   SDValue Op = N->getOperand(IsStrict ? 1 : 0);
   EVT SVT = Op.getValueType();
   EVT RVT = N->getValueType(0);
-  EVT FloatRVT = N->getOpcode() == ISD::FP_TO_FP16 ? MVT::f16 : RVT;
+  EVT FloatRVT = (N->getOpcode() == ISD::FP_TO_FP16 ||
+                  N->getOpcode() == ISD::STRICT_FP_TO_FP16)
+                     ? MVT::f16
+                     : RVT;
 
   RTLIB::Libcall LC = RTLIB::getFPROUND(SVT, FloatRVT);
   assert(LC != RTLIB::UNKNOWN_LIBCALL && "Unsupported FP_ROUND libcall");

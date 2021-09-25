@@ -26,11 +26,11 @@
 // RUN: %clang_cc1 %s -Rpass=inline -fno-experimental-new-pass-manager -w -emit-llvm -o - 2>&1 | FileCheck %s --check-prefix=CHECK-REMARKS
 // RUN: %clang_cc1 %s -Rpass=inline -fexperimental-new-pass-manager -O1 -w -emit-llvm -mllvm -mandatory-inlining-first=false -o - 2>&1 | FileCheck %s --check-prefix=CHECK-REMARKS
 //
-// FIXME: -Reverything should imply -Rpass=.*.
-// RUN: %clang_cc1 %s -Reverything -emit-llvm -o - 2>/dev/null | FileCheck %s --check-prefix=CHECK-NO-REMARKS
+// -Reverything implies -Rpass=.*.
+// RUN: %clang_cc1 %s -Reverything -emit-llvm -o - 2>&1 | FileCheck %s --check-prefix=CHECK-REMARKS
 //
-// FIXME: -Rpass should either imply -Rpass=.* or should be rejected.
-// RUN: %clang_cc1 %s -Rpass -emit-llvm -o - 2>/dev/null | FileCheck %s --check-prefix=CHECK-NO-REMARKS
+// -Rpass implies -Rpass=.*
+// RUN: %clang_cc1 %s -Rpass -emit-llvm -o - 2>&1 | FileCheck %s --check-prefix=CHECK-REMARKS
 
 // CHECK-REMARKS: remark:
 // CHECK-NO-REMARKS-NOT: remark:
@@ -55,8 +55,8 @@ float foz(int x, int y) { return x * y; }
 // twice.
 //
 int bar(int j) {
-// expected-remark@+3 {{foz not inlined into bar because it should never be inlined (cost=never)}}
-// expected-remark@+2 {{foz not inlined into bar because it should never be inlined (cost=never)}}
-// expected-remark@+1 {{foo inlined into bar}}
+// expected-remark@+3 {{'foz' not inlined into 'bar' because it should never be inlined (cost=never)}}
+// expected-remark@+2 {{'foz' not inlined into 'bar' because it should never be inlined (cost=never)}}
+// expected-remark@+1 {{'foo' inlined into 'bar'}}
   return foo(j, j - 2) * foz(j - 2, j);
 }

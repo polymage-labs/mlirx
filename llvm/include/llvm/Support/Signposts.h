@@ -1,9 +1,8 @@
 //===-- llvm/Support/Signposts.h - Interval debug annotations ---*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -18,7 +17,7 @@
 #define LLVM_SUPPORT_SIGNPOSTS_H
 
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Config/config.h"
+#include "llvm/Config/llvm-config.h"
 #include <memory>
 
 #if LLVM_SUPPORT_XCODE_SIGNPOSTS
@@ -50,7 +49,7 @@ public:
   os_log_t &getLogger() const;
   os_signpost_id_t getSignpostForObject(const void *O);
 #endif
-    
+
   /// A macro to take advantage of the special format string handling
   /// in the os_signpost API. The format string substitution is
   /// deferred to the log consumer and done outside of the
@@ -69,7 +68,7 @@ public:
   do {                                                                         \
   } while (0)
 #endif
-  
+
   /// End a signposted interval for a given object.
   void endInterval(const void *O);
 };

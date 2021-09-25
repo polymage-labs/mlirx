@@ -25,6 +25,7 @@
 ; CHECK-NEXT:       Simplify the CFG
 ; CHECK-NEXT:       Dominator Tree Construction
 ; CHECK-NEXT:       Natural Loop Information
+; CHECK-NEXT:       Canonicalize natural loops
 ; CHECK-NEXT:       Lazy Branch Probability Analysis
 ; CHECK-NEXT:       Lazy Block Frequency Analysis
 ; CHECK-NEXT:       Optimization Remark Emitter
@@ -159,6 +160,7 @@
 ; CHECK-NEXT:       Machine Loop Invariant Code Motion
 ; CHECK-NEXT:       AArch64 Redundant Copy Elimination
 ; CHECK-NEXT:       A57 FP Anti-dependency breaker
+; CHECK-NEXT:       Remove Redundant DEBUG_VALUE analysis
 ; CHECK-NEXT:       Fixup Statepoint Caller Saved
 ; CHECK-NEXT:       PostRA Machine Sink
 ; CHECK-NEXT:       MachineDominator Tree Construction

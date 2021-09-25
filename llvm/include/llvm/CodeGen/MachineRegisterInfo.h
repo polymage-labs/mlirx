@@ -857,9 +857,9 @@ public:
 
   /// Return true if the specified register is modified or read in this
   /// function. This checks that no machine operands exist for the register or
-  /// any of its aliases. The register is also considered used when it is set
-  /// in the UsedPhysRegMask.
-  bool isPhysRegUsed(MCRegister PhysReg) const;
+  /// any of its aliases. If SkipRegMaskTest is false, the register is
+  /// considered used when it is set in the UsedPhysRegMask.
+  bool isPhysRegUsed(MCRegister PhysReg, bool SkipRegMaskTest = false) const;
 
   /// addPhysRegsUsedFromRegMask - Mark any registers not in RegMask as used.
   /// This corresponds to the bit mask attached to register mask operands.
@@ -964,7 +964,7 @@ public:
   MCRegister getLiveInPhysReg(Register VReg) const;
 
   /// getLiveInVirtReg - If PReg is a live-in physical register, return the
-  /// corresponding live-in physical register.
+  /// corresponding live-in virtual register.
   Register getLiveInVirtReg(MCRegister PReg) const;
 
   /// EmitLiveInCopies - Emit copies to initialize livein virtual registers

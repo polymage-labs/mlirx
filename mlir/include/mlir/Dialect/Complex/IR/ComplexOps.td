@@ -10,7 +10,6 @@
 #define COMPLEX_OPS
 
 include "mlir/Dialect/Complex/IR/ComplexBase.td"
-include "mlir/Interfaces/VectorInterfaces.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
 class Complex_Op<string mnemonic, list<OpTrait> traits = []>
@@ -21,8 +20,7 @@ class Complex_Op<string mnemonic, list<OpTrait> traits = []>
 // one result, all of which must be complex numbers of the same type.
 class ComplexArithmeticOp<string mnemonic, list<OpTrait> traits = []> :
     Complex_Op<mnemonic, traits # [NoSideEffect, SameOperandsAndResultType,
-    DeclareOpInterfaceMethods<VectorUnrollOpInterface>] #
-    ElementwiseMappable.traits> {
+    Elementwise]> {
   let arguments = (ins Complex<AnyFloat>:$lhs, Complex<AnyFloat>:$rhs);
   let results = (outs Complex<AnyFloat>:$result);
   let assemblyFormat = "$lhs `,` $rhs  attr-dict `:` type($result)";
@@ -33,7 +31,7 @@ class ComplexArithmeticOp<string mnemonic, list<OpTrait> traits = []> :
 // floating-point element type. These operations take one operand and return
 // one result; the operand must be a complex number.
 class ComplexUnaryOp<string mnemonic, list<OpTrait> traits = []> :
-    Complex_Op<mnemonic, traits # [NoSideEffect]> {
+    Complex_Op<mnemonic, traits # [NoSideEffect, Elementwise]> {
   let arguments = (ins Complex<AnyFloat>:$complex);
   let assemblyFormat = "$complex attr-dict `:` type($complex)";
   let verifier = ?;
@@ -131,9 +129,7 @@ def DivOp : ComplexArithmeticOp<"div"> {
 //===----------------------------------------------------------------------===//
 
 def EqualOp : Complex_Op<"eq",
-    [NoSideEffect, AllTypesMatch<["lhs", "rhs"]>,
-    DeclareOpInterfaceMethods<VectorUnrollOpInterface>] #
-    ElementwiseMappable.traits> {
+    [NoSideEffect, AllTypesMatch<["lhs", "rhs"]>, Elementwise]> {
   let summary = "computes whether two complex values are equal";
   let description = [{
     The `eq` op takes two complex numbers and returns whether they are equal.
@@ -153,6 +149,27 @@ def EqualOp : Complex_Op<"eq",
     }]>];
 
   let assemblyFormat = "$lhs `,` $rhs  attr-dict `:` type($lhs)";
+}
+
+//===----------------------------------------------------------------------===//
+// ExpOp
+//===----------------------------------------------------------------------===//
+
+def ExpOp : ComplexUnaryOp<"exp", [SameOperandsAndResultType]> {
+  let summary = "computes exponential of a complex number";
+  let description = [{
+    The `exp` op takes a single complex number and computes the exponential of
+    it, i.e. `exp(x)` or `e^(x)`, where `x` is the input value.
+    `e` denotes Euler's number and is approximately equal to 2.718281.
+
+    Example:
+
+    ```mlir
+    %a = complex.exp %b : complex<f32>
+    ```
+  }];
+
+  let results = (outs Complex<AnyFloat>:$result);
 }
 
 //===----------------------------------------------------------------------===//
@@ -179,6 +196,49 @@ def ImOp : ComplexUnaryOp<"im",
 }
 
 //===----------------------------------------------------------------------===//
+// LogOp
+//===----------------------------------------------------------------------===//
+
+def LogOp : ComplexUnaryOp<"log", [SameOperandsAndResultType]> {
+  let summary = "computes natural logarithm of a complex number";
+  let description = [{
+    The `log` op takes a single complex number and computes the natural
+    logarithm of it, i.e. `log(x)` or `log_e(x)`, where `x` is the input value.
+    `e` denotes Euler's number and is approximately equal to 2.718281.
+
+    Example:
+
+    ```mlir
+    %a = complex.log %b : complex<f32>
+    ```
+  }];
+
+  let results = (outs Complex<AnyFloat>:$result);
+}
+
+//===----------------------------------------------------------------------===//
+// Log1pOp
+//===----------------------------------------------------------------------===//
+
+def Log1pOp : ComplexUnaryOp<"log1p", [SameOperandsAndResultType]> {
+  let summary = "computes natural logarithm of a complex number";
+  let description = [{
+    The `log` op takes a single complex number and computes the natural
+    logarithm of one plus the given value, i.e. `log(1 + x)` or `log_e(1 + x)`,
+    where `x` is the input value. `e` denotes Euler's number and is
+    approximately equal to 2.718281.
+
+    Example:
+
+    ```mlir
+    %a = complex.log1p %b : complex<f32>
+    ```
+  }];
+
+  let results = (outs Complex<AnyFloat>:$result);
+}
+
+//===----------------------------------------------------------------------===//
 // MulOp
 //===----------------------------------------------------------------------===//
 
@@ -194,13 +254,30 @@ def MulOp : ComplexArithmeticOp<"mul"> {
 }
 
 //===----------------------------------------------------------------------===//
+// NegOp
+//===----------------------------------------------------------------------===//
+
+def NegOp : ComplexUnaryOp<"neg", [SameOperandsAndResultType]> {
+  let summary = "Negation operator";
+  let description = [{
+    The `neg` op takes a single complex number `complex` and returns `-complex`.
+
+    Example:
+
+    ```mlir
+    %a = complex.neg %b : complex<f32>
+    ```
+  }];
+
+  let results = (outs Complex<AnyFloat>:$result);
+}
+
+//===----------------------------------------------------------------------===//
 // NotEqualOp
 //===----------------------------------------------------------------------===//
 
 def NotEqualOp : Complex_Op<"neq",
-    [NoSideEffect, AllTypesMatch<["lhs", "rhs"]>,
-    DeclareOpInterfaceMethods<VectorUnrollOpInterface>] #
-    ElementwiseMappable.traits> {
+    [NoSideEffect, AllTypesMatch<["lhs", "rhs"]>, Elementwise]> {
   let summary = "computes whether two complex values are not equal";
   let description = [{
     The `neq` op takes two complex numbers and returns whether they are not
@@ -246,6 +323,25 @@ def ReOp : ComplexUnaryOp<"re",
   let hasFolder = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// SignOp
+//===----------------------------------------------------------------------===//
+
+def SignOp : ComplexUnaryOp<"sign", [SameOperandsAndResultType]> {
+  let summary = "computes sign of a complex number";
+  let description = [{
+    The `sign` op takes a single complex number and computes the sign of
+    it, i.e. `y = sign(x) = x / |x|` if `x != 0`, otherwise `y = 0`.
+
+    Example:
+
+    ```mlir
+    %a = complex.sign %b : complex<f32>
+    ```
+  }];
+
+  let results = (outs Complex<AnyFloat>:$result);
+}
 
 //===----------------------------------------------------------------------===//
 // SubOp

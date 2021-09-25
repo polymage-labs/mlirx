@@ -384,18 +384,18 @@ public:
       return failure();
     }
     auto &block = op.region().front();
-    auto returnOp = dyn_cast<ReturnOp>(block.back());
-    if (!returnOp) {
+    auto yieldOp = dyn_cast<AffineYieldOp>(block.back());
+    if (!yieldOp) {
       LLVM_DEBUG(llvm::dbgs() << "Only return terminated block implemented");
       return failure();
     }
 
     // Replace all uses of the results with the return values.
-    for (auto operandEn : llvm::enumerate(returnOp.getOperands()))
+    for (auto operandEn : llvm::enumerate(yieldOp.getOperands()))
       op.getResult(operandEn.index()).replaceAllUsesWith(operandEn.value());
 
     // Remove the terminator of the execute_region.
-    rewriter.eraseOp(returnOp);
+    rewriter.eraseOp(yieldOp);
 
     // Move the operations of the execute_region into its parent block.
     auto *parentBlock = op.getOperation()->getBlock();

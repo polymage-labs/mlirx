@@ -13,6 +13,9 @@
 
 #include "AMDGPU.h"
 #include "AMDGPUTargetMachine.h"
+#include "MCTargetDesc/R600MCTargetDesc.h"
+#include "R600.h"
+#include "R600Subtarget.h"
 #include "SIMachineFunctionInfo.h"
 #include "llvm/Analysis/LegacyDivergenceAnalysis.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -49,11 +52,11 @@ static bool isNullConstantOrUndef(SDValue V) {
     return true;
 
   ConstantSDNode *Const = dyn_cast<ConstantSDNode>(V);
-  return Const != nullptr && Const->isNullValue();
+  return Const != nullptr && Const->isZero();
 }
 
 static bool getConstantValue(SDValue N, uint32_t &Out) {
-  // This is only used for packed vectors, where ussing 0 for undef should
+  // This is only used for packed vectors, where using 0 for undef should
   // always be good.
   if (N.isUndef()) {
     Out = 0;
@@ -106,6 +109,10 @@ class AMDGPUDAGToDAGISel : public SelectionDAGISel {
   AMDGPU::SIModeRegisterDefaults Mode;
 
   bool EnableLateStructurizeCFG;
+
+  // Instructions that will be lowered with a final instruction that zeros the
+  // high result bits.
+  bool fp16SrcZerosHighBits(unsigned Opc) const;
 
 public:
   explicit AMDGPUDAGToDAGISel(TargetMachine *TM = nullptr,
@@ -347,7 +354,7 @@ static bool isExtractHiElt(SDValue In, SDValue &Out) {
 static SDValue stripExtractLoElt(SDValue In) {
   if (In.getOpcode() == ISD::EXTRACT_VECTOR_ELT) {
     if (ConstantSDNode *Idx = dyn_cast<ConstantSDNode>(In.getOperand(1))) {
-      if (Idx->isNullValue() && In.getValueSizeInBits() <= 32)
+      if (Idx->isZero() && In.getValueSizeInBits() <= 32)
         return In.getOperand(0);
     }
   }
@@ -400,6 +407,68 @@ bool AMDGPUDAGToDAGISel::runOnMachineFunction(MachineFunction &MF) {
   Subtarget = &MF.getSubtarget<GCNSubtarget>();
   Mode = AMDGPU::SIModeRegisterDefaults(MF.getFunction());
   return SelectionDAGISel::runOnMachineFunction(MF);
+}
+
+bool AMDGPUDAGToDAGISel::fp16SrcZerosHighBits(unsigned Opc) const {
+  // XXX - only need to list legal operations.
+  switch (Opc) {
+  case ISD::FADD:
+  case ISD::FSUB:
+  case ISD::FMUL:
+  case ISD::FDIV:
+  case ISD::FREM:
+  case ISD::FCANONICALIZE:
+  case ISD::UINT_TO_FP:
+  case ISD::SINT_TO_FP:
+  case ISD::FABS:
+    // Fabs is lowered to a bit operation, but it's an and which will clear the
+    // high bits anyway.
+  case ISD::FSQRT:
+  case ISD::FSIN:
+  case ISD::FCOS:
+  case ISD::FPOWI:
+  case ISD::FPOW:
+  case ISD::FLOG:
+  case ISD::FLOG2:
+  case ISD::FLOG10:
+  case ISD::FEXP:
+  case ISD::FEXP2:
+  case ISD::FCEIL:
+  case ISD::FTRUNC:
+  case ISD::FRINT:
+  case ISD::FNEARBYINT:
+  case ISD::FROUND:
+  case ISD::FFLOOR:
+  case ISD::FMINNUM:
+  case ISD::FMAXNUM:
+  case AMDGPUISD::FRACT:
+  case AMDGPUISD::CLAMP:
+  case AMDGPUISD::COS_HW:
+  case AMDGPUISD::SIN_HW:
+  case AMDGPUISD::FMIN3:
+  case AMDGPUISD::FMAX3:
+  case AMDGPUISD::FMED3:
+  case AMDGPUISD::FMAD_FTZ:
+  case AMDGPUISD::RCP:
+  case AMDGPUISD::RSQ:
+  case AMDGPUISD::RCP_IFLAG:
+  case AMDGPUISD::LDEXP:
+    // On gfx10, all 16-bit instructions preserve the high bits.
+    return Subtarget->getGeneration() <= AMDGPUSubtarget::GFX9;
+  case ISD::FP_ROUND:
+    // We may select fptrunc (fma/mad) to mad_mixlo, which does not zero the
+    // high bits on gfx9.
+    // TODO: If we had the source node we could see if the source was fma/mad
+    return Subtarget->getGeneration() == AMDGPUSubtarget::VOLCANIC_ISLANDS;
+  case ISD::FMA:
+  case ISD::FMAD:
+  case AMDGPUISD::DIV_FIXUP:
+    return Subtarget->getGeneration() == AMDGPUSubtarget::VOLCANIC_ISLANDS;
+  default:
+    // fcopysign, select and others may be lowered to 32-bit bit operations
+    // which don't zero the high bits.
+    return false;
+  }
 }
 
 bool AMDGPUDAGToDAGISel::matchLoadD16FromBuildVector(SDNode *N) const {
@@ -1141,7 +1210,14 @@ void AMDGPUDAGToDAGISel::SelectFMA_W_CHAIN(SDNode *N) {
   Ops[8] = N->getOperand(0);
   Ops[9] = N->getOperand(4);
 
-  CurDAG->SelectNodeTo(N, AMDGPU::V_FMA_F32_e64, N->getVTList(), Ops);
+  // If there are no source modifiers, prefer fmac over fma because it can use
+  // the smaller VOP2 encoding.
+  bool UseFMAC = Subtarget->hasDLInsts() &&
+                 cast<ConstantSDNode>(Ops[0])->isZero() &&
+                 cast<ConstantSDNode>(Ops[2])->isZero() &&
+                 cast<ConstantSDNode>(Ops[4])->isZero();
+  unsigned Opcode = UseFMAC ? AMDGPU::V_FMAC_F32_e64 : AMDGPU::V_FMA_F32_e64;
+  CurDAG->SelectNodeTo(N, Opcode, N->getVTList(), Ops);
 }
 
 void AMDGPUDAGToDAGISel::SelectFMUL_W_CHAIN(SDNode *N) {
@@ -1641,7 +1717,7 @@ bool AMDGPUDAGToDAGISel::SelectMUBUFOffset(SDValue Addr, SDValue &SRsrc,
       !cast<ConstantSDNode>(Idxen)->getSExtValue() &&
       !cast<ConstantSDNode>(Addr64)->getSExtValue()) {
     uint64_t Rsrc = TII->getDefaultRsrcDataFormat() |
-                    APInt::getAllOnesValue(32).getZExtValue(); // Size
+                    APInt::getAllOnes(32).getZExtValue(); // Size
     SDLoc DL(Addr);
 
     const SITargetLowering& Lowering =

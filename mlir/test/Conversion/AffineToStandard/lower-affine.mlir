@@ -649,7 +649,7 @@ func @affine.execute_region(%I: memref<128xi32>, %M: memref<1024xf32>, %n : inde
       %idx = affine.load %rI[%i] : memref<128xi32>
       %index = index_cast %idx : i32 to index
       affine.load %rM[%index]: memref<1024xf32>
-      return
+      affine.yield
     }
   // CHECK:      scf.for %arg3 = %c0 to %c128 step %c1 {
   // CHECK-NEXT:   %[[IDX1:.*]] = memref.load %arg0[%arg3] : memref<128xi32>
@@ -663,7 +663,7 @@ func @affine.execute_region(%I: memref<128xi32>, %M: memref<1024xf32>, %n : inde
       affine.for %j = 0 to %pow {
         addi %j, %j : index
       }
-      return
+      affine.yield
     }
   }
   // CHECK:      scf.for %arg3 =

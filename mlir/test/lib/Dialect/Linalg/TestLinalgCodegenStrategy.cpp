@@ -28,6 +28,10 @@ using namespace mlir::linalg;
 namespace {
 struct TestLinalgCodegenStrategy
     : public PassWrapper<TestLinalgCodegenStrategy, FunctionPass> {
+  StringRef getArgument() const final { return "test-linalg-codegen-strategy"; }
+  StringRef getDescription() const final {
+    return "Test Linalg Codegen Strategy.";
+  }
   TestLinalgCodegenStrategy() = default;
   TestLinalgCodegenStrategy(const TestLinalgCodegenStrategy &pass) {}
 
@@ -144,6 +148,9 @@ void TestLinalgCodegenStrategy::runStrategy<LinalgOp>(
               .setAlignment(16)
               .setUseFullTileBuffersByDefault(registerPromoteFullTile))
       .vectorizeIf(vectorize, anchorOpName)
+      .setEnableVectorTransferPartialRewrite(true)
+      .setEnableVectorContractLowering(true)
+      .setEnableVectorToSCFConversion(true)
       .setVectorTransformsOptions(
           vector::VectorTransformsOptions()
               .setVectorTransformsOptions(vectorContractLowering)
@@ -173,6 +180,9 @@ void TestLinalgCodegenStrategy::runStrategy(
               .setAlignment(16)
               .setUseFullTileBuffersByDefault(registerPromoteFullTile))
       .template vectorizeIf<OpType>(vectorize)
+      .setEnableVectorTransferPartialRewrite(true)
+      .setEnableVectorContractLowering(true)
+      .setEnableVectorToSCFConversion(true)
       .setVectorTransformsOptions(
           vector::VectorTransformsOptions()
               .setVectorTransformsOptions(vectorContractLowering)
@@ -227,8 +237,7 @@ void TestLinalgCodegenStrategy::runOnFunction() {
 namespace mlir {
 namespace test {
 void registerTestLinalgCodegenStrategy() {
-  PassRegistration<TestLinalgCodegenStrategy> testLinalgCodegenStrategyPass(
-      "test-linalg-codegen-strategy", "Test Linalg Codegen Strategy.");
+  PassRegistration<TestLinalgCodegenStrategy>();
 }
 } // namespace test
 } // namespace mlir

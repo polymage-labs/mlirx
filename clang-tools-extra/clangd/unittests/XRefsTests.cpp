@@ -420,6 +420,18 @@ TEST(LocateSymbol, All) {
   //   $def is the definition location (if absent, symbol has no definition)
   //   unnamed range becomes both $decl and $def.
   const char *Tests[] = {
+      R"cpp(
+        struct X {
+          union {
+            int [[a]];
+            float b;
+          };
+        };
+        int test(X &x) {
+          return x.^a;
+        }
+      )cpp",
+
       R"cpp(// Local variable
         int main() {
           int [[bonjour]];
@@ -1935,6 +1947,9 @@ TEST(FindReferences, IncludeOverrides) {
           void $overridedecl[[func]]() override;
         };
         void Derived::$overridedef[[func]]() {}
+        class Derived2 : public Base {
+          void $overridedef[[func]]() override {}
+        };
         void test(Derived* D) {
           D->func();  // No references to the overrides.
         })cpp";
