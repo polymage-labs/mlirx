@@ -816,15 +816,6 @@ func @tensor_load_store(%0 : memref<4x4xi32>) {
   return
 }
 
-// CHECK-LABEL: func @return_in_op_with_region
-func @return_in_op_with_region() {
-  "foo.region"() ({
-    %c9 = constant 9 : i32
-    return %c9 : i32
-  }): () -> (i32)
-  return
-}
-
 // CHECK-LABEL: func @unranked_tensor_load_store
 func @unranked_tensor_load_store(%0 : memref<*xi32>) {
   // CHECK: %[[TENSOR:.*]] = memref.tensor_load %[[MEMREF:.*]] : memref<*xi32>
