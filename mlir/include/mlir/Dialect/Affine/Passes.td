@@ -138,6 +138,10 @@ def AffineScalarReplacement : FunctionPass<"affine-scalrep"> {
     ```
   }];
   let constructor = "mlir::createAffineScalarReplacementPass()";
+  let options = [Option<"forwardOnly", "forward-only", "bool",
+                        /*default=*/"false",
+                        "Whether to only perform store to load forwarding and "
+                        "invariant load elimination">];
 }
 
 def AffineSuperVectorize : FunctionPass<"affine-super-vectorize"> {
