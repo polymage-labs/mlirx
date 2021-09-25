@@ -23,6 +23,10 @@ int f0() {
   int a;
   w = (a = 0);
 
+  // Following gcc, warn for a volatile variable.
+  volatile int b; // expected-warning{{variable 'b' set but not used}}
+  b = 0;
+
   int x;
   x = 0;
   return x;
@@ -44,4 +48,14 @@ void f2 (void) {
   int x;
   x = 0;
   (void) sizeof(x);
+}
+
+void for_cleanup(int *x) {
+  *x = 0;
+}
+
+void f3(void) {
+  // Don't warn if the __cleanup__ attribute is used.
+  __attribute__((__cleanup__(for_cleanup))) int x;
+  x = 5;
 }

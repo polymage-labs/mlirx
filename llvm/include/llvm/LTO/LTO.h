@@ -119,7 +119,7 @@ private:
 
   StringRef TargetTriple, SourceFileName, COFFLinkerOpts;
   std::vector<StringRef> DependentLibraries;
-  std::vector<StringRef> ComdatTable;
+  std::vector<std::pair<StringRef, Comdat::SelectionKind>> ComdatTable;
 
 public:
   ~InputFile();
@@ -172,7 +172,9 @@ public:
   StringRef getSourceFileName() const { return SourceFileName; }
 
   // Returns a table with all the comdats used by this file.
-  ArrayRef<StringRef> getComdatTable() const { return ComdatTable; }
+  ArrayRef<std::pair<StringRef, Comdat::SelectionKind>> getComdatTable() const {
+    return ComdatTable;
+  }
 
   // Returns the only BitcodeModule from InputFile.
   BitcodeModule &getSingleBitcodeModule();
@@ -442,6 +444,9 @@ private:
   // Identify symbols exported dynamically, and that therefore could be
   // referenced by a shared library not visible to the linker.
   DenseSet<GlobalValue::GUID> DynamicExportSymbols;
+
+  // Diagnostic optimization remarks file
+  std::unique_ptr<ToolOutputFile> DiagnosticOutputFile;
 };
 
 /// The resolution for a symbol. The linker must provide a SymbolResolution for

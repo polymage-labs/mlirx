@@ -95,11 +95,12 @@ def AffineLoopUnrollAndJam : FunctionPass<"affine-loop-unroll-jam"> {
 }
 
 def AffineScalarReplacement : FunctionPass<"affine-scalrep"> {
-  let summary = "Perform scalar replacement of affine memrefs accesses";
+  let summary = "Replace affine memref acceses by scalars by forwarding stores "
+                "to loads and eliminating redundant loads";
   let description = [{
-    This pass performs store to load forwarding for memref's to eliminate memory
-    accesses and potentially the entire memref if all its accesses are
-    forwarded.
+    This pass performs store to load forwarding and redundant load elimination
+    for affine memref accesses and potentially eliminates the entire memref
+    if all its accesses are forwarded.
 
     Input
 

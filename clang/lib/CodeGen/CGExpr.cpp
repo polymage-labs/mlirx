@@ -35,6 +35,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/MDBuilder.h"
+#include "llvm/IR/MatrixBuilder.h"
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Path.h"
@@ -122,7 +123,7 @@ llvm::AllocaInst *CodeGenFunction::CreateTempAlloca(llvm::Type *Ty,
 Address CodeGenFunction::CreateDefaultAlignTempAlloca(llvm::Type *Ty,
                                                       const Twine &Name) {
   CharUnits Align =
-    CharUnits::fromQuantity(CGM.getDataLayout().getABITypeAlignment(Ty));
+      CharUnits::fromQuantity(CGM.getDataLayout().getPrefTypeAlignment(Ty));
   return CreateTempAlloca(Ty, Align, Name);
 }
 
@@ -1642,7 +1643,7 @@ static bool getRangeForType(CodeGenFunction &CGF, QualType Ty,
     } else {
       assert(NumPositiveBits <= Bitwidth);
       End = llvm::APInt(Bitwidth, 1) << NumPositiveBits;
-      Min = llvm::APInt(Bitwidth, 0);
+      Min = llvm::APInt::getZero(Bitwidth);
     }
   }
   return true;
@@ -1939,10 +1940,15 @@ RValue CodeGenFunction::EmitLoadOfLValue(LValue LV, SourceLocation Loc) {
     return EmitLoadOfGlobalRegLValue(LV);
 
   if (LV.isMatrixElt()) {
+    llvm::Value *Idx = LV.getMatrixIdx();
+    if (CGM.getCodeGenOpts().OptimizationLevel > 0) {
+      const auto *const MatTy = LV.getType()->getAs<ConstantMatrixType>();
+      llvm::MatrixBuilder<CGBuilderTy> MB(Builder);
+      MB.CreateIndexAssumption(Idx, MatTy->getNumElementsFlattened());
+    }
     llvm::LoadInst *Load =
         Builder.CreateLoad(LV.getMatrixAddress(), LV.isVolatileQualified());
-    return RValue::get(
-        Builder.CreateExtractElement(Load, LV.getMatrixIdx(), "matrixext"));
+    return RValue::get(Builder.CreateExtractElement(Load, Idx, "matrixext"));
   }
 
   assert(LV.isBitField() && "Unknown LValue type!");
@@ -2080,9 +2086,15 @@ void CodeGenFunction::EmitStoreThroughLValue(RValue Src, LValue Dst,
       return EmitStoreThroughGlobalRegLValue(Src, Dst);
 
     if (Dst.isMatrixElt()) {
-      llvm::Value *Vec = Builder.CreateLoad(Dst.getMatrixAddress());
-      Vec = Builder.CreateInsertElement(Vec, Src.getScalarVal(),
-                                        Dst.getMatrixIdx(), "matins");
+      llvm::Value *Idx = Dst.getMatrixIdx();
+      if (CGM.getCodeGenOpts().OptimizationLevel > 0) {
+        const auto *const MatTy = Dst.getType()->getAs<ConstantMatrixType>();
+        llvm::MatrixBuilder<CGBuilderTy> MB(Builder);
+        MB.CreateIndexAssumption(Idx, MatTy->getNumElementsFlattened());
+      }
+      llvm::Instruction *Load = Builder.CreateLoad(Dst.getMatrixAddress());
+      llvm::Value *Vec =
+          Builder.CreateInsertElement(Load, Src.getScalarVal(), Idx, "matins");
       Builder.CreateStore(Vec, Dst.getMatrixAddress(),
                           Dst.isVolatileQualified());
       return;
@@ -3498,7 +3510,7 @@ void CodeGenFunction::EmitTrapCheck(llvm::Value *Checked,
     if (!CGM.getCodeGenOpts().TrapFuncName.empty()) {
       auto A = llvm::Attribute::get(getLLVMContext(), "trap-func-name",
                                     CGM.getCodeGenOpts().TrapFuncName);
-      TrapCall->addAttribute(llvm::AttributeList::FunctionIndex, A);
+      TrapCall->addFnAttr(A);
     }
     TrapCall->setDoesNotReturn();
     TrapCall->setDoesNotThrow();
@@ -3522,7 +3534,7 @@ llvm::CallInst *CodeGenFunction::EmitTrapCall(llvm::Intrinsic::ID IntrID) {
   if (!CGM.getCodeGenOpts().TrapFuncName.empty()) {
     auto A = llvm::Attribute::get(getLLVMContext(), "trap-func-name",
                                   CGM.getCodeGenOpts().TrapFuncName);
-    TrapCall->addAttribute(llvm::AttributeList::FunctionIndex, A);
+    TrapCall->addFnAttr(A);
   }
 
   return TrapCall;

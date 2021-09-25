@@ -673,12 +673,25 @@ PreservedAnalyses MemorySanitizerPass::run(Function &F,
   return PreservedAnalyses::all();
 }
 
-PreservedAnalyses MemorySanitizerPass::run(Module &M,
-                                           ModuleAnalysisManager &AM) {
+PreservedAnalyses
+ModuleMemorySanitizerPass::run(Module &M, ModuleAnalysisManager &AM) {
   if (Options.Kernel)
     return PreservedAnalyses::all();
   insertModuleCtor(M);
   return PreservedAnalyses::none();
+}
+
+void MemorySanitizerPass::printPipeline(
+    raw_ostream &OS, function_ref<StringRef(StringRef)> MapClassName2PassName) {
+  static_cast<PassInfoMixin<MemorySanitizerPass> *>(this)->printPipeline(
+      OS, MapClassName2PassName);
+  OS << "<";
+  if (Options.Recover)
+    OS << "recover;";
+  if (Options.Kernel)
+    OS << "kernel;";
+  OS << "track-origins=" << Options.TrackOrigins;
+  OS << ">";
 }
 
 char MemorySanitizerLegacyPass::ID = 0;
@@ -2520,6 +2533,23 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
   void visitAShr(BinaryOperator &I) { handleShift(I); }
   void visitLShr(BinaryOperator &I) { handleShift(I); }
 
+  void handleFunnelShift(IntrinsicInst &I) {
+    IRBuilder<> IRB(&I);
+    // If any of the S2 bits are poisoned, the whole thing is poisoned.
+    // Otherwise perform the same shift on S0 and S1.
+    Value *S0 = getShadow(&I, 0);
+    Value *S1 = getShadow(&I, 1);
+    Value *S2 = getShadow(&I, 2);
+    Value *S2Conv =
+        IRB.CreateSExt(IRB.CreateICmpNE(S2, getCleanShadow(S2)), S2->getType());
+    Value *V2 = I.getOperand(2);
+    Function *Intrin = Intrinsic::getDeclaration(
+        I.getModule(), I.getIntrinsicID(), S2Conv->getType());
+    Value *Shift = IRB.CreateCall(Intrin, {S0, S1, V2});
+    setShadow(&I, IRB.CreateOr(Shift, S2Conv));
+    setOriginForNaryOp(I);
+  }
+
   /// Instrument llvm.memmove
   ///
   /// At this point we don't know if llvm.memmove will be inlined or not.
@@ -3117,7 +3147,7 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
     if (PropagateShadow) {
       std::tie(ShadowPtr, OriginPtr) =
           getShadowOriginPtr(Addr, IRB, ShadowTy, Alignment, /*isStore*/ false);
-      setShadow(&I, IRB.CreateMaskedLoad(ShadowPtr, Alignment, Mask,
+      setShadow(&I, IRB.CreateMaskedLoad(ShadowTy, ShadowPtr, Alignment, Mask,
                                          getShadow(PassThru), "_msmaskedld"));
     } else {
       setShadow(&I, getCleanShadow(&I));
@@ -3512,6 +3542,11 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
       handleBinarySdIntrinsic(I);
       break;
 
+    case Intrinsic::fshl:
+    case Intrinsic::fshr:
+      handleFunnelShift(I);
+      break;
+
     case Intrinsic::is_constant:
       // The result of llvm.is.constant() is always defined.
       setShadow(&I, getCleanShadow(&I));
@@ -3631,9 +3666,9 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
           .addAttribute(Attribute::ArgMemOnly)
           .addAttribute(Attribute::Speculatable);
 
-      Call->removeAttributes(AttributeList::FunctionIndex, B);
+      Call->removeFnAttrs(B);
       if (Function *Func = Call->getCalledFunction()) {
-        Func->removeAttributes(AttributeList::FunctionIndex, B);
+        Func->removeFnAttrs(B);
       }
 
       maybeMarkSanitizerLibraryCallNoBuiltin(Call, TLI);
@@ -3785,7 +3820,7 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
     if (isAMustTailRetVal(RetVal)) return;
     Value *ShadowPtr = getShadowPtrForRetval(RetVal, IRB);
     bool HasNoUndef =
-        F.hasAttribute(AttributeList::ReturnIndex, Attribute::NoUndef);
+        F.hasRetAttribute(Attribute::NoUndef);
     bool StoreShadow = !(ClEagerChecks && HasNoUndef);
     // FIXME: Consider using SpecialCaseList to specify a list of functions that
     // must always return fully initialized values. For now, we hardcode "main".
@@ -4154,7 +4189,7 @@ struct VarArgAMD64Helper : public VarArgHelper {
                     MemorySanitizerVisitor &MSV)
       : F(F), MS(MS), MSV(MSV) {
     AMD64FpEndOffset = AMD64FpEndOffsetSSE;
-    for (const auto &Attr : F.getAttributes().getFnAttributes()) {
+    for (const auto &Attr : F.getAttributes().getFnAttrs()) {
       if (Attr.isStringAttribute() &&
           (Attr.getKindAsString() == "target-features")) {
         if (Attr.getValueAsString().contains("-sse"))
@@ -5308,6 +5343,9 @@ bool MemorySanitizer::sanitizeFunction(Function &F, TargetLibraryInfo &TLI) {
   if (!CompileKernel && F.getName() == kMsanModuleCtorName)
     return false;
 
+  if (F.hasFnAttribute(Attribute::DisableSanitizerInstrumentation))
+    return false;
+
   MemorySanitizerVisitor Visitor(F, *this, TLI);
 
   // Clear out readonly/readnone attributes.
@@ -5317,7 +5355,7 @@ bool MemorySanitizer::sanitizeFunction(Function &F, TargetLibraryInfo &TLI) {
       .addAttribute(Attribute::WriteOnly)
       .addAttribute(Attribute::ArgMemOnly)
       .addAttribute(Attribute::Speculatable);
-  F.removeAttributes(AttributeList::FunctionIndex, B);
+  F.removeFnAttrs(B);
 
   return Visitor.runOnFunction();
 }

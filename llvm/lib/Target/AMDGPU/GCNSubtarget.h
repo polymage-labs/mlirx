@@ -21,13 +21,6 @@
 #include "SIInstrInfo.h"
 #include "llvm/CodeGen/SelectionDAGTargetInfo.h"
 
-namespace llvm {
-
-class MCInst;
-class MCInstrInfo;
-
-} // namespace llvm
-
 #define GET_SUBTARGETINFO_HEADER
 #include "AMDGPUGenSubtargetInfo.inc"
 
@@ -136,6 +129,7 @@ protected:
   bool HasGFX10A16;
   bool HasG16;
   bool HasNSAEncoding;
+  unsigned NSAMaxSize;
   bool GFX10_AEncoding;
   bool GFX10_BEncoding;
   bool HasDLInsts;
@@ -271,7 +265,7 @@ public:
     return (Generation)Gen;
   }
 
-  /// Return the number of high bits known to be zero fror a frame index.
+  /// Return the number of high bits known to be zero for a frame index.
   unsigned getKnownHighZeroBitsForFrameIndex() const {
     return countLeadingZeros(MaxWaveScratchSize) + getWavefrontSizeLog2();
   }
@@ -285,6 +279,11 @@ public:
   }
 
   unsigned getConstantBusLimit(unsigned Opcode) const;
+
+  /// Returns if the result of this instruction with a 16-bit result returned in
+  /// a 32-bit register implicitly zeroes the high 16-bits, rather than preserve
+  /// the original value.
+  bool zeroesHigh16BitsOfDest(unsigned Opcode) const;
 
   bool hasIntClamp() const {
     return HasIntClamp;
@@ -606,7 +605,7 @@ public:
   }
 
   /// Return if most LDS instructions have an m0 use that require m0 to be
-  /// iniitalized.
+  /// initialized.
   bool ldsRequiresM0Init() const {
     return getGeneration() < GFX9;
   }
@@ -747,7 +746,7 @@ public:
   }
 
   // Scratch is allocated in 256 dword per wave blocks for the entire
-  // wavefront. When viewed from the perspecive of an arbitrary workitem, this
+  // wavefront. When viewed from the perspective of an arbitrary workitem, this
   // is 4-byte aligned.
   //
   // Only 4-byte alignment is really needed to access anything. Transformations
@@ -812,9 +811,7 @@ public:
     return HasScalarAtomics;
   }
 
-  bool hasLDSFPAtomics() const {
-    return GFX8Insts;
-  }
+  bool hasLDSFPAtomicAdd() const { return GFX8Insts; }
 
   /// \returns true if the subtarget has the v_permlanex16_b32 instruction.
   bool hasPermLaneX16() const { return getGeneration() >= GFX10; }
@@ -872,6 +869,8 @@ public:
   bool hasImageGather4D16Bug() const { return HasImageGather4D16Bug; }
 
   bool hasNSAEncoding() const { return HasNSAEncoding; }
+
+  unsigned getNSAMaxSize() const { return NSAMaxSize; }
 
   bool hasGFX10_AEncoding() const {
     return GFX10_AEncoding;
@@ -1033,8 +1032,23 @@ public:
     return AMDGPU::IsaInfo::getMaxNumSGPRs(this, WavesPerEU, Addressable);
   }
 
-  /// \returns Reserved number of SGPRs for given function \p MF.
+  /// \returns Reserved number of SGPRs. This is common
+  /// utility function called by MachineFunction and
+  /// Function variants of getReservedNumSGPRs.
+  unsigned getBaseReservedNumSGPRs(const bool HasFlatScratchInit) const;
+  /// \returns Reserved number of SGPRs for given machine function \p MF.
   unsigned getReservedNumSGPRs(const MachineFunction &MF) const;
+
+  /// \returns Reserved number of SGPRs for given function \p F.
+  unsigned getReservedNumSGPRs(const Function &F) const;
+
+  /// \returns max num SGPRs. This is the common utility
+  /// function called by MachineFunction and Function
+  /// variants of getMaxNumSGPRs.
+  unsigned getBaseMaxNumSGPRs(const Function &F,
+                              std::pair<unsigned, unsigned> WavesPerEU,
+                              unsigned PreloadedSGPRs,
+                              unsigned ReservedNumSGPRs) const;
 
   /// \returns Maximum number of SGPRs that meets number of waves per execution
   /// unit requirement for function \p MF, or number of SGPRs explicitly
@@ -1045,6 +1059,16 @@ public:
   /// subtarget's specifications, or does not meet number of waves per execution
   /// unit requirement.
   unsigned getMaxNumSGPRs(const MachineFunction &MF) const;
+
+  /// \returns Maximum number of SGPRs that meets number of waves per execution
+  /// unit requirement for function \p F, or number of SGPRs explicitly
+  /// requested using "amdgpu-num-sgpr" attribute attached to function \p F.
+  ///
+  /// \returns Value that meets number of waves per execution unit requirement
+  /// if explicitly requested value cannot be converted to integer, violates
+  /// subtarget's specifications, or does not meet number of waves per execution
+  /// unit requirement.
+  unsigned getMaxNumSGPRs(const Function &F) const;
 
   /// \returns VGPR allocation granularity supported by the subtarget.
   unsigned getVGPRAllocGranule() const {
@@ -1078,6 +1102,20 @@ public:
     return AMDGPU::IsaInfo::getMaxNumVGPRs(this, WavesPerEU);
   }
 
+  /// \returns max num VGPRs. This is the common utility function
+  /// called by MachineFunction and Function variants of getMaxNumVGPRs.
+  unsigned getBaseMaxNumVGPRs(const Function &F,
+                              std::pair<unsigned, unsigned> WavesPerEU) const;
+  /// \returns Maximum number of VGPRs that meets number of waves per execution
+  /// unit requirement for function \p F, or number of VGPRs explicitly
+  /// requested using "amdgpu-num-vgpr" attribute attached to function \p F.
+  ///
+  /// \returns Value that meets number of waves per execution unit requirement
+  /// if explicitly requested value cannot be converted to integer, violates
+  /// subtarget's specifications, or does not meet number of waves per execution
+  /// unit requirement.
+  unsigned getMaxNumVGPRs(const Function &F) const;
+
   /// \returns Maximum number of VGPRs that meets number of waves per execution
   /// unit requirement for function \p MF, or number of VGPRs explicitly
   /// requested using "amdgpu-num-vgpr" attribute attached to function \p MF.
@@ -1091,6 +1129,9 @@ public:
   void getPostRAMutations(
       std::vector<std::unique_ptr<ScheduleDAGMutation>> &Mutations)
       const override;
+
+  std::unique_ptr<ScheduleDAGMutation>
+  createFillMFMAShadowMutation(const TargetInstrInfo *TII) const;
 
   bool isWave32() const {
     return getWavefrontSize() == 32;

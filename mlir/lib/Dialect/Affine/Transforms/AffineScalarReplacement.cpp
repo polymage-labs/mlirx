@@ -101,7 +101,7 @@ static bool storeMayReachLoad(Operation *storeOp, Operation *loadOp,
                               unsigned minSurroundingLoops) {
   MemRefAccess srcAccess(storeOp);
   MemRefAccess destAccess(loadOp);
-  FlatAffineConstraints dependenceConstraints;
+  FlatAffineValueConstraints dependenceConstraints;
   unsigned nsLoops = getNumCommonSurroundingLoops(*loadOp, *storeOp);
   unsigned d;
   // Dependences at loop depth <= minSurroundingLoops do NOT matter.

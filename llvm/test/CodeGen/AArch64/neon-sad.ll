@@ -9,13 +9,9 @@ define i32 @test_sad_v16i8_zext(i8* nocapture readonly %a, i8* nocapture readonl
 ; CHECK:       // %bb.0: // %entry
 ; CHECK-NEXT:    ldr q0, [x0]
 ; CHECK-NEXT:    ldr q1, [x1]
-; CHECK-NEXT:    uabd v0.16b, v1.16b, v0.16b
-; CHECK-NEXT:    ushll2 v1.8h, v0.16b, #0
-; CHECK-NEXT:    ushll v0.8h, v0.8b, #0
-; CHECK-NEXT:    uaddl2 v2.4s, v0.8h, v1.8h
-; CHECK-NEXT:    uaddl v0.4s, v0.4h, v1.4h
-; CHECK-NEXT:    add v0.4s, v0.4s, v2.4s
-; CHECK-NEXT:    addv s0, v0.4s
+; CHECK-NEXT:    uabdl v2.8h, v1.8b, v0.8b
+; CHECK-NEXT:    uabal2 v2.8h, v1.16b, v0.16b
+; CHECK-NEXT:    uaddlv s0, v2.8h
 ; CHECK-NEXT:    fmov w0, s0
 ; CHECK-NEXT:    ret
 entry:
@@ -36,13 +32,9 @@ define i32 @test_sad_v16i8_sext(i8* nocapture readonly %a, i8* nocapture readonl
 ; CHECK:       // %bb.0: // %entry
 ; CHECK-NEXT:    ldr q0, [x0]
 ; CHECK-NEXT:    ldr q1, [x1]
-; CHECK-NEXT:    sabd v0.16b, v1.16b, v0.16b
-; CHECK-NEXT:    ushll2 v1.8h, v0.16b, #0
-; CHECK-NEXT:    ushll v0.8h, v0.8b, #0
-; CHECK-NEXT:    uaddl2 v2.4s, v0.8h, v1.8h
-; CHECK-NEXT:    uaddl v0.4s, v0.4h, v1.4h
-; CHECK-NEXT:    add v0.4s, v0.4s, v2.4s
-; CHECK-NEXT:    addv s0, v0.4s
+; CHECK-NEXT:    sabdl v2.8h, v1.8b, v0.8b
+; CHECK-NEXT:    sabal2 v2.8h, v1.16b, v0.16b
+; CHECK-NEXT:    uaddlv s0, v2.8h
 ; CHECK-NEXT:    fmov w0, s0
 ; CHECK-NEXT:    ret
 entry:

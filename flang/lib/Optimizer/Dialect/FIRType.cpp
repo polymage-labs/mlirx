@@ -13,6 +13,7 @@
 #include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/Dialect/FIRDialect.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinDialect.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -188,7 +189,7 @@ bool isa_fir_type(mlir::Type t) {
 }
 
 bool isa_std_type(mlir::Type t) {
-  return t.getDialect().getNamespace().empty();
+  return llvm::isa<mlir::BuiltinDialect>(t.getDialect());
 }
 
 bool isa_fir_or_std_type(mlir::Type t) {
@@ -196,24 +197,6 @@ bool isa_fir_or_std_type(mlir::Type t) {
     return llvm::all_of(funcType.getInputs(), isa_fir_or_std_type) &&
            llvm::all_of(funcType.getResults(), isa_fir_or_std_type);
   return isa_fir_type(t) || isa_std_type(t);
-}
-
-bool isa_ref_type(mlir::Type t) {
-  return t.isa<ReferenceType>() || t.isa<PointerType>() || t.isa<HeapType>();
-}
-
-bool isa_box_type(mlir::Type t) {
-  return t.isa<BoxType>() || t.isa<BoxCharType>() || t.isa<BoxProcType>();
-}
-
-bool isa_passbyref_type(mlir::Type t) {
-  return t.isa<ReferenceType>() || isa_box_type(t) ||
-         t.isa<mlir::FunctionType>();
-}
-
-bool isa_aggregate(mlir::Type t) {
-  return t.isa<SequenceType>() || t.isa<RecordType>() ||
-         t.isa<mlir::TupleType>();
 }
 
 mlir::Type dyn_cast_ptrEleTy(mlir::Type t) {
@@ -299,7 +282,7 @@ BoxProcType::verify(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
   return emitError() << "invalid type for boxproc" << eleTy << '\n';
 }
 
-static bool canBePointerOrHeapElementType(mlir::Type eleTy) {
+static bool cannotBePointerOrHeapElementType(mlir::Type eleTy) {
   return eleTy.isa<BoxType, BoxCharType, BoxProcType, ShapeType, ShapeShiftType,
                    SliceType, FieldType, LenType, HeapType, PointerType,
                    ReferenceType, TypeDescType>();
@@ -435,7 +418,7 @@ void fir::HeapType::print(mlir::DialectAsmPrinter &printer) const {
 mlir::LogicalResult
 fir::HeapType::verify(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
                       mlir::Type eleTy) {
-  if (canBePointerOrHeapElementType(eleTy))
+  if (cannotBePointerOrHeapElementType(eleTy))
     return emitError() << "cannot build a heap pointer to type: " << eleTy
                        << '\n';
   return mlir::success();
@@ -486,7 +469,7 @@ void fir::PointerType::print(mlir::DialectAsmPrinter &printer) const {
 mlir::LogicalResult fir::PointerType::verify(
     llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
     mlir::Type eleTy) {
-  if (canBePointerOrHeapElementType(eleTy))
+  if (cannotBePointerOrHeapElementType(eleTy))
     return emitError() << "cannot build a pointer to type: " << eleTy << '\n';
   return mlir::success();
 }

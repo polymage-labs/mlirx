@@ -191,6 +191,10 @@ public:
                              StringRef Str) {
   }
 
+  /// Callback invoked when a \#pragma mark comment is read.
+  virtual void PragmaMark(SourceLocation Loc, StringRef Trivia) {
+  }
+
   /// Callback invoked when a \#pragma detect_mismatch directive is
   /// read.
   virtual void PragmaDetectMismatch(SourceLocation Loc, StringRef Name,
@@ -486,6 +490,11 @@ public:
                      StringRef Str) override {
     First->PragmaComment(Loc, Kind, Str);
     Second->PragmaComment(Loc, Kind, Str);
+  }
+
+  void PragmaMark(SourceLocation Loc, StringRef Trivia) override {
+    First->PragmaMark(Loc, Trivia);
+    Second->PragmaMark(Loc, Trivia);
   }
 
   void PragmaDetectMismatch(SourceLocation Loc, StringRef Name,

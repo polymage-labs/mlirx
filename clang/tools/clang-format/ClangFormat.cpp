@@ -19,6 +19,7 @@
 #include "clang/Basic/Version.h"
 #include "clang/Format/Format.h"
 #include "clang/Rewrite/Core/Rewriter.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
@@ -103,6 +104,13 @@ static cl::opt<bool> SortIncludes(
     cl::desc("If set, overrides the include sorting behavior determined by the "
              "SortIncludes style flag"),
     cl::cat(ClangFormatCategory));
+
+static cl::opt<std::string> QualifierAlignment(
+    "qualifier-alignment",
+    cl::desc(
+        "If set, overrides the qualifier alignment style determined by the "
+        "QualifierAlignment style flag"),
+    cl::init(""), cl::cat(ClangFormatCategory));
 
 static cl::opt<bool>
     Verbose("verbose", cl::desc("If set, shows the list of processed files"),
@@ -402,6 +410,27 @@ static bool format(StringRef FileName) {
     return true;
   }
 
+  StringRef QualifierAlignmentOrder = QualifierAlignment;
+
+  FormatStyle->QualifierAlignment =
+      StringSwitch<FormatStyle::QualifierAlignmentStyle>(
+          QualifierAlignmentOrder.lower())
+          .Case("right", FormatStyle::QAS_Right)
+          .Case("left", FormatStyle::QAS_Left)
+          .Default(FormatStyle->QualifierAlignment);
+
+  if (FormatStyle->QualifierAlignment == FormatStyle::QAS_Left)
+    FormatStyle->QualifierOrder = {"const", "volatile", "type"};
+  else if (FormatStyle->QualifierAlignment == FormatStyle::QAS_Right)
+    FormatStyle->QualifierOrder = {"type", "const", "volatile"};
+  else if (QualifierAlignmentOrder.contains("type")) {
+    FormatStyle->QualifierAlignment = FormatStyle::QAS_Custom;
+    SmallVector<StringRef> Qualifiers;
+    QualifierAlignmentOrder.split(Qualifiers, " ", /*MaxSplit=*/-1,
+                                  /*KeepEmpty=*/false);
+    FormatStyle->QualifierOrder = {Qualifiers.begin(), Qualifiers.end()};
+  }
+
   if (SortIncludes.getNumOccurrences() != 0) {
     if (SortIncludes)
       FormatStyle->SortIncludes = FormatStyle::SI_CaseSensitive;
@@ -411,6 +440,17 @@ static bool format(StringRef FileName) {
   unsigned CursorPosition = Cursor;
   Replacements Replaces = sortIncludes(*FormatStyle, Code->getBuffer(), Ranges,
                                        AssumedFileName, &CursorPosition);
+
+  // To format JSON insert a variable to trick the code into thinking its
+  // JavaScript.
+  if (FormatStyle->isJson()) {
+    auto Err = Replaces.add(tooling::Replacement(
+        tooling::Replacement(AssumedFileName, 0, 0, "x = ")));
+    if (Err) {
+      llvm::errs() << "Bad Json variable insertion\n";
+    }
+  }
+
   auto ChangedCode = tooling::applyAllReplacements(Code->getBuffer(), Replaces);
   if (!ChangedCode) {
     llvm::errs() << llvm::toString(ChangedCode.takeError()) << "\n";
@@ -506,7 +546,8 @@ int main(int argc, const char **argv) {
   cl::SetVersionPrinter(PrintVersion);
   cl::ParseCommandLineOptions(
       argc, argv,
-      "A tool to format C/C++/Java/JavaScript/Objective-C/Protobuf/C# code.\n\n"
+      "A tool to format C/C++/Java/JavaScript/JSON/Objective-C/Protobuf/C# "
+      "code.\n\n"
       "If no arguments are specified, it formats the code from standard input\n"
       "and writes the result to the standard output.\n"
       "If <file>s are given, it reformats the files. If -i is specified\n"

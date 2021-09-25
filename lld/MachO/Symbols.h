@@ -55,10 +55,6 @@ public:
 
   virtual uint64_t getVA() const { return 0; }
 
-  virtual uint64_t getFileOffset() const {
-    llvm_unreachable("attempt to get an offset from a non-defined symbol");
-  }
-
   virtual bool isWeakDef() const { llvm_unreachable("cannot be weak def"); }
 
   // Only undefined or dylib symbols can be weak references. A weak reference
@@ -133,14 +129,13 @@ public:
     return isWeakDef() && isExternal() && !privateExtern;
   }
   bool isTlv() const override {
-    return !isAbsolute() && isThreadLocalVariables(isec->flags);
+    return !isAbsolute() && isThreadLocalVariables(isec->getFlags());
   }
 
   bool isExternal() const { return external; }
   bool isAbsolute() const { return isec == nullptr; }
 
   uint64_t getVA() const override;
-  uint64_t getFileOffset() const override;
 
   static bool classof(const Symbol *s) { return s->kind() == DefinedKind; }
 
@@ -311,8 +306,10 @@ T *replaceSymbol(Symbol *s, ArgT &&...arg) {
          "Not a Symbol");
 
   bool isUsedInRegularObj = s->isUsedInRegularObj;
+  bool used = s->used;
   T *sym = new (s) T(std::forward<ArgT>(arg)...);
   sym->isUsedInRegularObj |= isUsedInRegularObj;
+  sym->used |= used;
   return sym;
 }
 

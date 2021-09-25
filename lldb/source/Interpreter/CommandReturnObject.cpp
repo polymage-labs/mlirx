@@ -44,6 +44,8 @@ CommandReturnObject::CommandReturnObject(bool colors)
     : m_out_stream(colors), m_err_stream(colors) {}
 
 void CommandReturnObject::AppendErrorWithFormat(const char *format, ...) {
+  SetStatus(eReturnStatusFailed);
+
   if (!format)
     return;
   va_list args;
@@ -96,6 +98,7 @@ void CommandReturnObject::AppendWarning(llvm::StringRef in_string) {
 }
 
 void CommandReturnObject::AppendError(llvm::StringRef in_string) {
+  SetStatus(eReturnStatusFailed);
   if (in_string.empty())
     return;
   error(GetErrorStream()) << in_string.rtrim() << '\n';
@@ -103,26 +106,15 @@ void CommandReturnObject::AppendError(llvm::StringRef in_string) {
 
 void CommandReturnObject::SetError(const Status &error,
                                    const char *fallback_error_cstr) {
-  const char *error_cstr = error.AsCString();
-  if (error_cstr == nullptr)
-    error_cstr = fallback_error_cstr;
-  SetError(error_cstr);
-}
-
-void CommandReturnObject::SetError(llvm::StringRef error_str) {
-  if (error_str.empty())
-    return;
-
-  AppendError(error_str);
-  SetStatus(eReturnStatusFailed);
+  AppendError(error.AsCString(fallback_error_cstr));
 }
 
 // Similar to AppendError, but do not prepend 'Status: ' to message, and don't
 // append "\n" to the end of it.
 
 void CommandReturnObject::AppendRawError(llvm::StringRef in_string) {
-  if (in_string.empty())
-    return;
+  SetStatus(eReturnStatusFailed);
+  assert(!in_string.empty() && "Expected a non-empty error message");
   GetErrorStream() << in_string;
 }
 

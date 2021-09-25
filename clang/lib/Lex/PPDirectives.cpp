@@ -112,7 +112,7 @@ enum PPElifDiag {
 // the specified module, meaning clang won't build the specified module. This is
 // useful in a number of situations, for instance, when building a library that
 // vends a module map, one might want to avoid hitting intermediate build
-// products containing the the module map or avoid finding the system installed
+// products containimg the module map or avoid finding the system installed
 // modulemap for that library.
 static bool isForModuleBuilding(Module *M, StringRef CurrentModule,
                                 StringRef ModuleName) {
@@ -196,7 +196,7 @@ static MacroDiag shouldWarnOnMacroUndef(Preprocessor &PP, IdentifierInfo *II) {
 static bool warnByDefaultOnWrongCase(StringRef Include) {
   // If the first component of the path is "boost", treat this like a standard header
   // for the purposes of diagnostics.
-  if (::llvm::sys::path::begin(Include)->equals_lower("boost"))
+  if (::llvm::sys::path::begin(Include)->equals_insensitive("boost"))
     return true;
 
   // "condition_variable" is the longest standard header name at 18 characters.
@@ -617,6 +617,10 @@ void Preprocessor::SkipExcludedConditionalBlock(SourceLocation HashTokenLoc,
         // If this is in a skipping block or if we're already handled this #if
         // block, don't bother parsing the condition.
         if (CondInfo.WasSkipping || CondInfo.FoundNonSkip) {
+          // FIXME: We should probably do at least some minimal parsing of the
+          // condition to verify that it is well-formed. The current state
+          // allows #elif* directives with completely malformed (or missing)
+          // conditions.
           DiscardUntilEndOfDirective();
         } else {
           // Restore the value of LexingRawMode so that identifiers are
@@ -656,6 +660,10 @@ void Preprocessor::SkipExcludedConditionalBlock(SourceLocation HashTokenLoc,
         // If this is in a skipping block or if we're already handled this #if
         // block, don't bother parsing the condition.
         if (CondInfo.WasSkipping || CondInfo.FoundNonSkip) {
+          // FIXME: We should probably do at least some minimal parsing of the
+          // condition to verify that it is well-formed. The current state
+          // allows #elif* directives with completely malformed (or missing)
+          // conditions.
           DiscardUntilEndOfDirective();
         } else {
           // Restore the value of LexingRawMode so that identifiers are
@@ -673,6 +681,8 @@ void Preprocessor::SkipExcludedConditionalBlock(SourceLocation HashTokenLoc,
             // not emitting an error when the #endif is reached.
             continue;
           }
+
+          emitMacroExpansionWarnings(MacroNameTok);
 
           CheckEndOfDirective(IsElifDef ? "elifdef" : "elifndef");
 
@@ -1480,7 +1490,7 @@ void Preprocessor::HandleUserDiagnosticDirective(Token &Tok,
 
   // Find the first non-whitespace character, so that we can make the
   // diagnostic more succinct.
-  StringRef Msg = StringRef(Message).ltrim(' ');
+  StringRef Msg = Message.str().ltrim(' ');
 
   if (isWarning)
     Diag(Tok, diag::pp_hash_warning) << Msg;
@@ -1723,7 +1733,8 @@ static bool trySimplifyPath(SmallVectorImpl<StringRef> &Components,
         // If these path components differ by more than just case, then we
         // may be looking at symlinked paths. Bail on this diagnostic to avoid
         // noisy false positives.
-        SuggestReplacement = RealPathComponentIter->equals_lower(Component);
+        SuggestReplacement =
+            RealPathComponentIter->equals_insensitive(Component);
         if (!SuggestReplacement)
           break;
         Component = *RealPathComponentIter;
@@ -2020,6 +2031,10 @@ Preprocessor::ImportAction Preprocessor::HandleHeaderIncludeOrImport(
       CurDir, Filename, FilenameLoc, FilenameRange, FilenameTok,
       IsFrameworkFound, IsImportDecl, IsMapped, LookupFrom, LookupFromFile,
       LookupFilename, RelativePath, SearchPath, SuggestedModule, isAngled);
+
+  // Record the header's filename for later use.
+  if (File)
+    CurLexer->addInclude(OriginalFilename, File->getFileEntry(), FilenameLoc);
 
   if (usingPCHWithThroughHeader() && SkippingUntilPCHThroughHeader) {
     if (File && isPCHThroughHeader(&File->getFileEntry()))
@@ -3046,6 +3061,8 @@ void Preprocessor::HandleIfdefDirective(Token &Result,
                                  /*Foundnonskip*/ false, /*FoundElse*/ false);
     return;
   }
+
+  emitMacroExpansionWarnings(MacroNameTok);
 
   // Check to see if this is the last token on the #if[n]def line.
   CheckEndOfDirective(isIfndef ? "ifndef" : "ifdef");
