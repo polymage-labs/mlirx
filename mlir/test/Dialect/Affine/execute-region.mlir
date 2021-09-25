@@ -9,14 +9,14 @@ func @arbitrary_bound(%n : index) {
       affine.for %j = 0 to %pow {
         "test.foo"() : () -> ()
       }
-      return
+      affine.yield
     }
     // CHECK:      affine.execute_region [] = () : () -> () {
     // CHECK-NEXT:   call @powi
     // CHECK-NEXT:   affine.for
     // CHECK-NEXT:     "test.foo"()
     // CHECK-NEXT:   }
-    // CHECK-NEXT:   return
+    // CHECK-NEXT:   affine.yield
     // CHECK-NEXT: }
   }
   return
@@ -32,7 +32,7 @@ func @arbitrary_mem_access(%I: memref<128xi32>, %M: memref<1024xf32>) {
       %idx = affine.load %rI[%i] : memref<128xi32>
       %index = index_cast %idx : i32 to index
       %v = affine.load %rM[%index]: memref<1024xf32>
-      return %v : f32
+      affine.yield %v : f32
     }
   }
   return
@@ -51,12 +51,12 @@ func @symbol_check(%B: memref<100xi32>, %A: memref<100xf32>) {
       affine.load %rA[%vi] : memref<100xf32>
       // %vo is also a symbol (dominates the execute_region).
       affine.load %rA[%vo] : memref<100xf32>
-      return
+      affine.yield
     }
     // CHECK:        index_cast
     // CHECK-NEXT:   affine.load
     // CHECK-NEXT:   affine.load
-    // CHECK-NEXT:   return
+    // CHECK-NEXT:   affine.yield
     // CHECK-NEXT: }
   }
   return
@@ -69,12 +69,12 @@ func @test_more_symbol_validity(%A: memref<100xf32>, %pos : index) {
     %sym = call @external() : () -> (index)
     affine.execute_region [%rA] = (%A) : (memref<100xf32>) -> () {
       affine.load %rA[symbol(%pos) + symbol(%sym) + %c5] : memref<100xf32>
-      return
+      affine.yield
     }
   }
   affine.execute_region [%rA] = (%A) : (memref<100xf32>) -> () {
     affine.load %rA[symbol(%pos) + %c5] : memref<100xf32>
-    return
+    affine.yield
   }
   return
 }
@@ -112,7 +112,7 @@ func @search(%A : memref<?x?xi32>, %S : memref<?xi32>, %key : i32) {
       br ^bb1(%jinc : index)
 
     ^bb5:
-      return
+      affine.yield
     }
   }
   return
