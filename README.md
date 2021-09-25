@@ -20,4 +20,4 @@ and passes supporting its polyhedral form.
 ## Upstream LLVM README
 
 [The LLVM Complier Infastructure
-README](https://github.com/llvm/llvm-project/blob/master/README.md)
+README](https://github.com/llvm/llvm-project/blob/main/README.md)
