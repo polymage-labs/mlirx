@@ -8,14 +8,14 @@ func @main() {
 
   %cf1 = constant 1.00000e+00 : f64
 
-  linalg.fill(%A, %cf1) : memref<2088x2048xf64>, f64
-  linalg.fill(%B, %cf1) : memref<2048x2048xf64>, f64
+  linalg.fill(%cf1, %A) : f64, memref<2088x2048xf64>
+  linalg.fill(%cf1, %B) : f64, memref<2048x2048xf64>
 
   %reps = constant 5 : index
 
   %t_start = call @rtclock() : () -> (f64)
   affine.for %ti = 0 to %reps {
-    linalg.fill(%C, %cf1) : memref<2088x2048xf64>, f64
+    linalg.fill(%cf1, %C) : f64, memref<2088x2048xf64>
     call @matmul_hop(%A, %B, %C) : (memref<2088x2048xf64>, memref<2048x2048xf64>, memref<2088x2048xf64>) -> ()
   }
   %t_end = call @rtclock() : () -> (f64)
